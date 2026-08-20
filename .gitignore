@@ -1,0 +1,14 @@
+secrets.h
+
+build/
+.vscode/
+.idea/
+
+*.elf
+*.hex
+*.bin
+*.map
+*.eep
+
+*.tmp
+*.bak
