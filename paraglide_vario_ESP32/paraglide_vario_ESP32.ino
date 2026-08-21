@@ -20,6 +20,7 @@
 #include <esp_timer.h>
 #include <SD.h>  
 #include "secrets.h"
+#include "OpenAirScanner.h"
 // =====================================================
 // WIFI (feeds Weather + ADS-B pages)
 // =====================================================
@@ -69,6 +70,56 @@ bool sdCardOK = false;
 File igcFile;
 bool igcRecording = false;
 char igcFilename[32] = "";
+
+// Guards ALL SD card access. The card is shared between two cores now:
+// the IGC logger (writeIgcBRecord() etc, called from loop() on Core 1) and
+// the airspace scanner (called from backgroundTask() on Core 0). Without
+// this, a scan and a log write could hit the SPI bus at the same moment
+// from two different tasks -- worst case, a corrupted IGC file. Both sides
+// must take this before touching SD and give it back immediately after.
+SemaphoreHandle_t sdMutex = nullptr;
+
+// =====================================================
+// AIRSPACE PROXIMITY (OpenAir file on SD card)
+// =====================================================
+// Nearest controlled airspace is scanned periodically on the existing
+// Core 0 background task (see backgroundTask()) so a multi-hundred-KB SD
+// read can never stall GPS/vario/button handling on Core 1. Result is
+// written back under backgroundDataMutex, same pattern as the ADS-B
+// aircraft list, and copied out under that same lock by the draw code.
+static const char* AIRSPACE_FILE = "/AIRSPACE.TXT";
+static const char* AIRSPACE_CONTROLLED_CLASSES[] = { "A", "B", "C", "D", "CTR" };
+static const uint8_t AIRSPACE_NUM_CONTROLLED_CLASSES = 5;
+
+// Ground elevation (ft MSL), used both to resolve AGL-referenced airspace
+// floors and to compute the "ALTITUDE AGL" box on the paraglider page.
+// GPS/baro altitude is height above sea level, not height above terrain --
+// this can't be derived automatically. Set it for wherever you're flying;
+// this is a single fixed site value, not a live terrain lookup.
+float groundElevationFt = 0.0f;
+
+#define AIRSPACE_SCAN_INTERVAL_MS 10000UL
+unsigned long airspaceScanAnchor = 0;
+
+AirspaceResult nearestAirspace;
+volatile bool airspaceResultValid = false;
+
+// Distance thresholds for the on-screen warning overlay (see
+// drawAirspaceWarning()) -- tune to taste.
+#define AIRSPACE_WARN_HORIZ_KM 5.0f
+#define AIRSPACE_WARN_VERT_FT 2000.0f
+
+// Cross-core position snapshot for backgroundTask() to read. Grouped into
+// one struct (rather than individual volatiles like sharedGpsAltitudeFeet)
+// because lat+lon+alt need to be read together as one consistent fix --
+// TinyGPS++'s own fields aren't safe to read piecemeal from another core
+// while gps.encode() is actively updating them in loop().
+struct PositionSnapshot {
+  double lat = 0, lon = 0;
+  float altFt = 0;
+  bool valid = false;
+};
+PositionSnapshot sharedPosition;
 
 #define IGC_START_SPEED_KPH   10.0f
 #define IGC_STOP_SPEED_KPH   0.0f
@@ -452,6 +503,8 @@ bool clockSynced = false;
 bool gpsClockSyncedThisBoot = false;
 // All the Functions are stored below
 void drawDashboard();
+void drawAirspaceWarning();
+bool getAirspaceSnapshot(AirspaceResult& out);
 void setupI2sCodec();
 void i2sToneService();
 void drawTopBar();
@@ -684,6 +737,12 @@ void setup() {
     Serial.println("[BOOT] Failed to create backgroundDataMutex -- ADS-B/weather disabled");
   }
 
+  sdMutex = xSemaphoreCreateMutex();
+  if (sdMutex == nullptr) {
+    Serial.println("[BOOT] Failed to create sdMutex -- IGC logging and airspace scan disabled");
+    sdCardOK = false;
+  }
+
   // ---------------------------------------------------------
   // Independent audio-servicing timer. i2sToneService() no longer runs
   // from loop() -- it's called on a fixed 4ms cadence regardless of what
@@ -745,6 +804,19 @@ void loop() {
   sharedGpsAltitudeFeet = gps.altitude.feet();  // cache for backgroundTask() (Core 0) to read safely
   if (!gpsClockSyncedThisBoot && gps.date.isValid() && gps.time.isValid() && gps.date.age() < 2000 && gps.time.age() < 2000 && syncClockFromGPS()) {
     gpsClockSyncedThisBoot = true;
+  }
+  // Publish lat/lon/altitude together as one snapshot for the airspace
+  // scan on Core 0 -- see PositionSnapshot declaration. Short timeout so a
+  // missed update just waits for next pass (<50ms away) rather than
+  // stalling loop(); the scanner only reads this every AIRSPACE_SCAN_INTERVAL_MS.
+  if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+    sharedPosition.lat = gps.location.lat();
+    sharedPosition.lon = gps.location.lng();
+    // Prefer the QNH-calibrated baro altitude (more precise once
+    // calibrated); fall back to raw GPS altitude before calibration.
+    sharedPosition.altFt = qnhCalibrated ? (currentAltitudeM * 3.28084f) : gps.altitude.feet();
+    sharedPosition.valid = gps.location.isValid() && gps.location.age() < 2000;
+    xSemaphoreGive(backgroundDataMutex);
   }
   // ---------------------------------------------------------
   // 3. Flight instrumentation / high priority
@@ -1266,6 +1338,42 @@ void backgroundTask(void* parameter) {
           }
     }
 
+    // ---------------------------------------------------------
+    // Airspace proximity: local SD file only, no WiFi needed, so this
+    // runs regardless of wifiConnected state.
+    // ---------------------------------------------------------
+    if (sdCardOK && now - airspaceScanAnchor >= AIRSPACE_SCAN_INTERVAL_MS) {
+      airspaceScanAnchor = now;
+
+      PositionSnapshot pos;
+      if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        pos = sharedPosition;
+        xSemaphoreGive(backgroundDataMutex);
+      }
+
+      if (pos.valid) {
+        if (sdMutex != nullptr && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+          AirspaceResult scanResult;
+          bool found = findNearestControlledAirspace(
+              AIRSPACE_FILE, pos.lat, pos.lon, pos.altFt, groundElevationFt,
+              scanResult, AIRSPACE_CONTROLLED_CLASSES, AIRSPACE_NUM_CONTROLLED_CLASSES);
+          xSemaphoreGive(sdMutex);
+
+          if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+            if (found) {
+              nearestAirspace = scanResult;
+              airspaceResultValid = true;
+            } else {
+              airspaceResultValid = false;
+            }
+            xSemaphoreGive(backgroundDataMutex);
+          }
+        } else {
+          Serial.println("[Airspace] SD busy -- scan skipped this cycle");
+        }
+      }
+    }
+
     // All real work above is interval-gated (15s / 5min), so this task
     // spends nearly all its time asleep here rather than busy-polling.
     vTaskDelay(pdMS_TO_TICKS(500));
@@ -1781,8 +1889,17 @@ void writeIgcBRecord() {
            latLonBuf, fixValid ? 'A' : 'V',
            pressureAltM, gpsAltM);
 
-  igcFile.println(bRecord);
-  igcFile.flush();  // flush every fix -- a lost flight log is worse than the SD write cost
+  // Shared with the Core 0 airspace scan -- see sdMutex declaration. A
+  // fix is only 4s apart (IGC_FIX_INTERVAL_MS) so a short wait here is
+  // fine; if the airspace scan is genuinely stuck this skips one fix
+  // rather than blocking flight logging indefinitely.
+  if (sdMutex != nullptr && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+    igcFile.println(bRecord);
+    igcFile.flush();  // flush every fix -- a lost flight log is worse than the SD write cost
+    xSemaphoreGive(sdMutex);
+  } else {
+    Serial.println("[IGC] SD busy -- fix skipped this cycle");
+  }
 }
 void startIgcRecording() {
   if (igcRecording || !sdCardOK) return;
@@ -1796,9 +1913,15 @@ void startIgcRecording() {
            utcTm.tm_year + 1900, utcTm.tm_mon + 1, utcTm.tm_mday,
            utcTm.tm_hour, utcTm.tm_min, utcTm.tm_sec);
 
+  if (sdMutex == nullptr || xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+    Serial.println("[IGC] SD busy -- could not start recording this cycle");
+    return;
+  }
+
   igcFile = SD.open(igcFilename, FILE_WRITE);
   if (!igcFile) {
     Serial.printf("[IGC] Failed to open %s\n", igcFilename);
+    xSemaphoreGive(sdMutex);
     return;
   }
 
@@ -1809,6 +1932,7 @@ void startIgcRecording() {
   igcFile.println("HFPRSPRESSALTSENSOR:Bosch BMP580");
   igcFile.println("HFDTM100GPSDATUM:WGS-1984");
   igcFile.flush();
+  xSemaphoreGive(sdMutex);
 
   igcRecording = true;
   lastIgcFixWrite = 0;
@@ -1816,7 +1940,15 @@ void startIgcRecording() {
 }
 void stopIgcRecording() {
   if (!igcRecording) return;
-  igcFile.close();
+
+  if (sdMutex != nullptr && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+    igcFile.close();
+    xSemaphoreGive(sdMutex);
+  } else {
+    Serial.println("[IGC] SD busy -- closing file without the lock (best effort)");
+    igcFile.close();
+  }
+
   igcRecording = false;
   Serial.printf("[IGC] Recording stopped: %s\n", igcFilename);
 }
@@ -3089,7 +3221,9 @@ void drawParagliderPage() {
 
 
   // =========================================================
-  // BOX (1,1): ALTITUDE AGL
+  // BOX (1,1): NEAREST AIRSPACE (temporary stand-in for ALTITUDE AGL
+  // until a DEM is wired in -- see groundElevationFt's declaration,
+  // which is still used by the airspace scanner itself either way)
   // =========================================================
 
   u8g2.setFont(u8g2_font_helvB10_tf);
@@ -3097,16 +3231,46 @@ void drawParagliderPage() {
   u8g2.drawStr(
     colW + 5,
     top + rowH + 14,
-    "ALTITUDE AGL"
+    "AIRSPACE"
   );
 
-  drawLargeValueWithSmallUnit(
-    colW + colW / 2,
-    top + rowH + rowH / 2 + 10,
-    colW - 10,
-    "--",
-    "m"
+  AirspaceResult boxAirspace;
+  bool boxAirspaceValid = getAirspaceSnapshot(boxAirspace);
+
+  char vertBuf[24];
+  char horiBuf[24];
+
+  if (boxAirspaceValid) {
+    snprintf(vertBuf, sizeof(vertBuf), "AIRSP VERT: %.0fft", boxAirspace.vertDistance_ft);
+    snprintf(horiBuf, sizeof(horiBuf), "AIRSP HORI: %.1fkm", boxAirspace.horizDistance_km);
+  } else {
+    snprintf(vertBuf, sizeof(vertBuf), "AIRSP VERT: --ft");
+    snprintf(horiBuf, sizeof(horiBuf), "AIRSP HORI: --km");
+  }
+
+  u8g2.drawStr(
+    colW + (colW - u8g2.getStrWidth(vertBuf)) / 2,
+    top + rowH + rowH / 2,
+    vertBuf
   );
+
+  u8g2.drawStr(
+    colW + (colW - u8g2.getStrWidth(horiBuf)) / 2,
+    top + rowH + rowH / 2 + 20,
+    horiBuf
+  );
+
+  // ---- Restore this block (and delete the one above) once a DEM gives
+  // ---- a real per-position ground elevation instead of the fixed
+  // ---- groundElevationFt site value:
+  //
+  // if (bmpOK && windowCount > 0 && qnhCalibrated) {
+  //   float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
+  //   snprintf(buffer, sizeof(buffer), "%d", (int)roundf(aglM));
+  //   drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, buffer, "m");
+  // } else {
+  //   drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, "--", "m");
+  // }
 
 
   // =========================================================
@@ -3756,7 +3920,78 @@ void drawDashboard() {
         case PAGE_PARAMOTOR: drawParamotorPage(); break;
         default: break;
       }
+      // Drawn last, on top of whatever page is active, so a nearby/entered
+      // controlled airspace is never hidden behind a page cycle.
+      drawAirspaceWarning();
     }
   } while (u8g2.nextPage());
+}
+
+// =====================================================
+// AIRSPACE WARNING OVERLAY
+//
+// Silent and invisible when there's nothing to report. Shows a banner
+// when the nearest controlled airspace is within AIRSPACE_WARN_HORIZ_KM /
+// AIRSPACE_WARN_VERT_FT, and a more prominent one if you're actually
+// inside its lateral+vertical bounds. A short alert tone fires once on
+// the transition into "inside" (edge-triggered, not every redraw).
+// =====================================================
+// Copies out the latest airspace scan result under backgroundDataMutex.
+// Quick by design -- a plain struct copy, no SD/SPI work while the lock is
+// held -- so callers on Core 1 (drawing) never make backgroundTask() (Core
+// 0) wait for anything slower than a memcpy.
+bool getAirspaceSnapshot(AirspaceResult& out) {
+  bool valid = false;
+  if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    valid = airspaceResultValid;
+    if (valid) out = nearestAirspace;
+    xSemaphoreGive(backgroundDataMutex);
+  }
+  return valid;
+}
+
+void drawAirspaceWarning() {
+  AirspaceResult result;
+  bool valid = getAirspaceSnapshot(result);
+
+  if (!valid) return;
+
+  bool insideNow = result.insideHoriz && result.insideVert;
+  bool nearby = !insideNow &&
+      result.horizDistance_km <= AIRSPACE_WARN_HORIZ_KM &&
+      result.vertDistance_ft <= AIRSPACE_WARN_VERT_FT;
+
+  // One-shot alert on entering controlled airspace, not on every redraw.
+  static bool wasInside = false;
+  if (insideNow && !wasInside) {
+    playFeedbackTone(900.0f, 600);
+  }
+  wasInside = insideNow;
+
+  if (!insideNow && !nearby) return;
+
+  char line1[40];
+  char line2[40];
+
+  if (insideNow) {
+    snprintf(line1, sizeof(line1), "INSIDE %s", result.name);
+    snprintf(line2, sizeof(line2), "Class %s", result.classId);
+  } else {
+    snprintf(line1, sizeof(line1), "%s", result.name);
+    snprintf(line2, sizeof(line2), "%.1fkm  %.0fft", result.horizDistance_km, result.vertDistance_ft);
+  }
+
+  const int bannerY = TOP_BAR_HEIGHT_PX;
+  const int bannerH = 30;
+
+  u8g2.setDrawColor(1);
+  u8g2.drawBox(0, bannerY, SCREEN_W, bannerH);
+  u8g2.setDrawColor(0);
+
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  u8g2.drawStr(6, bannerY + 13, line1);
+  u8g2.drawStr(6, bannerY + 27, line2);
+
+  u8g2.setDrawColor(1);  // restore default before returning to normal page drawing
 }
 
