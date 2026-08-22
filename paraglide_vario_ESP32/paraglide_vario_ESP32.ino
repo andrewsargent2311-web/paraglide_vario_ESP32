@@ -93,10 +93,23 @@ static const uint8_t AIRSPACE_NUM_CONTROLLED_CLASSES = 5;
 
 // Ground elevation (ft MSL), used both to resolve AGL-referenced airspace
 // floors and to compute the "ALTITUDE AGL" box on the paraglider page.
-// GPS/baro altitude is height above sea level, not height above terrain --
-// this can't be derived automatically. Set it for wherever you're flying;
-// this is a single fixed site value, not a live terrain lookup.
+// GPS/baro altitude is height above sea level, not height above terrain,
+// so this is now a live lookup into a pre-processed DEM tile on the SD
+// card (see TerrainDem.h / DEM_FILE below) rather than a fixed site value.
+// groundElevationValid is false until the first successful lookup, and
+// goes false again if the aircraft flies outside the downloaded tile --
+// both the airspace scanner and the AGL box must check it before trusting
+// groundElevationFt.
 float groundElevationFt = 0.0f;
+volatile bool groundElevationValid = false;
+
+#include "TerrainDem.h"
+// Produced offline from a LINZ DEM GeoTIFF by dem_to_agldem.py (downscaled
+// + reprojected to WGS84 lat/lon) -- see that script for how to (re)build
+// this for a different flying site.
+static const char* DEM_FILE = "/DEM.ADEM";
+#define DEM_SCAN_INTERVAL_MS 5000UL
+unsigned long demScanAnchor = 0;
 
 #define AIRSPACE_SCAN_INTERVAL_MS 10000UL
 unsigned long airspaceScanAnchor = 0;
@@ -1336,6 +1349,38 @@ void backgroundTask(void* parameter) {
           Serial.println("[MAIN] Calling weather update...");
           updateWeather();
           }
+    }
+
+    // ---------------------------------------------------------
+    // Ground elevation (AGL): local SD file only, no WiFi needed. Runs
+    // before the airspace scan below so a fresh groundElevationFt is
+    // available for this same cycle's AGL-referenced airspace floors.
+    // ---------------------------------------------------------
+    if (sdCardOK && now - demScanAnchor >= DEM_SCAN_INTERVAL_MS) {
+      demScanAnchor = now;
+
+      PositionSnapshot demPos;
+      if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        demPos = sharedPosition;
+        xSemaphoreGive(backgroundDataMutex);
+      }
+
+      if (demPos.valid) {
+        if (sdMutex != nullptr && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+          float elevM;
+          bool found = getGroundElevationM(DEM_FILE, demPos.lat, demPos.lon, elevM);
+          xSemaphoreGive(sdMutex);
+
+          if (found) {
+            groundElevationFt = elevM * 3.28084f;
+            groundElevationValid = true;
+          } else {
+            groundElevationValid = false;  // outside tile / no DEM loaded
+          }
+        } else {
+          Serial.println("[DEM] SD busy -- lookup skipped this cycle");
+        }
+      }
     }
 
     // ---------------------------------------------------------
@@ -3221,9 +3266,10 @@ void drawParagliderPage() {
 
 
   // =========================================================
-  // BOX (1,1): NEAREST AIRSPACE (temporary stand-in for ALTITUDE AGL
-  // until a DEM is wired in -- see groundElevationFt's declaration,
-  // which is still used by the airspace scanner itself either way)
+  // BOX (1,1): ALTITUDE AGL, from the live DEM lookup (see
+  // groundElevationFt / groundElevationValid, updated by the background
+  // task's DEM scan). Falls back to "--" outside the downloaded tile or
+  // before baro is calibrated.
   // =========================================================
 
   u8g2.setFont(u8g2_font_helvB10_tf);
@@ -3231,46 +3277,16 @@ void drawParagliderPage() {
   u8g2.drawStr(
     colW + 5,
     top + rowH + 14,
-    "AIRSPACE"
+    "ALTITUDE AGL"
   );
 
-  AirspaceResult boxAirspace;
-  bool boxAirspaceValid = getAirspaceSnapshot(boxAirspace);
-
-  char vertBuf[24];
-  char horiBuf[24];
-
-  if (boxAirspaceValid) {
-    snprintf(vertBuf, sizeof(vertBuf), "AIRSP VERT: %.0fft", boxAirspace.vertDistance_ft);
-    snprintf(horiBuf, sizeof(horiBuf), "AIRSP HORI: %.1fkm", boxAirspace.horizDistance_km);
+  if (bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid) {
+    float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
+    snprintf(buffer, sizeof(buffer), "%d", (int)roundf(aglM));
+    drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, buffer, "m");
   } else {
-    snprintf(vertBuf, sizeof(vertBuf), "AIRSP VERT: --ft");
-    snprintf(horiBuf, sizeof(horiBuf), "AIRSP HORI: --km");
+    drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, "--", "m");
   }
-
-  u8g2.drawStr(
-    colW + (colW - u8g2.getStrWidth(vertBuf)) / 2,
-    top + rowH + rowH / 2,
-    vertBuf
-  );
-
-  u8g2.drawStr(
-    colW + (colW - u8g2.getStrWidth(horiBuf)) / 2,
-    top + rowH + rowH / 2 + 20,
-    horiBuf
-  );
-
-  // ---- Restore this block (and delete the one above) once a DEM gives
-  // ---- a real per-position ground elevation instead of the fixed
-  // ---- groundElevationFt site value:
-  //
-  // if (bmpOK && windowCount > 0 && qnhCalibrated) {
-  //   float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
-  //   snprintf(buffer, sizeof(buffer), "%d", (int)roundf(aglM));
-  //   drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, buffer, "m");
-  // } else {
-  //   drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, "--", "m");
-  // }
 
 
   // =========================================================
@@ -3895,7 +3911,13 @@ void drawParamotorPage() {
 
   u8g2.setFont(u8g2_font_helvB10_tf);
   u8g2.drawStr(colW + 5, top + rowH + 14, "ALTITUDE AGL");
-  drawLargestBoldCentered(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, "-- m");
+  if (bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid) {
+    float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
+    snprintf(buffer, sizeof(buffer), "%.0f m", aglM);
+    drawLargestBoldCentered(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, buffer);
+  } else {
+    drawLargestBoldCentered(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, "-- m");
+  }
 
   u8g2.setFont(u8g2_font_helvB10_tf);
   u8g2.drawStr(5, top + 2 * rowH + 14, "ENG TEMP");
