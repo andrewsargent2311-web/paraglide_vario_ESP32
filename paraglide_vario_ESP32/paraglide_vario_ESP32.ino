@@ -311,7 +311,8 @@ struct WindMeter {
   float distanceKm;
   float speedKph;
   float gustKph;
-  float bearingDeg;
+  float bearingDeg;      // wind direction reported BY the station (e.g. "N" = wind from the north)
+  float geoBearingDeg;   // compass bearing FROM the glider TO the station (e.g. "NE")
   bool valid;
 };
 
@@ -1753,6 +1754,15 @@ void updateWeather() {
         stLat,
         stLon);
 
+    // Compass bearing from the glider to the station (separate from the
+    // station's own reported wind bearing below).
+    float geoBearing =
+      getBearing(
+        MY_LAT,
+        MY_LON,
+        stLat,
+        stLon);
+
     // -----------------------------------------------------
     // Find insertion position among closest stations
     // -----------------------------------------------------
@@ -1823,6 +1833,9 @@ void updateWeather() {
 
     localMeters[insertAt].bearingDeg =
       bearing;
+
+    localMeters[insertAt].geoBearingDeg =
+      geoBearing;
 
     localMeters[insertAt].valid = true;
   }
@@ -3204,8 +3217,8 @@ void drawParagliderPage() {
     snprintf(
       buffer,
       sizeof(buffer),
-      "HDG %d deg",
-      (int)gps.course.deg()
+      "HDG %s",
+      getCompassDirection(gps.course.deg())
     );
 
   } else {
@@ -3266,27 +3279,50 @@ void drawParagliderPage() {
 
 
   // =========================================================
-  // BOX (1,1): ALTITUDE AGL, from the live DEM lookup (see
-  // groundElevationFt / groundElevationValid, updated by the background
-  // task's DEM scan). Falls back to "--" outside the downloaded tile or
-  // before baro is calibrated.
+  // BOX (1,1): ALT AGL / AIR SPC -- height above ground (live DEM
+  // lookup, see groundElevationFt / groundElevationValid) plus the
+  // nearest controlled airspace vertically and horizontally (see
+  // getAirspaceSnapshot(), same background-task scan used elsewhere).
+  // Each line falls back to "--" independently if its data isn't
+  // available yet (outside DEM tile, no airspace fix, baro not
+  // calibrated, etc.) rather than blanking the whole box.
   // =========================================================
 
-  u8g2.setFont(u8g2_font_helvB10_tf);
-
+  u8g2.setFont(u8g2_font_6x10_tf);  // smaller font: title is longer than
+                                     // the other box headers (helvB10 would
+                                     // run off the edge of the box)
   u8g2.drawStr(
     colW + 5,
     top + rowH + 14,
-    "ALTITUDE AGL"
+    "ALT AGL / AIR SPC"
   );
 
+  u8g2.setFont(u8g2_font_helvB10_tf);
+
+  char aglLineBuf[24];
   if (bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid) {
-    float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
-    snprintf(buffer, sizeof(buffer), "%d", (int)roundf(aglM));
-    drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, buffer, "m");
+    float aglFt = currentAltitudeM * 3.28084f - groundElevationFt;
+    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: %dft", (int)roundf(aglFt));
   } else {
-    drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, "--", "m");
+    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: --ft");
   }
+
+  AirspaceResult boxAirspace;
+  bool boxAirspaceValid = getAirspaceSnapshot(boxAirspace);
+
+  char vertBuf[24];
+  char horiBuf[24];
+  if (boxAirspaceValid) {
+    snprintf(vertBuf, sizeof(vertBuf), "NR VERT: %dft", (int)roundf(boxAirspace.vertDistance_ft));
+    snprintf(horiBuf, sizeof(horiBuf), "NR HORI: %.1fkm", boxAirspace.horizDistance_km);
+  } else {
+    snprintf(vertBuf, sizeof(vertBuf), "NR VERT: --ft");
+    snprintf(horiBuf, sizeof(horiBuf), "NR HORI: --km");
+  }
+
+  u8g2.drawStr(colW + 5, top + rowH + rowH / 2, aglLineBuf);
+  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 20, vertBuf);
+  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 40, horiBuf);
 
 
   // =========================================================
@@ -3493,7 +3529,7 @@ void drawWeatherPage() {
 
     // =====================================================
     // LINE 1
-    // Station name + distance
+    // Station name + distance + compass bearing TO the station
     // =====================================================
 
     u8g2.setFont(u8g2_font_helvB18_tf);
@@ -3514,6 +3550,23 @@ void drawWeatherPage() {
       line1Y,
       stationNameBuf);
 
+    // Compass bearing FROM the glider TO the station (e.g. "NE"), drawn
+    // flush against the right edge -- distance sits just to its left.
+    const char* geoCompass =
+      getCompassDirection(
+        localMetersSnapshot[i].geoBearingDeg);
+
+    int geoCompassWidth =
+      u8g2.getStrWidth(geoCompass);
+
+    const int geoCompassX =
+      SCREEN_W - geoCompassWidth - 6;
+
+    u8g2.drawStr(
+      geoCompassX,
+      line1Y,
+      geoCompass);
+
     // Distance
     char distBuf[16];
 
@@ -3526,68 +3579,71 @@ void drawWeatherPage() {
     int distanceWidth =
       u8g2.getStrWidth(distBuf);
 
+    const int distGap = 10;  // small fixed gap between distance and bearing
+
     u8g2.drawStr(
-      SCREEN_W - distanceWidth - 6,
+      geoCompassX - distGap - distanceWidth,
       line1Y,
       distBuf);
 
     // =====================================================
     // LINE 2
-    // AVE / GUST / DIRECTION
+    // AVE speed + the station's own reported wind direction (e.g. "N")
     // =====================================================
 
-    const char* compassHdg =
+    char aveBuf[24];
+
+    snprintf(
+      aveBuf,
+      sizeof(aveBuf),
+      "AVE: %.0f km/h",
+      localMetersSnapshot[i].speedKph);
+
+    const int line2Y =
+      currentBoxY + 52;
+
+    u8g2.drawStr(
+      6,
+      line2Y,
+      aveBuf);
+
+    // Wind direction the station itself is reporting (unrelated to the
+    // geo bearing above) -- placed right after the AVE text with a small
+    // fixed gap.
+    const char* windCompass =
       getCompassDirection(
         localMetersSnapshot[i].bearingDeg);
 
-    char windBuf[64];
+    int aveWidth =
+      u8g2.getStrWidth(aveBuf);
 
-    snprintf(
-      windBuf,
-      sizeof(windBuf),
-      "AVE: %.0f km/h   GUST: %.0f km/h   %s",
-      localMetersSnapshot[i].speedKph,
-      localMetersSnapshot[i].gustKph,
-      compassHdg);
-
-    // -----------------------------------------------------
-    // Choose largest font that fits
-    // -----------------------------------------------------
-
-    const int maxWidth =
-      SCREEN_W - 12;
-
-    const uint8_t* selectedFont =
-      u8g2_font_helvB18_tf;
-
-    u8g2.setFont(u8g2_font_helvB18_tf);
-
-    if (u8g2.getStrWidth(windBuf) > maxWidth) {
-
-      u8g2.setFont(u8g2_font_helvB18_tf);
-
-      if (u8g2.getStrWidth(windBuf) <= maxWidth) {
-        selectedFont = u8g2_font_helvB18_tf;
-      } else {
-        selectedFont = u8g2_font_helvB14_tf;
-      }
-    }
-
-    u8g2.setFont(selectedFont);
-
-    int windWidth =
-      u8g2.getStrWidth(windBuf);
-
-    int windX =
-      (SCREEN_W - windWidth) / 2;
-
-    const int line2Y =
-      currentBoxY + rowHeight - 15;
+    const int windCompassGap = 8;
 
     u8g2.drawStr(
-      windX,
+      6 + aveWidth + windCompassGap,
       line2Y,
-      windBuf);
+      windCompass);
+
+    // =====================================================
+    // LINE 3
+    // GUST speed -- baseline sits 4px above this row's bottom edge
+    // =====================================================
+
+    char gustBuf[24];
+
+    snprintf(
+      gustBuf,
+      sizeof(gustBuf),
+      "GUST: %.0f km/h",
+      localMetersSnapshot[i].gustKph);
+
+    const int line3Y =
+      currentBoxY + rowHeight - 4;
+
+    u8g2.drawStr(
+      6,
+      line3Y,
+      gustBuf);
   }
 }
 // =====================================================
@@ -3624,53 +3680,10 @@ void drawGliderHeadingArrow(int cx, int cy, int arrowRadius, float headingDeg) {
   u8g2.drawTriangle(tipX, tipY, leftX, leftY, rightX, rightY);
 }
 void drawADSBPage() {
-   
-  // =========================================================
-  // ALTITUDE OVERLAY BOX
-  // =========================================================
-
-  u8g2.setFont(u8g2_font_helvB18_tf);
-
-  char altitudeText[16];
-
-  if (qnhCalibrated) {
-    snprintf(
-      altitudeText,
-      sizeof(altitudeText),
-      "%.0f ft",
-      currentAltitudeM * 3.28084f
-    );
-  } else {
-    snprintf(
-      altitudeText,
-      sizeof(altitudeText),
-      "0 ft"
-    );
-  }
-
-  int altitudeW = u8g2.getStrWidth(altitudeText) + 10;
-  int altitudeH = u8g2.getFontAscent() - u8g2.getFontDescent() + 6;
-
-  int altitudeX = SCREEN_W - altitudeW - 20;
-  int altitudeY = (SCREEN_H - 26) - 15;  // add to the last number to shift the box up
-
-  u8g2.drawFrame(
-    altitudeX,
-    altitudeY,
-    altitudeW,
-    altitudeH
-  );
-
-  u8g2.drawStr(
-    altitudeX + 5,
-    altitudeY + 23,
-    altitudeText
-  );
 
   const int cx = SCREEN_W / 2;
   const int cy = TOP_BAR_HEIGHT_PX + (SCREEN_H - TOP_BAR_HEIGHT_PX) / 2;
   const int r = 130;
-  const float MAX_RADIUS_KM = 30.0f;
 
   // Reset conflict evaluation flag for this pass
   conflictDetectedThisFrame = false;
@@ -3678,7 +3691,6 @@ void drawADSBPage() {
   // 1. Gather your heading and altitude telemetry from the TinyGPS++ stream
   float gliderHeading = 0.0f;
   bool isMoving = false;
-
 
   if (gps.course.isValid() && gps.course.age() < 4000 && gps.speed.knots() > 2.0f) {
     gliderHeading = (float)gps.course.deg();
@@ -3688,66 +3700,12 @@ void drawADSBPage() {
   // Pull current altitude (defaults to 0 if GPS is not connected/locked yet)
   float myAltitudeFeet = gps.altitude.feet();
 
-  // 2. Draw Rotating Crosshair Grid Lines (Compass Rose Matrix)
-  u8g2.drawCircle(cx, cy, r);
-  u8g2.drawCircle(cx, cy, r / 2);  // 15km Inner reference ring
-
-  float crosshairAngleRad = isMoving ? -deg2rad(gliderHeading) : 0.0f;
-
-  // N-S Crosshair
-  int nX = cx + (int)(r * sin(crosshairAngleRad));
-  int nY = cy - (int)(r * cos(crosshairAngleRad));
-  int sX = cx - (int)(r * sin(crosshairAngleRad));
-  int sY = cy + (int)(r * cos(crosshairAngleRad));
-  u8g2.drawLine(nX, nY, sX, sY);
-
-  // E-W Crosshair
-  int eX = cx + (int)(r * cos(crosshairAngleRad));
-  int eY = cy + (int)(r * sin(crosshairAngleRad));
-  int wX = cx - (int)(r * cos(crosshairAngleRad));
-  int wY = cy - (int)(r * sin(crosshairAngleRad));
-  u8g2.drawLine(eX, eY, wX, wY);
-
-  // Compass Typography Markers
-  u8g2.setFont(u8g2_font_7x14_tf);
-  u8g2.drawStr(nX - 2, nY - 2, "N");
-  u8g2.drawStr(sX - 2, sY + 8, "S");
-  u8g2.drawStr(eX + 4, eY + 3, "E");
-  u8g2.drawStr(wX - 8, wY + 3, "W");
-
-  // 3. Draw Center Navigation Reference Symbol
-  drawGliderHeadingArrow(cx, cy, 6, isMoving ? 0.0f : -1.0f);
-
-  // 4. DRAW VARIO OVERLAY BOX (Upgraded to Helvetica Bold)
-  u8g2.setFont(u8g2_font_helvB18_tf);  // True Helvetica Bold 14px — matches flight tags!
-
-  char varioText[12];  // Buffer to store formatted layout text
-  if (currentClimbRateMS >= 0.0f) {
-    snprintf(varioText, sizeof(varioText), "+%.1f m/s", currentClimbRateMS);
-  } else {
-    snprintf(varioText, sizeof(varioText), "%.1f m/s", currentClimbRateMS);
-  }
-
-  // A. CALCULATE POSITION LOGIC
-  int varioX = 4 + 20;                // Moved 20 pixels inwards
-  int varioY = (SCREEN_H - 26) - 13;  // Shifted 10 pixels up
-
-  // B. COMPUTE AUTO-SCALING BOUNDARIES FOR BOLD TEXT
-  // Measures exact bold text string pixel width and adds 10 pixels padding
-  int varioW = u8g2.getStrWidth(varioText) + 10;
-  int varioH = 25;  // Increased to 23 to match the height of your aircraft data boxes
-
-  // C. DRAW THE SCALED LAYOUT STRUCTURE
-  u8g2.drawFrame(varioX, varioY, varioW, varioH);
-
-  // Shifted text baseline down to safely center the bold letters vertically inside the box
-  u8g2.drawStr(varioX + 5, varioY + 23, varioText);
- 
-
-  // 5. Snapshot the aircraft list under the mutex, then release it
-  // immediately -- all the trig/SPI rendering below runs without holding
-  // the lock, so a slow redraw can never make the Core 0 background task
-  // wait, and vice versa.
+  // 2. Snapshot the aircraft list under the mutex, then release it
+  // immediately -- moved up from later in this function so we know, before
+  // drawing the range rings below, whether any traffic is close enough to
+  // justify auto-zooming in. All the trig/SPI rendering below runs without
+  // holding the lock, so a slow redraw can never make the Core 0 background
+  // task wait, and vice versa.
   AircraftSnapshot snapshotAircraft[MAX_DISPLAYED_AIRCRAFT];
   int snapshotCount = 0;
   bool snapshotHasData = hasAdsbData;
@@ -3774,6 +3732,156 @@ void drawADSBPage() {
     xSemaphoreGive(backgroundDataMutex);
   }
 
+  // 3. Auto-zoom: switch the rings (and the aircraft plot scale) to
+  // 10km/5km if any currently-known aircraft is within 10km, otherwise
+  // fall back to the normal 30km/15km rings. Re-evaluated every redraw
+  // from the full snapshot above, so it snaps back out automatically once
+  // nothing is close -- no state is carried between frames.
+  bool anyPlaneWithin10km = false;
+  for (int i = 0; i < snapshotCount; i++) {
+    if (getDistanceKM(MY_LAT, MY_LON, snapshotAircraft[i].lat, snapshotAircraft[i].lon) <= 10.0f) {
+      anyPlaneWithin10km = true;
+      break;
+    }
+  }
+  const float MAX_RADIUS_KM = anyPlaneWithin10km ? 10.0f : 30.0f;
+  const char* outerRingLabel = anyPlaneWithin10km ? "10km" : "30km";
+  const char* innerRingLabel = anyPlaneWithin10km ? "5km" : "15km";
+
+  // =========================================================
+  // ALTITUDE (AGL) OVERLAY BOX -- top-left
+  // =========================================================
+
+  u8g2.setFont(u8g2_font_helvB18_tf);
+
+  char altitudeText[24];
+
+  // Same AGL calc + fallback pattern as the "ALT AGL" box on the paraglider
+  // page: needs a live barometer window, a QNH calibration, and a valid
+  // DEM ground-elevation lookup, else it shows the -- placeholder.
+  if (bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid) {
+    float aglFt = currentAltitudeM * 3.28084f - groundElevationFt;
+    snprintf(altitudeText, sizeof(altitudeText), "ALT AGL: %dft", (int)roundf(aglFt));
+  } else {
+    snprintf(altitudeText, sizeof(altitudeText), "ALT AGL: --ft");
+  }
+
+  int altitudeW = u8g2.getStrWidth(altitudeText) + 10;
+  int altitudeH = u8g2.getFontAscent() - u8g2.getFontDescent() + 6;
+
+  int altitudeX = 5;                           // left side, 5px in from the left edge
+  int altitudeY = TOP_BAR_HEIGHT_PX + 10 - 4;  // 4px higher than the old top-right box
+
+  u8g2.drawFrame(
+    altitudeX,
+    altitudeY,
+    altitudeW,
+    altitudeH
+  );
+
+  u8g2.drawStr(
+    altitudeX + 5,
+    altitudeY + 23,
+    altitudeText
+  );
+
+  // =========================================================
+  // GROUND SPEED OVERLAY BOX -- top-right (where Altitude used to sit)
+  // =========================================================
+
+  char gsText[16];
+  if (gps.speed.isValid()) {
+    snprintf(gsText, sizeof(gsText), "%d km/h", (int)gps.speed.kmph());
+  } else {
+    snprintf(gsText, sizeof(gsText), "-- km/h");
+  }
+
+  int gsW = u8g2.getStrWidth(gsText) + 10;
+  int gsH = u8g2.getFontAscent() - u8g2.getFontDescent() + 6;
+
+  int gsX = SCREEN_W - gsW - 20;
+  int gsY = TOP_BAR_HEIGHT_PX + 10;  // top-right corner, just below the top bar
+
+  u8g2.drawFrame(
+    gsX,
+    gsY,
+    gsW,
+    gsH
+  );
+
+  u8g2.drawStr(
+    gsX + 5,
+    gsY + 23,
+    gsText
+  );
+
+  // 4. Draw Rotating Crosshair Grid Lines (Compass Rose Matrix)
+  u8g2.drawCircle(cx, cy, r);
+  u8g2.drawCircle(cx, cy, r / 2);  // Inner reference ring
+
+  float crosshairAngleRad = isMoving ? -deg2rad(gliderHeading) : 0.0f;
+
+  // N-S Crosshair
+  int nX = cx + (int)(r * sin(crosshairAngleRad));
+  int nY = cy - (int)(r * cos(crosshairAngleRad));
+  int sX = cx - (int)(r * sin(crosshairAngleRad));
+  int sY = cy + (int)(r * cos(crosshairAngleRad));
+  u8g2.drawLine(nX, nY, sX, sY);
+
+  // E-W Crosshair
+  int eX = cx + (int)(r * cos(crosshairAngleRad));
+  int eY = cy + (int)(r * sin(crosshairAngleRad));
+  int wX = cx - (int)(r * cos(crosshairAngleRad));
+  int wY = cy - (int)(r * sin(crosshairAngleRad));
+  u8g2.drawLine(eX, eY, wX, wY);
+
+  // Compass Typography Markers -- bumped up one size from 7x14_tf
+  u8g2.setFont(u8g2_font_8x13_tf);
+  u8g2.drawStr(nX - 2, nY - 2, "N");
+  u8g2.drawStr(sX - 2, sY + 8, "S");
+  u8g2.drawStr(eX + 4, eY + 3, "E");
+  u8g2.drawStr(wX - 8, wY + 3, "W");
+
+  // Range ring labels -- placed along the same N radial as the "N" marker
+  // itself, so they rotate together with it in track-up mode rather than
+  // staying fixed to the top of the screen. Text now reflects whichever
+  // scale is active this frame (30km/15km, or 10km/5km when zoomed in).
+  int innerNX = cx + (int)((r / 2) * sin(crosshairAngleRad));
+  int innerNY = cy - (int)((r / 2) * cos(crosshairAngleRad));
+
+  u8g2.setFont(u8g2_font_7x13_tf);  // bumped up one size from 6x10_tf
+  u8g2.drawStr(nX + 10, nY - 2, outerRingLabel);
+  u8g2.drawStr(innerNX + 10, innerNY - 2, innerRingLabel);
+
+  // 5. Draw Center Navigation Reference Symbol
+  drawGliderHeadingArrow(cx, cy, 6, isMoving ? 0.0f : -1.0f);
+
+  // 6. DRAW VARIO OVERLAY BOX (Upgraded to Helvetica Bold)
+  u8g2.setFont(u8g2_font_helvB18_tf);  // True Helvetica Bold 14px — matches flight tags!
+
+  char varioText[12];  // Buffer to store formatted layout text
+  if (currentClimbRateMS >= 0.0f) {
+    snprintf(varioText, sizeof(varioText), "+%.1f m/s", currentClimbRateMS);
+  } else {
+    snprintf(varioText, sizeof(varioText), "%.1f m/s", currentClimbRateMS);
+  }
+
+  // A. CALCULATE POSITION LOGIC
+  int varioX = 4 + 20;                // Moved 20 pixels inwards
+  int varioY = (SCREEN_H - 26) - 13;  // Shifted 10 pixels up
+
+  // B. COMPUTE AUTO-SCALING BOUNDARIES FOR BOLD TEXT
+  // Measures exact bold text string pixel width and adds 10 pixels padding
+  int varioW = u8g2.getStrWidth(varioText) + 10;
+  int varioH = 25;  // Increased to 23 to match the height of your aircraft data boxes
+
+  // C. DRAW THE SCALED LAYOUT STRUCTURE
+  u8g2.drawFrame(varioX, varioY, varioW, varioH);
+
+  // Shifted text baseline down to safely center the bold letters vertically inside the box
+  u8g2.drawStr(varioX + 5, varioY + 23, varioText);
+
+
   if (!snapshotHasData) {
     u8g2.setFont(u8g2_font_6x10_tf);
     u8g2.drawStr(cx - 50, cy + 30, "No data fetched");
@@ -3786,7 +3894,7 @@ void drawADSBPage() {
     return;
   }
 
-  // 6. Set Typography: Switch to a Heavy, High-Contrast True Bold Font
+  // 7. Set Typography: Switch to a Heavy, High-Contrast True Bold Font
   u8g2.setFont(u8g2_font_helvB14_tf);  // True Helvetica Bold 14px — razor-sharp in direct sunlight!
 
   for (int i = 0; i < snapshotCount; i++) {
@@ -3809,13 +3917,18 @@ void drawADSBPage() {
     int acX = cx + (int)(pixelDistance * cos(angleRad));
     int acY = cy + (int)(pixelDistance * sin(angleRad));
 
-    // Draw individual target node disc
-    u8g2.drawDisc(acX, acY, 2);
-
-    // --- TELEMETRY STRING GENERATION ---
+    // --- TELEMETRY EXTRACTION (pulled up so heading is available before
+    // we draw the aircraft symbol below) ---
     float altitudeFeet = snapshotAircraft[i].altFeet;
     float speedKnots = snapshotAircraft[i].speedKt;
     float headingDeg = snapshotAircraft[i].headingDeg;
+
+    // Draw the target as a small heading arrow instead of a plain dot,
+    // rotated the same way the own-ship marker is -- relative to your
+    // heading in track-up mode, or absolute compass heading in north-up
+    // mode -- so it stays visually consistent with the rest of the display.
+    float acDisplayHeading = fmodf(headingDeg - (isMoving ? gliderHeading : 0.0f) + 360.0f, 360.0f);
+    drawGliderHeadingArrow(acX, acY, 5, acDisplayHeading);
 
     // Same 5km / 2000ft bubble used for the one-time "new intruder" chirp
     // in performADSBUpdate(), re-evaluated every redraw so the alarm keeps
@@ -3833,8 +3946,8 @@ void drawADSBPage() {
     char dataTag[24];
     snprintf(dataTag, sizeof(dataTag), "FL%.1f %s %.0fkt", flightLevelFloat, compassHdg, speedKnots);
 
-    // 7. Render Anti-Clipping Text Box Frame Safely Beside Target Node
-    int textX = acX + 8;  // Offset further out to avoid crowding the dot
+    // 8. Render Anti-Clipping Text Box Frame Safely Beside Target Node
+    int textX = acX + 8;  // Offset further out to avoid crowding the icon
 
     // FIX: Subtracted 4 from textY to lift the top line of the box up 4 pixels
     int textY = acY - 10 - 4;  // Moves the top boundary higher up
