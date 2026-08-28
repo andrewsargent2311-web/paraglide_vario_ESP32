@@ -452,6 +452,12 @@ bool buzzerMuted = false;
 // =====================================================
 // Tuning
 #define SEA_LEVEL_QNH_DEFAULT 1013.25f
+// If GPS hasn't produced a usable altitude fix (see gpsAltitudeGood in
+// updateVario()) within this long after boot -- no module wired, no sky
+// view, whatever the cause -- stop waiting on it and default QNH to
+// standard atmosphere so altitude/climb-rate keep running off the BMP580
+// alone instead of sitting "not calibrated" for the whole flight.
+#define GPS_QNH_FALLBACK_MS 60000UL
 #define CLIMB_WINDOW_N 8
 #define BARO_SAMPLE_MS 100
 #define CLIMB_DEADBAND_MS 0.15f
@@ -489,6 +495,11 @@ float currentAltitudeM = 0.0f;
 float currentClimbRateMS = 0.0f;
 float currentQNH = SEA_LEVEL_QNH_DEFAULT;
 bool qnhCalibrated = false;
+// True only while the current QNH came from the no-GPS timeout fallback
+// rather than a real GPS-derived calibration. Lets updateVario() upgrade
+// to a proper calibration the moment a good fix turns up later, without
+// reopening the (deliberately) one-shot calibration once it's genuine.
+bool qnhIsFallback = false;
 unsigned long lastBeepToggle = 0;
 bool beepOn = false;
 unsigned long lastSinkBeep = 0;
@@ -1066,6 +1077,17 @@ void performADSBUpdate() {
 
   Serial.print("[ADS-B] Connecting to: ");
   Serial.println(url);
+
+  // adsb.fi's response is dynamically generated JSON with no known length
+  // up front, so it comes back as Transfer-Encoding: chunked. Reading
+  // chunked data straight off http.getStreamPtr() below skips HTTPClient's
+  // own chunk-decoding (that only runs inside getString()/writeToStream()),
+  // so ArduinoJson would see raw chunk-size lines (e.g. "1a3\r\n") instead
+  // of the opening '{' -- which is exactly the "InvalidInput" seen in the
+  // logs, on every request, regardless of network conditions. Forcing
+  // HTTP/1.0 makes the server send Content-Length instead of chunking, so
+  // the stream is plain JSON again. Must be set before http.begin().
+  http.useHTTP10(true);
 
   if (!http.begin(client, url)) {
     Serial.println("[ADS-B] http.begin() FAILED");
@@ -2058,7 +2080,13 @@ void updateVario() {
     bool gpsAltitudeGood =
         gps.altitude.isValid() && gps.altitude.age() < 2000 && gps.satellites.isValid() && gps.satellites.value() >= 6 && gps.hdop.isValid() && gps.hdop.hdop() <= 2.5;
 
-    if (!qnhCalibrated && gpsAltitudeGood) {
+    // Runs the real GPS-derived calibration the first time a good fix
+    // shows up, AND -- if we're currently sitting on the no-GPS fallback
+    // value -- also the first time a good fix shows up *after* that, so a
+    // merely-slow GPS still gets upgraded to a proper calibration instead
+    // of being stuck on 1013.25 for the rest of the flight. Once genuinely
+    // calibrated (qnhIsFallback == false), this never fires again.
+    if (gpsAltitudeGood && (!qnhCalibrated || qnhIsFallback)) {
         float gpsAltM = gps.altitude.meters();
 
         float calculatedQNH =
@@ -2066,12 +2094,26 @@ void updateVario() {
 
         if (calculatedQNH >= 850.0f && calculatedQNH <= 1100.0f) {
 
+        bool wasFallback = qnhIsFallback;
         currentQNH = calculatedQNH;
         qnhCalibrated = true;
+        qnhIsFallback = false;
 
-        Serial.print("QNH calibrated from GPS altitude: ");
+        Serial.print(wasFallback ? "QNH upgraded from GPS altitude (fallback replaced): "
+                                  : "QNH calibrated from GPS altitude: ");
         Serial.println(currentQNH);
         }
+    } else if (!qnhCalibrated && millis() >= GPS_QNH_FALLBACK_MS) {
+        // GPS never came good (missing/unwired module, or just no fix after
+        // a full minute) -- stop waiting on it. Default to standard
+        // atmosphere so the BMP580 alone can drive altitude/vario for the
+        // rest of the flight. Flagged as a fallback so a later good fix can
+        // still upgrade it, above.
+        currentQNH = SEA_LEVEL_QNH_DEFAULT;
+        qnhCalibrated = true;
+        qnhIsFallback = true;
+
+        Serial.println("GPS unavailable -- defaulting QNH to 1013.25, running altitude/vario off BMP580 only");
     }
 
     currentAltitudeM = bmp.readAltitude(currentQNH);
