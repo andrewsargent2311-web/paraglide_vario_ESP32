@@ -260,7 +260,7 @@ bool findNearestControlledAirspace(
     AirspaceResult& out,
     const char** controlledClasses, uint8_t numClasses) {
 
-  File f = SD.open(filename, FILE_READ);
+  File f = SD_MMC.open(filename, FILE_READ);
   if (!f) {
     Serial.print("OpenAirScanner: could not open ");
     Serial.println(filename);

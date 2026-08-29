@@ -1,6 +1,6 @@
 #pragma once
 #include <Arduino.h>
-#include <SD.h>
+#include <SD_MMC.h>
 
 // ---------------------------------------------------------------------------
 // OpenAirScanner

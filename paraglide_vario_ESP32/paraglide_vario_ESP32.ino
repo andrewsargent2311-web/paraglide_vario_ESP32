@@ -18,7 +18,8 @@
 #include <string.h>
 #include <esp_task_wdt.h>
 #include <esp_timer.h>
-#include <SD.h>
+#include <FS.h>
+#include <SD_MMC.h>
 #include "secrets.h"
 #include "OpenAirScanner.h"
 // =====================================================
@@ -57,14 +58,16 @@ U8G2_ST7305_300X400_1_4W_HW_SPI u8g2(U8G2_R0, /*cs=*/RLCD_CS, /*dc=*/RLCD_DC, /*
 // SD CARD / IGC FLIGHT LOG
 // =====================================================
 
-#define SD_CS_PIN 1
-#define SD_SCK_PIN 38
-#define SD_MISO_PIN 39
-#define SD_MOSI_PIN 21
-// Your display already owns the default SPI bus (SCK 11 / MOSI 12 -- see
-// SPI.begin() in setup()). These SD pins are completely different, so the
-// SD card needs its own SPI peripheral instance rather than sharing that bus.
-SPIClass sdSPI(HSPI);
+// The microSD slot on the Waveshare ESP32-S3-RLCD-4.2 is wired to the
+// ESP32-S3's native SDMMC peripheral in 1-bit mode, NOT to SPI -- there is
+// no CS line run to the card at all, which is why treating pin 1 as a CS
+// pin never worked. CLK/CMD/D0 below match Waveshare's own SD card example
+// for this exact board (02_Example/Arduino/06_SD_Card). Unlike classic
+// ESP32, the S3's SDMMC pins are routed through the GPIO matrix, so they
+// must be assigned with SD_MMC.setPins() before SD_MMC.begin().
+#define SD_MMC_CLK_PIN 38
+#define SD_MMC_CMD_PIN 21
+#define SD_MMC_D0_PIN 39
 
 bool sdCardOK = false;
 File igcFile;
@@ -227,9 +230,9 @@ volatile float sharedGpsAltitudeFeet = 0.0f;
 bool conflictDetectedThisFrame = false;
 // ---- Intercept alarm: fires once per new intruder, alternates tone ----
 #define INTERCEPT_ALARM_DURATION_MS 5000UL
-#define INTERCEPT_TONE_HIGH_HZ 600
-#define INTERCEPT_TONE_LOW_HZ 400
-#define INTERCEPT_TONE_TOGGLE_MS 250UL  // time on each tone before switching
+#define INTERCEPT_TONE_HIGH_HZ 800
+#define INTERCEPT_TONE_LOW_HZ 600
+#define INTERCEPT_TONE_TOGGLE_MS 200UL  // time on each tone before switching
 bool interceptAlarmActive = false;
 unsigned long interceptAlarmStart = 0;
 volatile bool hasAdsbData = false;
@@ -339,8 +342,8 @@ bool weatherFirstPollDone = false;                                    // True on
 #define KEY_PIN 18
 #define KEY_DEBOUNCE_MS 10
 #define KEY_LONG_PRESS_MS 4000
-#define PAGE_BEEP_FREQ 400
-#define PAGE_BEEP_MS 700
+#define PAGE_BEEP_FREQ 500    // Sets page beep frequency
+#define PAGE_BEEP_MS 300    // This sets how long the page beep tone goes for
 // A "double press" is two presses with less than this many ms between the
 // first release and the second press-down. 50ms is what was asked for, but
 // note it's faster than most people can physically double-click (a typical
@@ -461,16 +464,17 @@ bool buzzerMuted = false;
 #define CLIMB_WINDOW_N 8
 #define BARO_SAMPLE_MS 100
 #define CLIMB_DEADBAND_MS 0.15f
-#define SINK_ALARM_MS -1.0f
+#define SINK_ALARM_MS -0.5f  // Sink alarm set to start at -0.5m/s can alter this later to suit
 #define CLIMB_TONE_MAX_MS 5.0f
-#define SINK_RELEASE_MS -1.7f
+//#define SINK_RELEASE_MS -5.0f  // Set to -5m/s as not uncommon to hit 4 m/s sink alarm switches off above 5 m/s to avoid distraction
+//commented out max sink threshold for debugging as its causing clipping
 // Sink alarm
-#define SINK_BEEP_INTERVAL_MS 500UL  // gap between sink-alarm tone bursts
+#define SINK_BEEP_INTERVAL_MS 300UL  // gap between sink-alarm tone bursts
 #define SINK_BEEP_ON_MS 180UL
-#define SINK_TONE_FREQ_HZ 220
+#define SINK_TONE_FREQ_HZ 320
 // Climb tone frequency range
-#define CLIMB_TONE_MIN_HZ 400
-#define CLIMB_TONE_MAX_HZ 1100
+#define CLIMB_TONE_MIN_HZ 500
+#define CLIMB_TONE_MAX_HZ 1200
 // Climb pulse timing
 #define CLIMB_MIN_GAP_MS 55UL
 #define CLIMB_MAX_GAP_MS 500UL
@@ -742,8 +746,10 @@ void setup() {
   }
   // ESP32-S3 has no fixed default SDMMC pin set (unlike classic ESP32) --
   // pins must be assigned explicitly before begin().
-  sdSPI.begin(SD_SCK_PIN, SD_MISO_PIN, SD_MOSI_PIN, SD_CS_PIN);
-  sdCardOK = SD.begin(SD_CS_PIN, sdSPI);
+  if (!SD_MMC.setPins(SD_MMC_CLK_PIN, SD_MMC_CMD_PIN, SD_MMC_D0_PIN)) {
+    Serial.println("SD_MMC.setPins() failed");
+  }
+  sdCardOK = SD_MMC.begin("/sdcard", true);  // true = 1-bit mode (only D0 is wired)
   Serial.println(sdCardOK ? "SD CARD MOUNTED" : "SD CARD NOT FOUND -- IGC recording disabled");
 
   wifiConnected = connectWiFi(WIFI_CONNECT_TIMEOUT_MS);
@@ -766,6 +772,15 @@ void setup() {
   Serial.println("[BOOT] Calling es8311Init()...");
   es8311Init();
   Serial.println("[BOOT] es8311Init() returned OK");
+
+  // Enable the speaker amp ONCE here and leave it enabled for the rest of
+  // the flight (see AMP_ENABLE_PIN comments in updateI2sAudioBuzzer() for
+  // why -- toggling it on/off per beep was clipping/silencing every short
+  // tone). "No sound" is produced by writing silence over I2S, not by
+  // powering the amp down.
+  if (codecOK && es8311OK) {
+    digitalWrite(AMP_ENABLE_PIN, HIGH);
+  }
 
   pinMode(KEY_PIN, INPUT_PULLUP);
 
@@ -948,7 +963,6 @@ void loop() {
 void playFeedbackTone(float freq, unsigned long durationMs) {
   if (buzzerMuted) return;
   setToneFrequency(freq);
-  digitalWrite(AMP_ENABLE_PIN, HIGH);
   pageBeepUntil = millis() + durationMs;
 }
 void advanceActivePage() {
@@ -1075,6 +1089,7 @@ void updatePageButton() {
       buzzerMuted = !buzzerMuted;
       pageBeepUntil = 0;
       setToneFrequency(0);
+      digitalWrite(AMP_ENABLE_PIN, buzzerMuted ? LOW : HIGH);
       beepOn = false;
       Serial.println(buzzerMuted ? "VARIO BUZZER MUTED" : "VARIO BUZZER UNMUTED");
     }
@@ -2026,7 +2041,7 @@ void startIgcRecording() {
     return;
   }
 
-  igcFile = SD.open(igcFilename, FILE_WRITE);
+  igcFile = SD_MMC.open(igcFilename, FILE_WRITE);
   if (!igcFile) {
     Serial.printf("[IGC] Failed to open %s\n", igcFilename);
     xSemaphoreGive(sdMutex);
@@ -2477,7 +2492,6 @@ void updateI2sAudioBuzzer() {
   if (pageBeepUntil != 0) {
     pageBeepUntil = 0;
 
-    digitalWrite(AMP_ENABLE_PIN, LOW);
     setToneFrequency(0);
 
     sinkAlarmActive = false;
@@ -2495,7 +2509,6 @@ void updateI2sAudioBuzzer() {
     if (elapsed >= INTERCEPT_ALARM_DURATION_MS) {
       interceptAlarmActive = false;
 
-      digitalWrite(AMP_ENABLE_PIN, LOW);
       setToneFrequency(0);
 
       // Force vario audio to re-evaluate cleanly next pass.
@@ -2507,7 +2520,6 @@ void updateI2sAudioBuzzer() {
       unsigned long phase = elapsed % (INTERCEPT_TONE_TOGGLE_MS * 2);
       float freq = (phase < INTERCEPT_TONE_TOGGLE_MS) ? INTERCEPT_TONE_HIGH_HZ : INTERCEPT_TONE_LOW_HZ;
 
-      digitalWrite(AMP_ENABLE_PIN, HIGH);
       setToneFrequency(freq);
 
       return;  // Skip vario tone logic entirely while the alarm sounds
@@ -2520,7 +2532,6 @@ void updateI2sAudioBuzzer() {
 
   if (buzzerMuted) {
 
-    digitalWrite(AMP_ENABLE_PIN, LOW);
     setToneFrequency(0);
 
     sinkAlarmActive = false;
@@ -2534,8 +2545,8 @@ void updateI2sAudioBuzzer() {
   // ============================================================
   // SINK ALARM WITH HYSTERESIS
   //
-  // Enter sink alarm at <= -2.0 m/s
-  // Remain in alarm until climb rate rises above -1.7 m/s
+  // Enter sink alarm at <= -0.5 m/s
+  // Remain in alarm until climb rate rises above -5.0 m/s
   //
   // This prevents rapid ON/OFF switching when the measured
   // sink rate is hovering around -2.0 m/s.
@@ -2555,15 +2566,18 @@ void updateI2sAudioBuzzer() {
 
   } else {
 
-    // Hysteresis release
-    if (currentClimbRateMS >= SINK_RELEASE_MS) {
+    // Hysteresis release.
+    // Keep the sink alarm active while descending.
+    // Release only when the climb rate rises above
+    // the configured sink threshold.
 
-      sinkAlarmActive = false;
+    if (currentClimbRateMS > SINK_ALARM_MS) {
 
-      digitalWrite(AMP_ENABLE_PIN, LOW);
-      setToneFrequency(0);
+        sinkAlarmActive = false;
+
+        setToneFrequency(0);
     }
-  }
+}
 
 
   // ============================================================
@@ -2577,12 +2591,10 @@ void updateI2sAudioBuzzer() {
 
     if (sinkPhase < SINK_BEEP_ON_MS) {
 
-      digitalWrite(AMP_ENABLE_PIN, HIGH);
       setToneFrequency(SINK_TONE_FREQ_HZ);
 
     } else {
 
-      digitalWrite(AMP_ENABLE_PIN, LOW);
       setToneFrequency(0);
     }
 
@@ -2601,7 +2613,6 @@ void updateI2sAudioBuzzer() {
     climbAudioActive = false;
     climbToneOn = false;
 
-    digitalWrite(AMP_ENABLE_PIN, LOW);
     setToneFrequency(0);
 
     return;
@@ -2708,7 +2719,6 @@ void updateI2sAudioBuzzer() {
 
     climbToneOn = true;
 
-    digitalWrite(AMP_ENABLE_PIN, HIGH);
     setToneFrequency(toneFreq);
 
     return;
@@ -2727,7 +2737,6 @@ void updateI2sAudioBuzzer() {
       climbToneOn = false;
       climbPulseStart = now;
 
-      digitalWrite(AMP_ENABLE_PIN, LOW);
       setToneFrequency(0);
     }
 
@@ -2739,7 +2748,6 @@ void updateI2sAudioBuzzer() {
       climbToneOn = true;
       climbPulseStart = now;
 
-      digitalWrite(AMP_ENABLE_PIN, HIGH);
       setToneFrequency(toneFreq);
     }
   }
@@ -2851,30 +2859,47 @@ void es8311Init() {
 // =====================================================
 void setToneFrequency(float freq) {
   toneFrequency = freq;
-  if (freq <= 0.0f) {
-    // Flush any already-queued samples immediately so silence is
-    // heard right away, rather than after the buffered tail plays out.
-    if (codecOK) {
-      i2s_zero_dma_buffer(I2S_PORT);
-    }
-  }
 }
 void i2sToneService() {
-  if (!codecOK || !es8311OK) return;
-  if (toneFrequency <= 0.0f) return;  // tx_desc_auto_clear fills silence on its own
 
-  int16_t chunk[I2S_TONE_CHUNK];
-  for (int i = 0; i < I2S_TONE_CHUNK; i++) {
-    chunk[i] = (int16_t)(8000.0f * sinf(2.0f * PI * tonePhase));
-    tonePhase += toneFrequency / (float)I2S_SAMPLE_RATE;
-    if (tonePhase >= 1.0f) tonePhase -= 1.0f;
-  }
+    if (!codecOK || !es8311OK) return;
 
-  size_t bytesWritten = 0;
-  // 0 ticks = non-blocking: writes only what currently fits, drops the
-  // rest rather than waiting. A dropped chunk here just means the next
-  // call tops the buffer back up -- harmless for a beep tone.
-  i2s_write(I2S_PORT, chunk, sizeof(chunk), &bytesWritten, 0);
+    int16_t chunk[I2S_TONE_CHUNK];
+
+    // Take a local copy so the requested frequency remains consistent
+    // throughout this audio chunk.
+    float freq = toneFrequency;
+
+    for (int i = 0; i < I2S_TONE_CHUNK; i++) {
+
+        if (freq > 0.0f) {
+
+            chunk[i] = (int16_t)(
+                5000.0f * sinf(2.0f * PI * tonePhase)
+            );
+
+            tonePhase += freq / (float)I2S_SAMPLE_RATE;
+
+            if (tonePhase >= 1.0f) {
+                tonePhase -= 1.0f;
+            }
+
+        } else {
+
+            // Explicitly generate silence rather than stopping I2S.
+            chunk[i] = 0;
+        }
+    }
+
+    size_t bytesWritten = 0;
+
+    i2s_write(
+        I2S_PORT,
+        chunk,
+        sizeof(chunk),
+        &bytesWritten,
+        0
+    );
 }
 // =====================================================
 // TOP BAR: 38px tall (8mm), inverted (black background, white text),
@@ -3094,9 +3119,9 @@ void drawLargeValueWithSmallUnit(
   // Large numeric value
   // ---------------------------------------------------------
   const uint8_t* valueFonts[] = {
-    u8g2_font_fub35_tn, 
-    u8g2_font_fub30_tn,   // 💡 Added: 30-pixel tall font
-    u8g2_font_fub25_tn,   // 💡 Added: 25-pixel tall font
+    u8g2_font_fub35_tn,
+    u8g2_font_fub30_tn,  // 💡 Added: 30-pixel tall font
+    u8g2_font_fub25_tn,  // 💡 Added: 25-pixel tall font
     u8g2_font_fub20_tn,
     u8g2_font_helvB18_tf,
     u8g2_font_helvB14_tf
@@ -3239,7 +3264,7 @@ void drawParagliderPage() {
 
     drawLargeValueWithSmallUnit(
       colW / 2,
-      top + rowH / 2 + + 20, // 💡 Changed from +10 to +20 to shift down 10px
+      top + rowH / 2 + +20,  // 💡 Changed from +10 to +20 to shift down 10px
       colW - 10,
       buffer,
       "ft");
@@ -3315,7 +3340,7 @@ void drawParagliderPage() {
   }
 
   u8g2.drawStr(
-    colW + (colW - u8g2.getStrWidth(buffer)) / 2- 20, // 💡 Subtracted 20 to shift left
+    colW + (colW - u8g2.getStrWidth(buffer)) / 2 - 20,  // 💡 Subtracted 20 to shift left
     top + rowH - 16,
     buffer);
 
@@ -3340,8 +3365,8 @@ void drawParagliderPage() {
       currentClimbRateMS);
 
     drawLargeValueWithSmallUnit(
-      colW / 2-3,
-      top + rowH + rowH / 2 + 20, // Changed from 10 to 20 to shift it down
+      colW / 2 - 3,
+      top + rowH + rowH / 2 + 20,  // Changed from 10 to 20 to shift it down
       colW - 10,
       buffer,
       "m/s");
@@ -3368,8 +3393,8 @@ void drawParagliderPage() {
   // =========================================================
 
   u8g2.setFont(u8g2_font_helvB10_tf);  // smaller font: title is longer than (old value; u8g2_font_6x10_tf)
-                                    // the other box headers (helvB10 would
-                                    // run off the edge of the box)
+                                       // the other box headers (helvB10 would
+                                       // run off the edge of the box)
   u8g2.drawStr(
     colW + 5,
     top + rowH + 14,
@@ -3660,7 +3685,7 @@ void drawWeatherPage() {
       localMetersSnapshot[i].speedKph);
 
     const int line2Y =
-      currentBoxY + 56;   // Moved down by +4 pixels  
+      currentBoxY + 56;  // Moved down by +4 pixels
 
     u8g2.drawStr(
       6,
@@ -3813,14 +3838,14 @@ void drawADSBPage() {
 
   u8g2.setFont(u8g2_font_helvB18_tf);
 
-    char altitudeText[24];
+  char altitudeText[24];
 
-    if (bmpOK && windowCount > 0) {
-        float altFt = currentAltitudeM * 3.28084f;
-        snprintf(altitudeText, sizeof(altitudeText), "ALT: %dft", (int)roundf(altFt));
-    } else {
-        snprintf(altitudeText, sizeof(altitudeText), "ALT: --ft");
-    }
+  if (bmpOK && windowCount > 0) {
+    float altFt = currentAltitudeM * 3.28084f;
+    snprintf(altitudeText, sizeof(altitudeText), "ALT: %dft", (int)roundf(altFt));
+  } else {
+    snprintf(altitudeText, sizeof(altitudeText), "ALT: --ft");
+  }
 
   int altitudeW = u8g2.getStrWidth(altitudeText) + 10;
   int altitudeH = u8g2.getFontAscent() - u8g2.getFontDescent() + 6;
@@ -3854,7 +3879,7 @@ void drawADSBPage() {
   int gsH = u8g2.getFontAscent() - u8g2.getFontDescent() + 6;
 
   int gsX = SCREEN_W - gsW - 20;
-  int gsY = TOP_BAR_HEIGHT_PX + 10-4;  // top-right corner, just below the top bar
+  int gsY = TOP_BAR_HEIGHT_PX + 10 - 4;  // top-right corner, just below the top bar
 
   u8g2.drawFrame(
     gsX,

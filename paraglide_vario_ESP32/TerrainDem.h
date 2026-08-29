@@ -16,7 +16,7 @@
 // Call pattern mirrors findNearestControlledAirspace()/OpenAirScanner.h:
 // pass the SD filename and a position each call, take sdMutex around it.
 
-#include <SD.h>
+#include <SD_MMC.h>
 #include <string.h>
 
 #pragma pack(push, 1)
@@ -49,7 +49,7 @@ static bool loadDemHeaderIfNeeded(const char* demFile) {
   if (g_demHeaderAttempted) return g_demHeaderValid;
   g_demHeaderAttempted = true;
 
-  File f = SD.open(demFile, FILE_READ);
+  File f = SD_MMC.open(demFile, FILE_READ);
   if (!f) {
     Serial.println("[DEM] Could not open DEM file");
     return false;
@@ -98,7 +98,7 @@ static bool getGroundElevationM(const char* demFile, double lat, double lon,
   double fr = rowF - row0;
   double fc = colF - col0;
 
-  File f = SD.open(demFile, FILE_READ);
+  File f = SD_MMC.open(demFile, FILE_READ);
   if (!f) return false;
 
   auto readCell = [&](uint32_t r, uint32_t c, int16_t& out) -> bool {
