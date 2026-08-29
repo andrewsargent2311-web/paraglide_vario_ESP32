@@ -18,7 +18,7 @@
 #include <string.h>
 #include <esp_task_wdt.h>
 #include <esp_timer.h>
-#include <SD.h>  
+#include <SD.h>
 #include "secrets.h"
 #include "OpenAirScanner.h"
 // =====================================================
@@ -57,8 +57,8 @@ U8G2_ST7305_300X400_1_4W_HW_SPI u8g2(U8G2_R0, /*cs=*/RLCD_CS, /*dc=*/RLCD_DC, /*
 // SD CARD / IGC FLIGHT LOG
 // =====================================================
 
-#define SD_CS_PIN 1    
-#define SD_SCK_PIN  38
+#define SD_CS_PIN 1
+#define SD_SCK_PIN 38
 #define SD_MISO_PIN 39
 #define SD_MOSI_PIN 21
 // Your display already owns the default SPI bus (SCK 11 / MOSI 12 -- see
@@ -134,11 +134,11 @@ struct PositionSnapshot {
 };
 PositionSnapshot sharedPosition;
 
-#define IGC_START_SPEED_KPH   10.0f
-#define IGC_STOP_SPEED_KPH   0.0f
-#define IGC_START_SUSTAIN_MS  10000UL
-#define IGC_STOP_SUSTAIN_MS  10000UL
-#define IGC_FIX_INTERVAL_MS   4000UL
+#define IGC_START_SPEED_KPH 10.0f
+#define IGC_STOP_SPEED_KPH 0.0f
+#define IGC_START_SUSTAIN_MS 10000UL
+#define IGC_STOP_SUSTAIN_MS 10000UL
+#define IGC_FIX_INTERVAL_MS 4000UL
 
 unsigned long igcAboveThresholdSince = 0;
 unsigned long igcBelowThresholdSince = 0;
@@ -177,33 +177,33 @@ bool rtcOK = false;
 #define GPS_RX_PIN 44
 #define GPS_TX_PIN 43
 #define GPS_BAUD 115200
-#define WIND_MIN_CIRCLE_SPEED_KPH  15.0f
-#define WIND_MAX_CIRCLE_SPEED_KPH  80.0f
-#define WIND_MAX_ESTIMATE_KPH      50.0f
+#define WIND_MIN_CIRCLE_SPEED_KPH 15.0f
+#define WIND_MAX_CIRCLE_SPEED_KPH 80.0f
+#define WIND_MAX_ESTIMATE_KPH 50.0f
 // ============================================================
 // 360° WIND / AIRSPEED ESTIMATOR
 // ============================================================
 float estimatedWindSpeedKph = 0.0f;
-    float estimatedAirspeedKph = 0.0f;
-    float estimatedWindDirectionDeg = 0.0f;
-    bool windEstimateValid = false;
+float estimatedAirspeedKph = 0.0f;
+float estimatedWindDirectionDeg = 0.0f;
+bool windEstimateValid = false;
 
-    // Circle detection state
-    bool windCircleActive = false;
-    float windCircleStartTrack = 0.0f;
-    float windCircleAccumulatedDeg = 0.0f;
-    float windCircleLastTrack = 0.0f;
+// Circle detection state
+bool windCircleActive = false;
+float windCircleStartTrack = 0.0f;
+float windCircleAccumulatedDeg = 0.0f;
+float windCircleLastTrack = 0.0f;
 
-    // Speed extrema during the circle
-    float windCircleMaxSpeedKph = 0.0f;
-    float windCircleMinSpeedKph = 999.0f;
+// Speed extrema during the circle
+float windCircleMaxSpeedKph = 0.0f;
+float windCircleMinSpeedKph = 999.0f;
 
-    // Track at minimum groundspeed
-    float windCircleMinSpeedTrack = 0.0f;
+// Track at minimum groundspeed
+float windCircleMinSpeedTrack = 0.0f;
 
-    // GPS validity
-    bool windEstimatorInitialized = false;
-    TinyGPSPlus gps;
+// GPS validity
+bool windEstimatorInitialized = false;
+TinyGPSPlus gps;
 // =====================================================
 // ADSB GPS linking
 // =====================================================
@@ -228,8 +228,8 @@ bool conflictDetectedThisFrame = false;
 // ---- Intercept alarm: fires once per new intruder, alternates tone ----
 #define INTERCEPT_ALARM_DURATION_MS 5000UL
 #define INTERCEPT_TONE_HIGH_HZ 600
-#define INTERCEPT_TONE_LOW_HZ  400
-#define INTERCEPT_TONE_TOGGLE_MS 250UL   // time on each tone before switching
+#define INTERCEPT_TONE_LOW_HZ 400
+#define INTERCEPT_TONE_TOGGLE_MS 250UL  // time on each tone before switching
 bool interceptAlarmActive = false;
 unsigned long interceptAlarmStart = 0;
 volatile bool hasAdsbData = false;
@@ -311,8 +311,8 @@ struct WindMeter {
   float distanceKm;
   float speedKph;
   float gustKph;
-  float bearingDeg;      // wind direction reported BY the station (e.g. "N" = wind from the north)
-  float geoBearingDeg;   // compass bearing FROM the glider TO the station (e.g. "NE")
+  float bearingDeg;     // wind direction reported BY the station (e.g. "N" = wind from the north)
+  float geoBearingDeg;  // compass bearing FROM the glider TO the station (e.g. "NE")
   bool valid;
 };
 
@@ -321,10 +321,10 @@ struct WindMeter {
 WindMeter localMeters[TRACKED_METERS];
 volatile bool hasWeatherData = false;
 
-constexpr unsigned long WEATHER_INTERVAL_MS = 5UL * 60UL * 1000UL;  // Poll weather every 5mins
-constexpr unsigned long WEATHER_FIRST_POLL_DELAY_MS = 15UL * 1000UL;    // First poll fires 15s after boot
-unsigned long weatherTimerAnchor = 0;  // Fresh, clean background timer
-bool weatherFirstPollDone = false;      // True once the initial 10s poll has fired
+constexpr unsigned long WEATHER_INTERVAL_MS = 5UL * 60UL * 1000UL;    // Poll weather every 5mins
+constexpr unsigned long WEATHER_FIRST_POLL_DELAY_MS = 15UL * 1000UL;  // First poll fires 15s after boot
+unsigned long weatherTimerAnchor = 0;                                 // Fresh, clean background timer
+bool weatherFirstPollDone = false;                                    // True once the initial 10s poll has fired
 
 // Proximity alarm timing parameters
 // KEY BUTTON (page cycling) -- GPIO18 on this board's onboard KEY
@@ -673,13 +673,40 @@ void setup() {
   }
   bmpOK = (bmpAddress != 0) && bmp.begin(bmpAddress, &Wire);
   if (bmpOK) {
+    // begin() leaves the sensor in NORMAL mode. Per the BMP5xx datasheet,
+    // OSR/ODR/press-enable config registers should only be written while in
+    // STANDBY -- but setOutputDataRate()/setPressureOversampling()/
+    // enablePressure() don't enforce that themselves (only the IIR filter
+    // setter does), so writing them straight after begin() means they hit
+    // the sensor mid-measurement with no guarantee they're actually applied.
+    // Force standby first, configure everything, then switch to NORMAL last
+    // so measurement only starts once the config is known-good.
+    bmp.setPowerMode(BMP5XX_POWERMODE_STANDBY);
     bmp.setTemperatureOversampling(BMP5XX_OVERSAMPLING_2X);
     bmp.setPressureOversampling(BMP5XX_OVERSAMPLING_8X);
     bmp.setIIRFilterCoeff(BMP5XX_IIR_FILTER_COEFF_3);
     bmp.setOutputDataRate(BMP5XX_ODR_50_HZ);
-    bmp.setPowerMode(BMP5XX_POWERMODE_NORMAL);
     bmp.enablePressure(true);
+    bmp.setPowerMode(BMP5XX_POWERMODE_NORMAL);
     Serial.println("BMP580 FOUND -- VARIO ACTIVE");
+    delay(100);
+
+    Serial.println("[BMP TEST] Testing sensor...");
+
+    for (int i = 0; i < 10; i++) {
+      Serial.printf("[BMP TEST] dataReady=%d\n", bmp.dataReady());
+
+      if (bmp.performReading()) {
+        Serial.printf(
+          "[BMP TEST] TEMP=%.2f C  PRESSURE=%.2f hPa\n",
+          bmp.temperature,
+          bmp.pressure);
+      } else {
+        Serial.println("[BMP TEST] performReading FAILED");
+      }
+
+      delay(100);
+    }
   } else {
     Serial.println("BMP580 NOT FOUND -- check wiring/address, vario disabled");
   }
@@ -776,7 +803,9 @@ void setup() {
   // glitch/cut out.
   // ---------------------------------------------------------
   const esp_timer_create_args_t audioTimerConfig = {
-    .callback = [](void*) { i2sToneService(); },
+    .callback = [](void*) {
+      i2sToneService();
+    },
     .arg = nullptr,
     .dispatch_method = ESP_TIMER_TASK,
     .name = "audio_svc"
@@ -1362,16 +1391,16 @@ void backgroundTask(void* parameter) {
         performADSBUpdate();
         adsbTaskRunning = false;
       }
-          // Weather: first poll fires WEATHER_FIRST_POLL_DELAY_MS after boot;
-          // every poll after that reverts to the normal WEATHER_INTERVAL_MS cadence.
-          unsigned long weatherDueInterval = weatherFirstPollDone ? WEATHER_INTERVAL_MS : WEATHER_FIRST_POLL_DELAY_MS;
+      // Weather: first poll fires WEATHER_FIRST_POLL_DELAY_MS after boot;
+      // every poll after that reverts to the normal WEATHER_INTERVAL_MS cadence.
+      unsigned long weatherDueInterval = weatherFirstPollDone ? WEATHER_INTERVAL_MS : WEATHER_FIRST_POLL_DELAY_MS;
 
-          if (now - weatherTimerAnchor >= weatherDueInterval) {
-          weatherTimerAnchor = now;
-          weatherFirstPollDone = true;
-          Serial.println("[MAIN] Calling weather update...");
-          updateWeather();
-          }
+      if (now - weatherTimerAnchor >= weatherDueInterval) {
+        weatherTimerAnchor = now;
+        weatherFirstPollDone = true;
+        Serial.println("[MAIN] Calling weather update...");
+        updateWeather();
+      }
     }
 
     // ---------------------------------------------------------
@@ -1423,8 +1452,8 @@ void backgroundTask(void* parameter) {
         if (sdMutex != nullptr && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
           AirspaceResult scanResult;
           bool found = findNearestControlledAirspace(
-              AIRSPACE_FILE, pos.lat, pos.lon, pos.altFt, groundElevationFt,
-              scanResult, AIRSPACE_CONTROLLED_CLASSES, AIRSPACE_NUM_CONTROLLED_CLASSES);
+            AIRSPACE_FILE, pos.lat, pos.lon, pos.altFt, groundElevationFt,
+            scanResult, AIRSPACE_CONTROLLED_CLASSES, AIRSPACE_NUM_CONTROLLED_CLASSES);
           xSemaphoreGive(sdMutex);
 
           if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -1957,8 +1986,7 @@ void writeIgcBRecord() {
   char latLonBuf[24];
   formatIgcLatLon(gps.location.lat(), gps.location.lng(), latLonBuf, sizeof(latLonBuf));
 
-  bool fixValid = gps.location.isValid() && gps.location.age() < 2000 &&
-                  gps.satellites.isValid() && gps.satellites.value() >= 4;
+  bool fixValid = gps.location.isValid() && gps.location.age() < 2000 && gps.satellites.isValid() && gps.satellites.value() >= 4;
 
   int pressureAltM = bmpOK ? (int)roundf(currentAltitudeM) : 0;
   int gpsAltM = gps.altitude.isValid() ? (int)roundf(gps.altitude.meters()) : 0;
@@ -2074,58 +2102,82 @@ void updateIgcRecorder() {
 //VARIO: sample baro, push into regression window, compute climb rate
 //=====================================================
 void updateVario() {
-    if (!bmp.dataReady()) return;
-    if (!bmp.performReading()) return;
+  // Temporary throttled diagnostics -- ALTITUDE/CLIMB RATE only need
+  // bmpOK && windowCount > 0, which is completely independent of GPS,
+  // so if those boxes are stuck on "--" the cause has to be here: either
+  // dataReady()/performReading() failing every call, or this function
+  // not running at all. Prints at most once every 2s so it won't flood
+  // the serial monitor. Safe to remove once the real cause is found.
+  static unsigned long lastVarioDebug = 0;
+  bool debugNow = (millis() - lastVarioDebug >= 2000);
 
-    bool gpsAltitudeGood =
-        gps.altitude.isValid() && gps.altitude.age() < 2000 && gps.satellites.isValid() && gps.satellites.value() >= 6 && gps.hdop.isValid() && gps.hdop.hdop() <= 2.5;
 
-    // Runs the real GPS-derived calibration the first time a good fix
-    // shows up, AND -- if we're currently sitting on the no-GPS fallback
-    // value -- also the first time a good fix shows up *after* that, so a
-    // merely-slow GPS still gets upgraded to a proper calibration instead
-    // of being stuck on 1013.25 for the rest of the flight. Once genuinely
-    // calibrated (qnhIsFallback == false), this never fires again.
-    if (gpsAltitudeGood && (!qnhCalibrated || qnhIsFallback)) {
-        float gpsAltM = gps.altitude.meters();
-
-        float calculatedQNH =
-        bmp.pressure / powf(1.0f - (gpsAltM / 44330.0f), 1.0f / 0.1903f);
-
-        if (calculatedQNH >= 850.0f && calculatedQNH <= 1100.0f) {
-
-        bool wasFallback = qnhIsFallback;
-        currentQNH = calculatedQNH;
-        qnhCalibrated = true;
-        qnhIsFallback = false;
-
-        Serial.print(wasFallback ? "QNH upgraded from GPS altitude (fallback replaced): "
-                                  : "QNH calibrated from GPS altitude: ");
-        Serial.println(currentQNH);
-        }
-    } else if (!qnhCalibrated && millis() >= GPS_QNH_FALLBACK_MS) {
-        // GPS never came good (missing/unwired module, or just no fix after
-        // a full minute) -- stop waiting on it. Default to standard
-        // atmosphere so the BMP580 alone can drive altitude/vario for the
-        // rest of the flight. Flagged as a fallback so a later good fix can
-        // still upgrade it, above.
-        currentQNH = SEA_LEVEL_QNH_DEFAULT;
-        qnhCalibrated = true;
-        qnhIsFallback = true;
-
-        Serial.println("GPS unavailable -- defaulting QNH to 1013.25, running altitude/vario off BMP580 only");
+  if (!bmp.performReading()) {
+    if (debugNow) {
+      Serial.println("[VARIO DEBUG] bmp.performReading() FAILED -- skipping this cycle");
+      lastVarioDebug = millis();
     }
+    return;
+  }
 
-    currentAltitudeM = bmp.readAltitude(currentQNH);
+  bool gpsAltitudeGood =
+    gps.altitude.isValid() && gps.altitude.age() < 2000 && gps.satellites.isValid() && gps.satellites.value() >= 6 && gps.hdop.isValid() && gps.hdop.hdop() <= 2.5;
 
-    altWindow[windowIndex] = currentAltitudeM;
-    timeWindow[windowIndex] = millis();
-    windowIndex = (windowIndex + 1) % CLIMB_WINDOW_N;
-    if (windowCount < CLIMB_WINDOW_N) windowCount++;
+  // Runs the real GPS-derived calibration the first time a good fix
+  // shows up, AND -- if we're currently sitting on the no-GPS fallback
+  // value -- also the first time a good fix shows up *after* that, so a
+  // merely-slow GPS still gets upgraded to a proper calibration instead
+  // of being stuck on 1013.25 for the rest of the flight. Once genuinely
+  // calibrated (qnhIsFallback == false), this never fires again.
+  if (gpsAltitudeGood && (!qnhCalibrated || qnhIsFallback)) {
+    float gpsAltM = gps.altitude.meters();
 
-    if (windowCount >= 3) {
-        currentClimbRateMS = computeClimbRateLeastSquares();
+    float calculatedQNH =
+      bmp.pressure / powf(1.0f - (gpsAltM / 44330.0f), 1.0f / 0.1903f);
+
+    if (calculatedQNH >= 850.0f && calculatedQNH <= 1100.0f) {
+
+      bool wasFallback = qnhIsFallback;
+      currentQNH = calculatedQNH;
+      qnhCalibrated = true;
+      qnhIsFallback = false;
+
+      Serial.print(wasFallback ? "QNH upgraded from GPS altitude (fallback replaced): "
+                               : "QNH calibrated from GPS altitude: ");
+      Serial.println(currentQNH);
     }
+  } else if (!qnhCalibrated && millis() >= GPS_QNH_FALLBACK_MS) {
+    // GPS never came good (missing/unwired module, or just no fix after
+    // a full minute) -- stop waiting on it. Default to standard
+    // atmosphere so the BMP580 alone can drive altitude/vario for the
+    // rest of the flight. Flagged as a fallback so a later good fix can
+    // still upgrade it, above.
+    currentQNH = SEA_LEVEL_QNH_DEFAULT;
+    qnhCalibrated = true;
+    qnhIsFallback = true;
+
+    Serial.println("GPS unavailable -- defaulting QNH to 1013.25, running altitude/vario off BMP580 only");
+  }
+
+  currentAltitudeM = bmp.readAltitude(currentQNH);
+
+  altWindow[windowIndex] = currentAltitudeM;
+  timeWindow[windowIndex] = millis();
+  windowIndex = (windowIndex + 1) % CLIMB_WINDOW_N;
+  if (windowCount < CLIMB_WINDOW_N) windowCount++;
+
+  if (windowCount >= 3) {
+    currentClimbRateMS = computeClimbRateLeastSquares();
+  }
+
+  if (debugNow) {
+    Serial.printf(
+      "[VARIO DEBUG] OK -- pressure=%.2f hPa, QNH=%.2f (calibrated=%d, fallback=%d), "
+      "altitude=%.1f m, windowCount=%d, climb=%.2f m/s\n",
+      bmp.pressure, currentQNH, qnhCalibrated, qnhIsFallback,
+      currentAltitudeM, windowCount, currentClimbRateMS);
+    lastVarioDebug = millis();
+  }
 }
 
 float computeClimbRateLeastSquares() {
@@ -2151,169 +2203,169 @@ float computeClimbRateLeastSquares() {
 
 void updateWindEstimator() {
 
-    // ---------------------------------------------------------
-    // Need valid GPS speed and course
-    // ---------------------------------------------------------
-    if (!gps.speed.isValid() || !gps.course.isValid()) {
-        return;
-    }
+  // ---------------------------------------------------------
+  // Need valid GPS speed and course
+  // ---------------------------------------------------------
+  if (!gps.speed.isValid() || !gps.course.isValid()) {
+    return;
+  }
 
-    float groundSpeedKph = gps.speed.kmph();
-    float trackDeg = gps.course.deg();
+  float groundSpeedKph = gps.speed.kmph();
+  float trackDeg = gps.course.deg();
 
-    // Ignore extremely low GPS speeds.
-    // Course becomes unreliable when nearly stationary.
-    if (groundSpeedKph < 10.0f) {
-        return;
-    }
+  // Ignore extremely low GPS speeds.
+  // Course becomes unreliable when nearly stationary.
+  if (groundSpeedKph < 10.0f) {
+    return;
+  }
 
-    // ---------------------------------------------------------
-    // First valid sample
-    // ---------------------------------------------------------
-    if (!windEstimatorInitialized) {
+  // ---------------------------------------------------------
+  // First valid sample
+  // ---------------------------------------------------------
+  if (!windEstimatorInitialized) {
 
-        windEstimatorInitialized = true;
-        windCircleLastTrack = trackDeg;
+    windEstimatorInitialized = true;
+    windCircleLastTrack = trackDeg;
 
-        return;
-    }
+    return;
+  }
 
-    // ---------------------------------------------------------
-    // Calculate change in track since previous GPS sample.
-    //
-    // Handles the 359° -> 0° transition correctly.
-    // ---------------------------------------------------------
-    float deltaTrack = trackDeg - windCircleLastTrack;
+  // ---------------------------------------------------------
+  // Calculate change in track since previous GPS sample.
+  //
+  // Handles the 359° -> 0° transition correctly.
+  // ---------------------------------------------------------
+  float deltaTrack = trackDeg - windCircleLastTrack;
 
-    if (deltaTrack > 180.0f) {
-        deltaTrack -= 360.0f;
-    }
+  if (deltaTrack > 180.0f) {
+    deltaTrack -= 360.0f;
+  }
 
-    if (deltaTrack < -180.0f) {
-        deltaTrack += 360.0f;
-    }
+  if (deltaTrack < -180.0f) {
+    deltaTrack += 360.0f;
+  }
 
-    // ---------------------------------------------------------
-    // Detect beginning of a circle.
-    //
-    // We start accumulating when the aircraft has moved
-    // through a meaningful amount of heading.
-    // ---------------------------------------------------------
-    if (!windCircleActive) {
+  // ---------------------------------------------------------
+  // Detect beginning of a circle.
+  //
+  // We start accumulating when the aircraft has moved
+  // through a meaningful amount of heading.
+  // ---------------------------------------------------------
+  if (!windCircleActive) {
 
-        windCircleActive = true;
+    windCircleActive = true;
 
-        windCircleStartTrack = trackDeg;
-        windCircleAccumulatedDeg = 0.0f;
+    windCircleStartTrack = trackDeg;
+    windCircleAccumulatedDeg = 0.0f;
 
-        windCircleMaxSpeedKph = groundSpeedKph;
-        windCircleMinSpeedKph = groundSpeedKph;
+    windCircleMaxSpeedKph = groundSpeedKph;
+    windCircleMinSpeedKph = groundSpeedKph;
 
-        windCircleMinSpeedTrack = trackDeg;
-
-        windCircleLastTrack = trackDeg;
-
-        return;
-    }
-
-    // ---------------------------------------------------------
-    // Accumulate absolute turn angle.
-    //
-    // We don't care whether the pilot turns left or right.
-    // ---------------------------------------------------------
-    windCircleAccumulatedDeg += fabsf(deltaTrack);
-
-    // ---------------------------------------------------------
-    // Record maximum and minimum groundspeed
-    // ---------------------------------------------------------
-    if (groundSpeedKph > windCircleMaxSpeedKph) {
-        windCircleMaxSpeedKph = groundSpeedKph;
-    }
-
-    if (groundSpeedKph < windCircleMinSpeedKph) {
-        windCircleMinSpeedKph = groundSpeedKph;
-        windCircleMinSpeedTrack = trackDeg;
-    }
+    windCircleMinSpeedTrack = trackDeg;
 
     windCircleLastTrack = trackDeg;
 
-    // ---------------------------------------------------------
-    // Have we completed approximately one full circle?
-    //
-    // Allow 20° tolerance because GPS course samples are not
-    // perfectly continuous.
-    // ---------------------------------------------------------
-    if (windCircleAccumulatedDeg >= 340.0f) {
+    return;
+  }
 
-        // -----------------------------------------------------
-        // Calculate wind and airspeed
-        // -----------------------------------------------------
+  // ---------------------------------------------------------
+  // Accumulate absolute turn angle.
+  //
+  // We don't care whether the pilot turns left or right.
+  // ---------------------------------------------------------
+  windCircleAccumulatedDeg += fabsf(deltaTrack);
 
-        float speedRange =
-            windCircleMaxSpeedKph - windCircleMinSpeedKph;
+  // ---------------------------------------------------------
+  // Record maximum and minimum groundspeed
+  // ---------------------------------------------------------
+  if (groundSpeedKph > windCircleMaxSpeedKph) {
+    windCircleMaxSpeedKph = groundSpeedKph;
+  }
 
-        float windSpeed =
-            speedRange / 2.0f;
+  if (groundSpeedKph < windCircleMinSpeedKph) {
+    windCircleMinSpeedKph = groundSpeedKph;
+    windCircleMinSpeedTrack = trackDeg;
+  }
 
-        float airspeed =
-            (windCircleMaxSpeedKph + windCircleMinSpeedKph) / 2.0f;
+  windCircleLastTrack = trackDeg;
 
-        // -----------------------------------------------------
-        // Basic sanity checks
-        // -----------------------------------------------------
+  // ---------------------------------------------------------
+  // Have we completed approximately one full circle?
+  //
+  // Allow 20° tolerance because GPS course samples are not
+  // perfectly continuous.
+  // ---------------------------------------------------------
+  if (windCircleAccumulatedDeg >= 340.0f) {
 
-        bool valid = true;
+    // -----------------------------------------------------
+    // Calculate wind and airspeed
+    // -----------------------------------------------------
 
-        if (windCircleMinSpeedKph < 10.0f) {
-            valid = false;
-        }
+    float speedRange =
+      windCircleMaxSpeedKph - windCircleMinSpeedKph;
 
-        if (windCircleMaxSpeedKph > 150.0f) {
-            valid = false;
-        }
+    float windSpeed =
+      speedRange / 2.0f;
 
-        if (airspeed < 15.0f || airspeed > 150.0f) {
-            valid = false;
-        }
+    float airspeed =
+      (windCircleMaxSpeedKph + windCircleMinSpeedKph) / 2.0f;
 
-        if (windSpeed < 0.0f || windSpeed > 75.0f) {
-            valid = false;
-        }
+    // -----------------------------------------------------
+    // Basic sanity checks
+    // -----------------------------------------------------
 
-        // -----------------------------------------------------
-        // Accept result
-        // -----------------------------------------------------
-        if (valid) {
+    bool valid = true;
 
-            estimatedWindSpeedKph = windSpeed;
-            estimatedAirspeedKph = airspeed;
-
-            // Minimum groundspeed occurs when flying most
-            // directly INTO the wind.
-            //
-            // Therefore the wind direction is approximately
-            // opposite the aircraft track at minimum GS.
-            float windDir =
-                windCircleMinSpeedTrack + 180.0f;
-
-            if (windDir >= 360.0f) {
-                windDir -= 360.0f;
-            }
-
-            estimatedWindDirectionDeg = windDir;
-
-            windEstimateValid = true;
-        }
-
-        // -----------------------------------------------------
-        // Reset and wait for another circle
-        // -----------------------------------------------------
-
-        windCircleActive = false;
-        windCircleAccumulatedDeg = 0.0f;
-        windCircleMaxSpeedKph = 0.0f;
-        windCircleMinSpeedKph = 999.0f;
+    if (windCircleMinSpeedKph < 10.0f) {
+      valid = false;
     }
+
+    if (windCircleMaxSpeedKph > 150.0f) {
+      valid = false;
+    }
+
+    if (airspeed < 15.0f || airspeed > 150.0f) {
+      valid = false;
+    }
+
+    if (windSpeed < 0.0f || windSpeed > 75.0f) {
+      valid = false;
+    }
+
+    // -----------------------------------------------------
+    // Accept result
+    // -----------------------------------------------------
+    if (valid) {
+
+      estimatedWindSpeedKph = windSpeed;
+      estimatedAirspeedKph = airspeed;
+
+      // Minimum groundspeed occurs when flying most
+      // directly INTO the wind.
+      //
+      // Therefore the wind direction is approximately
+      // opposite the aircraft track at minimum GS.
+      float windDir =
+        windCircleMinSpeedTrack + 180.0f;
+
+      if (windDir >= 360.0f) {
+        windDir -= 360.0f;
+      }
+
+      estimatedWindDirectionDeg = windDir;
+
+      windEstimateValid = true;
+    }
+
+    // -----------------------------------------------------
+    // Reset and wait for another circle
+    // -----------------------------------------------------
+
+    windCircleActive = false;
+    windCircleAccumulatedDeg = 0.0f;
+    windCircleMaxSpeedKph = 0.0f;
+    windCircleMinSpeedKph = 999.0f;
+  }
 }
 // =====================================================
 // BATTERY
@@ -2411,290 +2463,290 @@ bool syncClockFromGPS() {
 // =====================================================
 void updateI2sAudioBuzzer() {
 
-    const unsigned long now = millis();
+  const unsigned long now = millis();
 
-    // ============================================================
-    // PAGE-CHANGE BEEP HAS PRIORITY
-    // ============================================================
+  // ============================================================
+  // PAGE-CHANGE BEEP HAS PRIORITY
+  // ============================================================
 
-    if ((int32_t)(pageBeepUntil - now) > 0) {
-      return;
-    }
+  if ((int32_t)(pageBeepUntil - now) > 0) {
+    return;
+  }
 
-    // Page beep has just finished
-    if (pageBeepUntil != 0) {
-      pageBeepUntil = 0;
+  // Page beep has just finished
+  if (pageBeepUntil != 0) {
+    pageBeepUntil = 0;
 
-      digitalWrite(AMP_ENABLE_PIN, LOW);
-      setToneFrequency(0);
+    digitalWrite(AMP_ENABLE_PIN, LOW);
+    setToneFrequency(0);
 
-      sinkAlarmActive = false;
-      climbAudioActive = false;
-      climbToneOn = false;
-    }
-    // ============================================================
-    // ADS-B INTERCEPT ALARM: 5s of alternating tone, takes priority
-    // over vario climb/sink audio (but not the page-change beep).
-    // ============================================================
-    if (interceptAlarmActive) {
+    sinkAlarmActive = false;
+    climbAudioActive = false;
+    climbToneOn = false;
+  }
+  // ============================================================
+  // ADS-B INTERCEPT ALARM: 5s of alternating tone, takes priority
+  // over vario climb/sink audio (but not the page-change beep).
+  // ============================================================
+  if (interceptAlarmActive) {
 
-      unsigned long elapsed = now - interceptAlarmStart;
+    unsigned long elapsed = now - interceptAlarmStart;
 
-      if (elapsed >= INTERCEPT_ALARM_DURATION_MS) {
-        interceptAlarmActive = false;
-
-        digitalWrite(AMP_ENABLE_PIN, LOW);
-        setToneFrequency(0);
-
-        // Force vario audio to re-evaluate cleanly next pass.
-        sinkAlarmActive = false;
-        climbAudioActive = false;
-        climbToneOn = false;
-
-      } else {
-        unsigned long phase = elapsed % (INTERCEPT_TONE_TOGGLE_MS * 2);
-        float freq = (phase < INTERCEPT_TONE_TOGGLE_MS) ? INTERCEPT_TONE_HIGH_HZ : INTERCEPT_TONE_LOW_HZ;
-
-        digitalWrite(AMP_ENABLE_PIN, HIGH);
-        setToneFrequency(freq);
-
-        return;  // Skip vario tone logic entirely while the alarm sounds
-      }
-    }
-
-    // ============================================================
-    // MUTED
-    // ============================================================
-
-    if (buzzerMuted) {
+    if (elapsed >= INTERCEPT_ALARM_DURATION_MS) {
+      interceptAlarmActive = false;
 
       digitalWrite(AMP_ENABLE_PIN, LOW);
       setToneFrequency(0);
 
+      // Force vario audio to re-evaluate cleanly next pass.
       sinkAlarmActive = false;
       climbAudioActive = false;
       climbToneOn = false;
 
-      return;
+    } else {
+      unsigned long phase = elapsed % (INTERCEPT_TONE_TOGGLE_MS * 2);
+      float freq = (phase < INTERCEPT_TONE_TOGGLE_MS) ? INTERCEPT_TONE_HIGH_HZ : INTERCEPT_TONE_LOW_HZ;
+
+      digitalWrite(AMP_ENABLE_PIN, HIGH);
+      setToneFrequency(freq);
+
+      return;  // Skip vario tone logic entirely while the alarm sounds
     }
+  }
+
+  // ============================================================
+  // MUTED
+  // ============================================================
+
+  if (buzzerMuted) {
+
+    digitalWrite(AMP_ENABLE_PIN, LOW);
+    setToneFrequency(0);
+
+    sinkAlarmActive = false;
+    climbAudioActive = false;
+    climbToneOn = false;
+
+    return;
+  }
 
 
-    // ============================================================
-    // SINK ALARM WITH HYSTERESIS
-    //
-    // Enter sink alarm at <= -2.0 m/s
+  // ============================================================
+  // SINK ALARM WITH HYSTERESIS
+  //
+  // Enter sink alarm at <= -2.0 m/s
   // Remain in alarm until climb rate rises above -1.7 m/s
-    //
-    // This prevents rapid ON/OFF switching when the measured
-    // sink rate is hovering around -2.0 m/s.
-    // ============================================================
+  //
+  // This prevents rapid ON/OFF switching when the measured
+  // sink rate is hovering around -2.0 m/s.
+  // ============================================================
 
-    if (!sinkAlarmActive) {
+  if (!sinkAlarmActive) {
 
-      if (currentClimbRateMS <= SINK_ALARM_MS) {
+    if (currentClimbRateMS <= SINK_ALARM_MS) {
 
-        sinkAlarmActive = true;
-        sinkAlarmStart = now;
+      sinkAlarmActive = true;
+      sinkAlarmStart = now;
 
-        // Make sure climb audio is cancelled
-        climbAudioActive = false;
-        climbToneOn = false;
-      }
+      // Make sure climb audio is cancelled
+      climbAudioActive = false;
+      climbToneOn = false;
+    }
+
+  } else {
+
+    // Hysteresis release
+    if (currentClimbRateMS >= SINK_RELEASE_MS) {
+
+      sinkAlarmActive = false;
+
+      digitalWrite(AMP_ENABLE_PIN, LOW);
+      setToneFrequency(0);
+    }
+  }
+
+
+  // ============================================================
+  // SINK ALARM OUTPUT
+  // ============================================================
+
+  if (sinkAlarmActive) {
+
+    unsigned long sinkPhase =
+      (now - sinkAlarmStart) % SINK_BEEP_INTERVAL_MS;
+
+    if (sinkPhase < SINK_BEEP_ON_MS) {
+
+      digitalWrite(AMP_ENABLE_PIN, HIGH);
+      setToneFrequency(SINK_TONE_FREQ_HZ);
 
     } else {
 
-      // Hysteresis release
-      if (currentClimbRateMS >= SINK_RELEASE_MS) {
-
-        sinkAlarmActive = false;
-
-        digitalWrite(AMP_ENABLE_PIN, LOW);
-  setToneFrequency(0);
-      }
+      digitalWrite(AMP_ENABLE_PIN, LOW);
+      setToneFrequency(0);
     }
 
-
-    // ============================================================
-    // SINK ALARM OUTPUT
-    // ============================================================
-
-    if (sinkAlarmActive) {
-
-      unsigned long sinkPhase =
-        (now - sinkAlarmStart) % SINK_BEEP_INTERVAL_MS;
-
-      if (sinkPhase < SINK_BEEP_ON_MS) {
-
-        digitalWrite(AMP_ENABLE_PIN, HIGH);
-        setToneFrequency(SINK_TONE_FREQ_HZ);
-
-      } else {
-
-        digitalWrite(AMP_ENABLE_PIN, LOW);
-        setToneFrequency(0);
-      }
-
-      return;
-    }
+    return;
+  }
 
 
-    // ============================================================
-    // CLIMB DEAD BAND
-    //
-    // Below +0.15 m/s there is no climb tone.
-    // ============================================================
+  // ============================================================
+  // CLIMB DEAD BAND
+  //
+  // Below +0.15 m/s there is no climb tone.
+  // ============================================================
 
-    if (currentClimbRateMS <= CLIMB_DEADBAND_MS) {
+  if (currentClimbRateMS <= CLIMB_DEADBAND_MS) {
 
-      climbAudioActive = false;
+    climbAudioActive = false;
+    climbToneOn = false;
+
+    digitalWrite(AMP_ENABLE_PIN, LOW);
+    setToneFrequency(0);
+
+    return;
+  }
+
+
+  // ============================================================
+  // ENTERING CLIMB AUDIO
+  // ============================================================
+
+  if (!climbAudioActive) {
+
+    climbAudioActive = true;
+    climbToneOn = false;
+
+    // Start the first pulse after a short delay rather than
+    // immediately producing a tone.
+    climbPulseStart = now;
+  }
+
+
+  // ============================================================
+  // NORMALISE CLIMB RATE
+  //
+  // 0.15 m/s -> 0.0
+  // 5.0  m/s -> 1.0
+  //
+  // Anything above 5 m/s is capped at 1.0.
+  // ============================================================
+
+  float factor =
+    (currentClimbRateMS - CLIMB_DEADBAND_MS) / (CLIMB_TONE_MAX_MS - CLIMB_DEADBAND_MS);
+
+  factor = constrain(factor, 0.0f, 1.0f);
+
+
+  // ============================================================
+  // NONLINEAR RESPONSE
+  //
+  // sqrt() gives more audio resolution in weak lift.
+  //
+  // This is important for a paraglider because the difference
+  // between 0.2 and 0.5 m/s is much more useful to the pilot
+  // than making 4 and 5 m/s dramatically different.
+  // ============================================================
+
+  float response = sqrtf(factor);
+
+
+  // ============================================================
+  // TONE FREQUENCY
+  //
+  // Approximately:
+  //
+  // 0.15 m/s -> 400 Hz
+  // 0.5  m/s -> ~530 Hz
+  // 1.0  m/s -> ~650 Hz
+  // 2.0  m/s -> ~790 Hz
+  // 3.0  m/s -> ~890 Hz
+  // 5.0  m/s -> 1100 Hz
+  // ============================================================
+
+  int toneFreq =
+    CLIMB_TONE_MIN_HZ + (int)(response * (CLIMB_TONE_MAX_HZ - CLIMB_TONE_MIN_HZ));
+
+
+  // ============================================================
+  // NONLINEAR PULSE TIMING
+  //
+  // Weak lift:
+  //     long gaps
+  //
+  // Strong lift:
+  //     short gaps
+  //
+  // Using sqrt() here gives a more progressive response.
+  // ============================================================
+
+  float pulseResponse = sqrtf(factor);
+
+  unsigned long gapMs =
+    CLIMB_MAX_GAP_MS - (unsigned long)(pulseResponse * (CLIMB_MAX_GAP_MS - CLIMB_MIN_GAP_MS));
+
+
+  // ============================================================
+  // PULSE LENGTH
+  //
+  // Beeps become progressively longer with increasing lift.
+  // ============================================================
+
+  unsigned long pulseMs =
+    CLIMB_MIN_PULSE_MS + (unsigned long)(response * (CLIMB_MAX_PULSE_MS - CLIMB_MIN_PULSE_MS));
+
+
+  // ============================================================
+  // STRONG-LIFT CONTINUOUS-TONE REGION
+  //
+  // Above roughly 80% of the configured climb range, the
+  // individual pulses become close enough together that a
+  // continuous tone is more useful.
+  // ============================================================
+
+  if (factor >= 0.80f) {
+
+    climbToneOn = true;
+
+    digitalWrite(AMP_ENABLE_PIN, HIGH);
+    setToneFrequency(toneFreq);
+
+    return;
+  }
+
+
+  // ============================================================
+  // CLIMB PULSE GENERATOR
+  // ============================================================
+
+  if (climbToneOn) {
+
+    // Currently sounding
+    if ((now - climbPulseStart) >= pulseMs) {
+
       climbToneOn = false;
+      climbPulseStart = now;
 
       digitalWrite(AMP_ENABLE_PIN, LOW);
       setToneFrequency(0);
-
-      return;
     }
 
+  } else {
 
-    // ============================================================
-    // ENTERING CLIMB AUDIO
-    // ============================================================
-
-    if (!climbAudioActive) {
-
-      climbAudioActive = true;
-      climbToneOn = false;
-
-      // Start the first pulse after a short delay rather than
-      // immediately producing a tone.
-      climbPulseStart = now;
-    }
-
-
-    // ============================================================
-    // NORMALISE CLIMB RATE
-    //
-    // 0.15 m/s -> 0.0
-    // 5.0  m/s -> 1.0
-    //
-    // Anything above 5 m/s is capped at 1.0.
-    // ============================================================
-
-    float factor =
-      (currentClimbRateMS - CLIMB_DEADBAND_MS) / (CLIMB_TONE_MAX_MS - CLIMB_DEADBAND_MS);
-
-    factor = constrain(factor, 0.0f, 1.0f);
-
-
-    // ============================================================
-    // NONLINEAR RESPONSE
-    //
-    // sqrt() gives more audio resolution in weak lift.
-    //
-    // This is important for a paraglider because the difference
-    // between 0.2 and 0.5 m/s is much more useful to the pilot
-    // than making 4 and 5 m/s dramatically different.
-    // ============================================================
-
-    float response = sqrtf(factor);
-
-
-    // ============================================================
-    // TONE FREQUENCY
-    //
-    // Approximately:
-    //
-    // 0.15 m/s -> 400 Hz
-    // 0.5  m/s -> ~530 Hz
-    // 1.0  m/s -> ~650 Hz
-    // 2.0  m/s -> ~790 Hz
-    // 3.0  m/s -> ~890 Hz
-    // 5.0  m/s -> 1100 Hz
-    // ============================================================
-
-    int toneFreq =
-      CLIMB_TONE_MIN_HZ + (int)(response * (CLIMB_TONE_MAX_HZ - CLIMB_TONE_MIN_HZ));
-
-
-    // ============================================================
-    // NONLINEAR PULSE TIMING
-    //
-    // Weak lift:
-    //     long gaps
-    //
-    // Strong lift:
-    //     short gaps
-    //
-    // Using sqrt() here gives a more progressive response.
-    // ============================================================
-
-    float pulseResponse = sqrtf(factor);
-
-    unsigned long gapMs =
-      CLIMB_MAX_GAP_MS - (unsigned long)(pulseResponse * (CLIMB_MAX_GAP_MS - CLIMB_MIN_GAP_MS));
-
-
-    // ============================================================
-    // PULSE LENGTH
-    //
-    // Beeps become progressively longer with increasing lift.
-    // ============================================================
-
-    unsigned long pulseMs =
-      CLIMB_MIN_PULSE_MS + (unsigned long)(response * (CLIMB_MAX_PULSE_MS - CLIMB_MIN_PULSE_MS));
-
-
-    // ============================================================
-    // STRONG-LIFT CONTINUOUS-TONE REGION
-    //
-    // Above roughly 80% of the configured climb range, the
-    // individual pulses become close enough together that a
-    // continuous tone is more useful.
-    // ============================================================
-
-    if (factor >= 0.80f) {
+    // Currently silent
+    if ((now - climbPulseStart) >= gapMs) {
 
       climbToneOn = true;
+      climbPulseStart = now;
 
       digitalWrite(AMP_ENABLE_PIN, HIGH);
       setToneFrequency(toneFreq);
-
-      return;
     }
-
-
-    // ============================================================
-    // CLIMB PULSE GENERATOR
-    // ============================================================
-
-    if (climbToneOn) {
-
-      // Currently sounding
-      if ((now - climbPulseStart) >= pulseMs) {
-
-        climbToneOn = false;
-        climbPulseStart = now;
-
-        digitalWrite(AMP_ENABLE_PIN, LOW);
-        setToneFrequency(0);
-      }
-
-    } else {
-
-      // Currently silent
-      if ((now - climbPulseStart) >= gapMs) {
-
-        climbToneOn = true;
-        climbPulseStart = now;
-
-        digitalWrite(AMP_ENABLE_PIN, HIGH);
-        setToneFrequency(toneFreq);
-      }
-    }
+  }
 }
 // =====================================================
 // I2S CODEC SETUP: configures the ESP32-S3's I2S peripheral using the
-// plain Arduino driver/i2s.h API 
+// plain Arduino driver/i2s.h API
 // =====================================================
 void setupI2sCodec() {
   i2s_config_t i2s_config = {
@@ -2732,7 +2784,7 @@ void setupI2sCodec() {
 }
 // =====================================================
 // ES8311 CODEC CONTROL (I2C): wakes and unmutes the codec chip so the
-// I2S data stream above actually reaches the speaker. 
+// I2S data stream above actually reaches the speaker.
 // =====================================================
 void es8311WriteReg(uint8_t reg, uint8_t value) {
   Wire.beginTransmission(ES8311_I2C_ADDR);
@@ -3033,76 +3085,74 @@ void drawLargestBoldCentered(int centerX, int baselineY, int maxWidth, const cha
   u8g2.drawStr(centerX - u8g2.getStrWidth(text) / 2, baselineY, text);
 }
 void drawLargeValueWithSmallUnit(
-    int centerX,
-    int baselineY,
-    int maxWidth,
-    const char* value,
-    const char* unit){
-    // ---------------------------------------------------------
-    // Large numeric value
-    // ---------------------------------------------------------
-    const uint8_t* valueFonts[] = {
-        u8g2_font_fub20_tf,
-        u8g2_font_helvB18_tf,
-        u8g2_font_helvB14_tf
-    };
+  int centerX,
+  int baselineY,
+  int maxWidth,
+  const char* value,
+  const char* unit) {
+  // ---------------------------------------------------------
+  // Large numeric value
+  // ---------------------------------------------------------
+  const uint8_t* valueFonts[] = {
+    u8g2_font_fub20_tf,
+    u8g2_font_helvB18_tf,
+    u8g2_font_helvB14_tf
+  };
 
-    // Select largest value font that fits
-    const uint8_t* selectedFont = u8g2_font_helvB14_tf;
+  // Select largest value font that fits
+  const uint8_t* selectedFont = u8g2_font_helvB14_tf;
 
-    for (const uint8_t* font : valueFonts) {
-        u8g2.setFont(font);
+  for (const uint8_t* font : valueFonts) {
+    u8g2.setFont(font);
 
-        if (u8g2.getStrWidth(value) <= maxWidth) {
-            selectedFont = font;
-            break;
-        }
+    if (u8g2.getStrWidth(value) <= maxWidth) {
+      selectedFont = font;
+      break;
     }
+  }
 
-    u8g2.setFont(selectedFont);
+  u8g2.setFont(selectedFont);
 
-    int valueWidth = u8g2.getStrWidth(value);
+  int valueWidth = u8g2.getStrWidth(value);
 
-    // ---------------------------------------------------------
-    // Small unit
-    // ---------------------------------------------------------
-    u8g2.setFont(u8g2_font_helvB10_tf);
+  // ---------------------------------------------------------
+  // Small unit
+  // ---------------------------------------------------------
+  u8g2.setFont(u8g2_font_helvB10_tf);
 
-    int unitWidth = u8g2.getStrWidth(unit);
+  int unitWidth = u8g2.getStrWidth(unit);
 
-    // Gap between value and unit
-    const int gap = 4;
+  // Gap between value and unit
+  const int gap = 4;
 
-    // Total combined width
-    int totalWidth = valueWidth + gap + unitWidth;
+  // Total combined width
+  int totalWidth = valueWidth + gap + unitWidth;
 
-    // If combined width is too large, centre the whole thing
-    int startX = centerX - totalWidth / 2;
+  // If combined width is too large, centre the whole thing
+  int startX = centerX - totalWidth / 2;
 
-    // ---------------------------------------------------------
-    // Draw large value
-    // ---------------------------------------------------------
-    u8g2.setFont(selectedFont);
+  // ---------------------------------------------------------
+  // Draw large value
+  // ---------------------------------------------------------
+  u8g2.setFont(selectedFont);
 
-    u8g2.drawStr(
-        startX,
-        baselineY,
-        value
-    );
+  u8g2.drawStr(
+    startX,
+    baselineY,
+    value);
 
-    // ---------------------------------------------------------
-    // Draw small unit
-    //
-    // The unit uses the same baseline. This gives a clean
-    // instrument-style readout.
-    // ---------------------------------------------------------
-    u8g2.setFont(u8g2_font_helvB10_tf);
+  // ---------------------------------------------------------
+  // Draw small unit
+  //
+  // The unit uses the same baseline. This gives a clean
+  // instrument-style readout.
+  // ---------------------------------------------------------
+  u8g2.setFont(u8g2_font_helvB10_tf);
 
-    u8g2.drawStr(
-        startX + valueWidth + gap,
-        baselineY,
-        unit
-    );
+  u8g2.drawStr(
+    startX + valueWidth + gap,
+    baselineY,
+    unit);
 }
 // =====================================================
 // MENU: full-screen list shown instead of the normal top bar + page while
@@ -3160,8 +3210,7 @@ void drawParagliderPage() {
         c * colW,
         top + r * rowH,
         colW,
-        rowH
-      );
+        rowH);
     }
   }
 
@@ -3175,8 +3224,7 @@ void drawParagliderPage() {
   u8g2.drawStr(
     5,
     top + 14,
-    "ALTITUDE"
-  );
+    "ALTITUDE");
 
   if (bmpOK && windowCount > 0) {
 
@@ -3184,16 +3232,14 @@ void drawParagliderPage() {
       buffer,
       sizeof(buffer),
       "%d",
-      (int)roundf(currentAltitudeM)
-    );
+      (int)roundf(currentAltitudeM * 3.28084f));
 
     drawLargeValueWithSmallUnit(
       colW / 2,
       top + rowH / 2 + 10,
       colW - 10,
       buffer,
-      "m"
-    );
+      "ft");
 
   } else {
 
@@ -3202,8 +3248,7 @@ void drawParagliderPage() {
       top + rowH / 2 + 10,
       colW - 10,
       "--",
-      "m"
-    );
+      "m");
   }
 
 
@@ -3216,8 +3261,7 @@ void drawParagliderPage() {
   u8g2.drawStr(
     colW + 5,
     top + 14,
-    "V GROUND"
-  );
+    "V GROUND");
 
   if (gps.speed.isValid()) {
 
@@ -3225,16 +3269,14 @@ void drawParagliderPage() {
       buffer,
       sizeof(buffer),
       "%d",
-      (int)gps.speed.kmph()
-    );
+      (int)gps.speed.kmph());
 
     drawLargeValueWithSmallUnit(
       colW + colW / 2,
       top + rowH / 2,
       colW - 10,
       buffer,
-      "km/h"
-    );
+      "km/h");
 
   } else {
 
@@ -3243,8 +3285,7 @@ void drawParagliderPage() {
       top + rowH / 2,
       colW - 10,
       "--",
-      "km/h"
-    );
+      "km/h");
   }
 
 
@@ -3260,23 +3301,20 @@ void drawParagliderPage() {
       buffer,
       sizeof(buffer),
       "HDG %s",
-      getCompassDirection(gps.course.deg())
-    );
+      getCompassDirection(gps.course.deg()));
 
   } else {
 
     snprintf(
       buffer,
       sizeof(buffer),
-      "HDG ---"
-    );
+      "HDG ---");
   }
 
   u8g2.drawStr(
     colW + (colW - u8g2.getStrWidth(buffer)) / 2,
     top + rowH - 16,
-    buffer
-  );
+    buffer);
 
 
   // =========================================================
@@ -3288,8 +3326,7 @@ void drawParagliderPage() {
   u8g2.drawStr(
     5,
     top + rowH + 14,
-    "CLIMB RATE"
-  );
+    "CLIMB RATE");
 
   if (bmpOK && windowCount >= 3) {
 
@@ -3297,16 +3334,14 @@ void drawParagliderPage() {
       buffer,
       sizeof(buffer),
       "%+.1f",
-      currentClimbRateMS
-    );
+      currentClimbRateMS);
 
     drawLargeValueWithSmallUnit(
       colW / 2,
       top + rowH + rowH / 2 + 10,
       colW - 10,
       buffer,
-      "m/s"
-    );
+      "m/s");
 
   } else {
 
@@ -3315,8 +3350,7 @@ void drawParagliderPage() {
       top + rowH + rowH / 2 + 10,
       colW - 10,
       "--",
-      "m/s"
-    );
+      "m/s");
   }
 
 
@@ -3331,13 +3365,12 @@ void drawParagliderPage() {
   // =========================================================
 
   u8g2.setFont(u8g2_font_6x10_tf);  // smaller font: title is longer than
-                                     // the other box headers (helvB10 would
-                                     // run off the edge of the box)
+                                    // the other box headers (helvB10 would
+                                    // run off the edge of the box)
   u8g2.drawStr(
     colW + 5,
     top + rowH + 14,
-    "ALT AGL / AIR SPC"
-  );
+    "ALT AGL / AIR SPC");
 
   u8g2.setFont(u8g2_font_helvB10_tf);
 
@@ -3376,14 +3409,10 @@ void drawParagliderPage() {
   u8g2.drawStr(
     5,
     top + 2 * rowH + 14,
-    "GLIDE RATIO"
-  );
+    "GLIDE RATIO");
 
   bool glideValid =
-    bmpOK &&
-    gps.speed.isValid() &&
-    currentClimbRateMS < -CLIMB_DEADBAND_MS &&
-    currentClimbRateMS > -20.0f;
+    bmpOK && gps.speed.isValid() && currentClimbRateMS < -CLIMB_DEADBAND_MS && currentClimbRateMS > -20.0f;
 
   if (glideValid) {
 
@@ -3394,16 +3423,14 @@ void drawParagliderPage() {
       buffer,
       sizeof(buffer),
       "%.1f",
-      glideRatio
-    );
+      glideRatio);
 
     drawLargeValueWithSmallUnit(
       colW / 2,
       top + 2 * rowH + rowH / 2 + 10,
       colW - 10,
       buffer,
-      ":1"
-    );
+      ":1");
 
   } else {
 
@@ -3412,8 +3439,7 @@ void drawParagliderPage() {
       top + 2 * rowH + rowH / 2 + 10,
       colW - 10,
       "--",
-      ":1"
-    );
+      ":1");
   }
 
 
@@ -3426,8 +3452,7 @@ void drawParagliderPage() {
   u8g2.drawStr(
     colW + 5,
     top + 2 * rowH + 14,
-    "WIND / AIRSPEED"
-  );
+    "WIND / AIRSPEED");
 
 
   char windBuf[20];
@@ -3439,42 +3464,36 @@ void drawParagliderPage() {
       windBuf,
       sizeof(windBuf),
       "WIND %.0f km/h",
-      estimatedWindSpeedKph
-    );
+      estimatedWindSpeedKph);
 
-      snprintf(
+    snprintf(
       windDirBuf,
       sizeof(airBuf),
       "FROM %s",
-     getCompassDirection(estimatedWindDirectionDeg)
-    );
+      getCompassDirection(estimatedWindDirectionDeg));
 
     snprintf(
       airBuf,
       sizeof(airBuf),
       "AIR %.0f km/h",
-      estimatedAirspeedKph
-    );
+      estimatedAirspeedKph);
 
   } else {
 
     snprintf(
       windBuf,
       sizeof(windBuf),
-      "WIND -- km/h"
-    );
+      "WIND -- km/h");
 
     snprintf(
       windDirBuf,
       sizeof(windDirBuf),
-      "FROM --"
-    );
+      "FROM --");
 
     snprintf(
       airBuf,
       sizeof(airBuf),
-      "AIR -- km/h"
-    );
+      "AIR -- km/h");
   }
 
 
@@ -3483,19 +3502,16 @@ void drawParagliderPage() {
   u8g2.drawStr(
     colW + (colW - u8g2.getStrWidth(windBuf)) / 2,
     top + 2 * rowH + 40,
-    windBuf
-  );
+    windBuf);
 
-   u8g2.drawStr(
+  u8g2.drawStr(
     colW + (colW - u8g2.getStrWidth(windBuf)) / 2,
     top + 2 * rowH + 60,
-    windDirBuf
-  );
+    windDirBuf);
   u8g2.drawStr(
     colW + (colW - u8g2.getStrWidth(airBuf)) / 2,
     top + 2 * rowH + 100,
-    airBuf
-  );
+    airBuf);
 }
 
 // =====================================================
@@ -3512,8 +3528,7 @@ void drawWeatherPage() {
   WindMeter localMetersSnapshot[TRACKED_METERS];
   bool snapshotHasWeatherData = hasWeatherData;
 
-  if (snapshotHasWeatherData && backgroundDataMutex != nullptr &&
-      xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+  if (snapshotHasWeatherData && backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
     memcpy(localMetersSnapshot, localMeters, sizeof(localMeters));
     xSemaphoreGive(backgroundDataMutex);
   } else {
@@ -3752,8 +3767,7 @@ void drawADSBPage() {
   int snapshotCount = 0;
   bool snapshotHasData = hasAdsbData;
 
-  if (snapshotHasData && backgroundDataMutex != nullptr &&
-      xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+  if (snapshotHasData && backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
 
     JsonArray snapshotSource = adsbDoc["ac"].as<JsonArray>();
     for (JsonObject ac : snapshotSource) {
@@ -3791,22 +3805,19 @@ void drawADSBPage() {
   const char* innerRingLabel = anyPlaneWithin10km ? "5km" : "15km";
 
   // =========================================================
-  // ALTITUDE (AGL) OVERLAY BOX -- top-left
+  // ALTITUDE OVERLAY BOX -- top-left
   // =========================================================
 
   u8g2.setFont(u8g2_font_helvB18_tf);
 
-  char altitudeText[24];
+    char altitudeText[24];
 
-  // Same AGL calc + fallback pattern as the "ALT AGL" box on the paraglider
-  // page: needs a live barometer window, a QNH calibration, and a valid
-  // DEM ground-elevation lookup, else it shows the -- placeholder.
-  if (bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid) {
-    float aglFt = currentAltitudeM * 3.28084f - groundElevationFt;
-    snprintf(altitudeText, sizeof(altitudeText), "ALT AGL: %dft", (int)roundf(aglFt));
-  } else {
-    snprintf(altitudeText, sizeof(altitudeText), "ALT AGL: --ft");
-  }
+    if (bmpOK && windowCount > 0) {
+        float altFt = currentAltitudeM * 3.28084f;
+        snprintf(altitudeText, sizeof(altitudeText), "ALT: %dft", (int)roundf(altFt));
+    } else {
+        snprintf(altitudeText, sizeof(altitudeText), "ALT: --ft");
+    }
 
   int altitudeW = u8g2.getStrWidth(altitudeText) + 10;
   int altitudeH = u8g2.getFontAscent() - u8g2.getFontDescent() + 6;
@@ -3818,14 +3829,12 @@ void drawADSBPage() {
     altitudeX,
     altitudeY,
     altitudeW,
-    altitudeH
-  );
+    altitudeH);
 
   u8g2.drawStr(
     altitudeX + 5,
     altitudeY + 23,
-    altitudeText
-  );
+    altitudeText);
 
   // =========================================================
   // GROUND SPEED OVERLAY BOX -- top-right (where Altitude used to sit)
@@ -3842,20 +3851,18 @@ void drawADSBPage() {
   int gsH = u8g2.getFontAscent() - u8g2.getFontDescent() + 6;
 
   int gsX = SCREEN_W - gsW - 20;
-  int gsY = TOP_BAR_HEIGHT_PX + 10;  // top-right corner, just below the top bar
+  int gsY = TOP_BAR_HEIGHT_PX + 10-4;  // top-right corner, just below the top bar
 
   u8g2.drawFrame(
     gsX,
     gsY,
     gsW,
-    gsH
-  );
+    gsH);
 
   u8g2.drawStr(
     gsX + 5,
     gsY + 23,
-    gsText
-  );
+    gsText);
 
   // 4. Draw Rotating Crosshair Grid Lines (Compass Rose Matrix)
   u8g2.drawCircle(cx, cy, r);
@@ -4134,9 +4141,7 @@ void drawAirspaceWarning() {
   if (!valid) return;
 
   bool insideNow = result.insideHoriz && result.insideVert;
-  bool nearby = !insideNow &&
-      result.horizDistance_km <= AIRSPACE_WARN_HORIZ_KM &&
-      result.vertDistance_ft <= AIRSPACE_WARN_VERT_FT;
+  bool nearby = !insideNow && result.horizDistance_km <= AIRSPACE_WARN_HORIZ_KM && result.vertDistance_ft <= AIRSPACE_WARN_VERT_FT;
 
   // One-shot alert on entering controlled airspace, not on every redraw.
   static bool wasInside = false;
@@ -4171,4 +4176,3 @@ void drawAirspaceWarning() {
 
   u8g2.setDrawColor(1);  // restore default before returning to normal page drawing
 }
-
