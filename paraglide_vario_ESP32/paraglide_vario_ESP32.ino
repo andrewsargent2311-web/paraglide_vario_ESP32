@@ -3094,7 +3094,10 @@ void drawLargeValueWithSmallUnit(
   // Large numeric value
   // ---------------------------------------------------------
   const uint8_t* valueFonts[] = {
-    u8g2_font_fub20_tf,
+    u8g2_font_fub35_tn, 
+    u8g2_font_fub30_tn,   // 💡 Added: 30-pixel tall font
+    u8g2_font_fub25_tn,   // 💡 Added: 25-pixel tall font
+    u8g2_font_fub20_tn,
     u8g2_font_helvB18_tf,
     u8g2_font_helvB14_tf
   };
@@ -3236,7 +3239,7 @@ void drawParagliderPage() {
 
     drawLargeValueWithSmallUnit(
       colW / 2,
-      top + rowH / 2 + 10,
+      top + rowH / 2 + + 20, // 💡 Changed from +10 to +20 to shift down 10px
       colW - 10,
       buffer,
       "ft");
@@ -3248,7 +3251,7 @@ void drawParagliderPage() {
       top + rowH / 2 + 10,
       colW - 10,
       "--",
-      "m");
+      "ft");
   }
 
 
@@ -3312,7 +3315,7 @@ void drawParagliderPage() {
   }
 
   u8g2.drawStr(
-    colW + (colW - u8g2.getStrWidth(buffer)) / 2,
+    colW + (colW - u8g2.getStrWidth(buffer)) / 2- 20, // 💡 Subtracted 20 to shift left
     top + rowH - 16,
     buffer);
 
@@ -3337,8 +3340,8 @@ void drawParagliderPage() {
       currentClimbRateMS);
 
     drawLargeValueWithSmallUnit(
-      colW / 2,
-      top + rowH + rowH / 2 + 10,
+      colW / 2-3,
+      top + rowH + rowH / 2 + 20, // Changed from 10 to 20 to shift it down
       colW - 10,
       buffer,
       "m/s");
@@ -3364,13 +3367,13 @@ void drawParagliderPage() {
   // calibrated, etc.) rather than blanking the whole box.
   // =========================================================
 
-  u8g2.setFont(u8g2_font_6x10_tf);  // smaller font: title is longer than
+  u8g2.setFont(u8g2_font_helvB10_tf);  // smaller font: title is longer than (old value; u8g2_font_6x10_tf)
                                     // the other box headers (helvB10 would
                                     // run off the edge of the box)
   u8g2.drawStr(
     colW + 5,
     top + rowH + 14,
-    "ALT AGL / AIR SPC");
+    "AGL/AIR SPC");
 
   u8g2.setFont(u8g2_font_helvB10_tf);
 
@@ -3657,7 +3660,7 @@ void drawWeatherPage() {
       localMetersSnapshot[i].speedKph);
 
     const int line2Y =
-      currentBoxY + 52;
+      currentBoxY + 56;   // Moved down by +4 pixels  
 
     u8g2.drawStr(
       6,
