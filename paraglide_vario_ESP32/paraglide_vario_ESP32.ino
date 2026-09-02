@@ -22,6 +22,8 @@
 #include <SD_MMC.h>
 #include "secrets.h"
 #include "OpenAirScanner.h"
+#include "menu.h"
+#include "settings.h"
 // =====================================================
 // WIFI (feeds Weather + ADS-B pages)
 // =====================================================
@@ -98,7 +100,7 @@ static const uint8_t AIRSPACE_NUM_CONTROLLED_CLASSES = 5;
 // floors and to compute the "ALTITUDE AGL" box on the paraglider page.
 // GPS/baro altitude is height above sea level, not height above terrain,
 // so this is now a live lookup into a pre-processed DEM tile on the SD
-// card (see TerrainDem.h / DEM_FILE below) rather than a fixed site value.
+// card (see TerrainDem.h / selectedDemFile below) rather than a fixed site value.
 // groundElevationValid is false until the first successful lookup, and
 // goes false again if the aircraft flies outside the downloaded tile --
 // both the airspace scanner and the AGL box must check it before trusting
@@ -110,7 +112,9 @@ volatile bool groundElevationValid = false;
 // Produced offline from a LINZ DEM GeoTIFF by dem_to_agldem.py (downscaled
 // + reprojected to WGS84 lat/lon) -- see that script for how to (re)build
 // this for a different flying site.
-static const char* DEM_FILE = "/DEM.ADEM";
+// The active filename is now chosen from the menu's Map screen (see
+// selectedDemFile / setSelectedDemFile() in menu.h/.cpp) rather than fixed
+// here -- it defaults to "/DEM.ADEM" until changed.
 #define DEM_SCAN_INTERVAL_MS 5000UL
 unsigned long demScanAnchor = 0;
 
@@ -319,12 +323,15 @@ struct WindMeter {
   bool valid;
 };
 
-// Global array tracking the top 4 closest stations in New Zealand
-#define TRACKED_METERS 4
+// Max stations collected and sorted by distance; weatherStationsShown
+// (settings.h), editable from Weather Settings > Stations Shown, controls
+// how many of these drawWeatherPage() actually draws (2/4/6).
+#define TRACKED_METERS 6
 WindMeter localMeters[TRACKED_METERS];
 volatile bool hasWeatherData = false;
 
-constexpr unsigned long WEATHER_INTERVAL_MS = 5UL * 60UL * 1000UL;    // Poll weather every 5mins
+// Steady-state poll cadence is now weatherPollIntervalMs (settings.h),
+// editable from Weather Settings > Poll Interval.
 constexpr unsigned long WEATHER_FIRST_POLL_DELAY_MS = 15UL * 1000UL;  // First poll fires 15s after boot
 unsigned long weatherTimerAnchor = 0;                                 // Fresh, clean background timer
 bool weatherFirstPollDone = false;                                    // True once the initial 10s poll has fired
@@ -352,15 +359,8 @@ bool weatherFirstPollDone = false;                                    // True on
 // before it's actioned (to see whether a second press follows), so this
 // value also sets the latency added to ordinary page-cycle/menu-navigate
 // presses.
-#define MENU_DOUBLE_PRESS_MS 800
-#define MENU_SELECT_HOLD_MS 2000
 unsigned long pageBeepUntil = 0;  // while set, updateBuzzer() yields the pin to the page-change beep
 
-enum Page { PAGE_PARAGLIDER = 0,
-            PAGE_WEATHER,
-            PAGE_ADSB,
-            PAGE_PARAMOTOR,
-            PAGE_COUNT };
 Page currentPage = PAGE_PARAGLIDER;
 const char* PAGE_NAMES[PAGE_COUNT] = { "GLDR", "WIND", "ADSB", "ENG" };
 // Only 3 pages are cycled through with a short press. Slot 0 is the "main"
@@ -369,27 +369,6 @@ const char* PAGE_NAMES[PAGE_COUNT] = { "GLDR", "WIND", "ADSB", "ENG" };
 #define ACTIVE_PAGE_COUNT 3
 Page activePages[ACTIVE_PAGE_COUNT] = { PAGE_PARAGLIDER, PAGE_WEATHER, PAGE_ADSB };
 uint8_t activePageIndex = 0;  // index into activePages[]; kept in sync with currentPage
-
-// ---- Menu ----
-enum MenuItemId {
-  MENU_SELECT_PARAGLIDER = 0,
-  MENU_SELECT_PARAMOTOR,
-  MENU_PLACEHOLDER_1,
-  MENU_PLACEHOLDER_2,
-  MENU_PLACEHOLDER_3,
-  MENU_ITEM_COUNT
-};
-// Placeholders are stubbed out (no-op) in menuSelectCurrentItem() -- give
-// them a real name here and a real action there as you build them out.
-const char* MENU_ITEM_NAMES[MENU_ITEM_COUNT] = {
-  "Paraglider Page",
-  "Paramotor Page",
-  "Display Settings",
-  "Alarm Settings",
-  "Units"
-};
-bool menuActive = false;
-uint8_t menuSelectedIndex = 0;
 
 // Set whenever page/menu state changes; drives an immediate redraw instead
 // of waiting for the next 1Hz display tick, so menu navigation feels
@@ -470,11 +449,10 @@ bool buzzerMuted = false;
 //commented out max sink threshold for debugging as its causing clipping
 // Sink alarm
 #define SINK_BEEP_INTERVAL_MS 300UL  // gap between sink-alarm tone bursts
-#define SINK_BEEP_ON_MS 180UL
-#define SINK_TONE_FREQ_HZ 320
-// Climb tone frequency range
-#define CLIMB_TONE_MIN_HZ 500
-#define CLIMB_TONE_MAX_HZ 1200
+#define SINK_BEEP_ON_MS 220UL   //changed from 180 to 220 for better clarity
+#define SINK_TONE_FREQ_HZ 350
+// Climb tone frequency range: climbToneMinHz/climbToneMaxHz (settings.h),
+// editable from Config > Vario Freq in the menu.
 // Climb pulse timing
 #define CLIMB_MIN_GAP_MS 55UL
 #define CLIMB_MAX_GAP_MS 500UL
@@ -537,7 +515,6 @@ bool getAirspaceSnapshot(AirspaceResult& out);
 void setupI2sCodec();
 void i2sToneService();
 void drawTopBar();
-void drawMenu();
 void drawParagliderPage();
 void drawWeatherPage();
 void drawADSBPage();
@@ -564,10 +541,6 @@ float getBearing(float lat1, float lon1, float lat2, float lon2);
 // ---- Page rotation / menu ----
 void advanceActivePage();
 void jumpToActivePage(Page page);
-void openMenu();
-void closeMenu();
-void menuMoveDown();
-void menuSelectCurrentItem();
 void playFeedbackTone(float freq, unsigned long durationMs);
 void updateWeather();
 // ---- Core 0 background task: Wi-Fi reconnect, ADS-B poll, weather poll ----
@@ -906,7 +879,9 @@ void loop() {
   // ---------------------------------------------------------
   if (adsbNewThreat) {
     adsbNewThreat = false;
-    jumpToActivePage(PAGE_ADSB);
+    if (adsbAutoJumpEnabled) {
+      jumpToActivePage(PAGE_ADSB);
+    }
     interceptAlarmActive = true;
     interceptAlarmStart = millis();
   }
@@ -985,38 +960,6 @@ void jumpToActivePage(Page page) {
     }
   }
 }
-void openMenu() {
-  menuActive = true;
-  menuSelectedIndex = 0;
-  displayDirty = true;
-  playFeedbackTone(700.0f, 90);
-}
-void closeMenu() {
-  menuActive = false;
-  displayDirty = true;
-}
-void menuMoveDown() {
-  menuSelectedIndex = (menuSelectedIndex + 1) % MENU_ITEM_COUNT;
-  displayDirty = true;
-  playFeedbackTone(500.0f, 40);
-}
-void menuSelectCurrentItem() {
-  switch (menuSelectedIndex) {
-    case MENU_SELECT_PARAGLIDER:
-      activePages[0] = PAGE_PARAGLIDER;
-      break;
-    case MENU_SELECT_PARAMOTOR:
-      activePages[0] = PAGE_PARAMOTOR;
-      break;
-    default:
-      // Placeholder items -- wire up real behaviour here as you add it.
-      break;
-  }
-  activePageIndex = 0;
-  currentPage = activePages[0];
-  playFeedbackTone(1100.0f, 120);
-  closeMenu();  // also marks the display dirty
-}
 // =====================================================
 // PAGE BUTTON: drives page cycling, the vario mute hold, and the on-screen
 // menu (double press to open; short press to navigate; 2s hold to select).
@@ -1048,6 +991,8 @@ void updatePageButton() {
           longPressHandled = true;  // this press's own release does nothing
           if (!menuActive) {
             openMenu();
+          } else {
+            menuGoBack();  // step back one menu level, or close if already at the top
           }
         } else {
           longPressHandled = false;
@@ -1266,7 +1211,7 @@ void performADSBUpdate() {
       fabsf(
         (float)ac["alt_baro"] - myAltitudeFeet);
 
-    if (distanceKM <= 5.0f && verticalDeltaFeet <= 2000.0f) {
+    if (distanceKM <= adsbAlertRadiusKm && verticalDeltaFeet <= adsbAlertVerticalFt) {
 
       if (currentFrameThreatCount < MAX_TRACKED_THREATS) {
 
@@ -1407,8 +1352,8 @@ void backgroundTask(void* parameter) {
         adsbTaskRunning = false;
       }
       // Weather: first poll fires WEATHER_FIRST_POLL_DELAY_MS after boot;
-      // every poll after that reverts to the normal WEATHER_INTERVAL_MS cadence.
-      unsigned long weatherDueInterval = weatherFirstPollDone ? WEATHER_INTERVAL_MS : WEATHER_FIRST_POLL_DELAY_MS;
+      // every poll after that reverts to the menu-adjustable weatherPollIntervalMs cadence.
+      unsigned long weatherDueInterval = weatherFirstPollDone ? weatherPollIntervalMs : WEATHER_FIRST_POLL_DELAY_MS;
 
       if (now - weatherTimerAnchor >= weatherDueInterval) {
         weatherTimerAnchor = now;
@@ -1435,7 +1380,7 @@ void backgroundTask(void* parameter) {
       if (demPos.valid) {
         if (sdMutex != nullptr && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
           float elevM;
-          bool found = getGroundElevationM(DEM_FILE, demPos.lat, demPos.lon, elevM);
+          bool found = getGroundElevationM(selectedDemFile, demPos.lat, demPos.lon, elevM);
           xSemaphoreGive(sdMutex);
 
           if (found) {
@@ -2516,7 +2461,7 @@ void updateI2sAudioBuzzer() {
       climbAudioActive = false;
       climbToneOn = false;
 
-    } else {
+    } else if (!adsbAlarmMuted) {
       unsigned long phase = elapsed % (INTERCEPT_TONE_TOGGLE_MS * 2);
       float freq = (phase < INTERCEPT_TONE_TOGGLE_MS) ? INTERCEPT_TONE_HIGH_HZ : INTERCEPT_TONE_LOW_HZ;
 
@@ -2524,6 +2469,9 @@ void updateI2sAudioBuzzer() {
 
       return;  // Skip vario tone logic entirely while the alarm sounds
     }
+    // else: alarm is muted -- still tracked (see elapsed check above) but
+    // silent, and falls through to normal vario tone logic below instead
+    // of overriding it.
   }
 
   // ============================================================
@@ -2659,7 +2607,7 @@ void updateI2sAudioBuzzer() {
   // than making 4 and 5 m/s dramatically different.
   // ============================================================
 
-  float response = sqrtf(factor);
+    float response = powf(factor, 0.70f); //changed from;   float response = sqrtf(factor);
 
 
   // ============================================================
@@ -2676,7 +2624,7 @@ void updateI2sAudioBuzzer() {
   // ============================================================
 
   int toneFreq =
-    CLIMB_TONE_MIN_HZ + (int)(response * (CLIMB_TONE_MAX_HZ - CLIMB_TONE_MIN_HZ));
+    climbToneMinHz + (int)(response * (climbToneMaxHz - climbToneMinHz));
 
 
   // ============================================================
@@ -2691,7 +2639,7 @@ void updateI2sAudioBuzzer() {
   // Using sqrt() here gives a more progressive response.
   // ============================================================
 
-  float pulseResponse = sqrtf(factor);
+  float pulseResponse = powf(factor, 0.70f);    // Changed from - float pulseResponse = sqrtf(factor);
 
   unsigned long gapMs =
     CLIMB_MAX_GAP_MS - (unsigned long)(pulseResponse * (CLIMB_MAX_GAP_MS - CLIMB_MIN_GAP_MS));
@@ -3183,41 +3131,6 @@ void drawLargeValueWithSmallUnit(
     unit);
 }
 // =====================================================
-// MENU: full-screen list shown instead of the normal top bar + page while
-// menuActive is true. The highlighted row is menuSelectedIndex; a short
-// press moves it down (wraps), a 2s hold selects it. A trailing "*" marks
-// whichever of Paraglider/Paramotor is currently the active main page.
-// =====================================================
-void drawMenu() {
-  u8g2.setFont(u8g2_font_helvB14_tf);
-  u8g2.drawStr(10, 30, "MENU");
-  u8g2.drawLine(0, 40, SCREEN_W, 40);
-
-  const int top = 40;
-  const int rowH = (SCREEN_H - top) / MENU_ITEM_COUNT;
-
-  u8g2.setFont(u8g2_font_helvB12_tf);
-  for (int i = 0; i < MENU_ITEM_COUNT; i++) {
-    int rowY = top + i * rowH;
-
-    if (i == menuSelectedIndex) {
-      u8g2.setDrawColor(1);
-      u8g2.drawBox(0, rowY, SCREEN_W, rowH);
-      u8g2.setDrawColor(0);  // inverted text on the highlighted row
-    }
-
-    bool isActiveMainPage =
-      (i == MENU_SELECT_PARAGLIDER && activePages[0] == PAGE_PARAGLIDER) || (i == MENU_SELECT_PARAMOTOR && activePages[0] == PAGE_PARAMOTOR);
-
-    char label[32];
-    snprintf(label, sizeof(label), "%s%s", MENU_ITEM_NAMES[i], isActiveMainPage ? " *" : "");
-    u8g2.drawStr(14, rowY + rowH / 2 + 5, label);
-
-    u8g2.setDrawColor(1);
-  }
-}
-
-// =====================================================
 // PARAGLIDER PAGE: 6-box grid (2 cols x 3 rows) below the top bar.
 // =====================================================
 
@@ -3260,14 +3173,14 @@ void drawParagliderPage() {
       buffer,
       sizeof(buffer),
       "%d",
-      (int)roundf(currentAltitudeM * 3.28084f));
+      (int)roundf(altitudeToDisplay(currentAltitudeM)));
 
     drawLargeValueWithSmallUnit(
       colW / 2,
       top + rowH / 2 + +20,  // 💡 Changed from +10 to +20 to shift down 10px
       colW - 10,
       buffer,
-      "ft");
+      altitudeUnitLabel());
 
   } else {
 
@@ -3276,7 +3189,7 @@ void drawParagliderPage() {
       top + rowH / 2 + 10,
       colW - 10,
       "--",
-      "ft");
+      altitudeUnitLabel());
   }
 
 
@@ -3297,14 +3210,14 @@ void drawParagliderPage() {
       buffer,
       sizeof(buffer),
       "%d",
-      (int)gps.speed.kmph());
+      (int)roundf(speedKphToDisplay(gps.speed.kmph())));
 
     drawLargeValueWithSmallUnit(
       colW + colW / 2,
       top + rowH / 2,
       colW - 10,
       buffer,
-      "km/h");
+      speedUnitLabel());
 
   } else {
 
@@ -3313,7 +3226,7 @@ void drawParagliderPage() {
       top + rowH / 2,
       colW - 10,
       "--",
-      "km/h");
+      speedUnitLabel());
   }
 
 
@@ -3404,10 +3317,10 @@ void drawParagliderPage() {
 
   char aglLineBuf[24];
   if (bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid) {
-    float aglFt = currentAltitudeM * 3.28084f - groundElevationFt;
-    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: %dft", (int)roundf(aglFt));
+    float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
+    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: %d%s", (int)roundf(altitudeToDisplay(aglM)), altitudeUnitLabel());
   } else {
-    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: --ft");
+    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: --%s", altitudeUnitLabel());
   }
 
   AirspaceResult boxAirspace;
@@ -3491,8 +3404,9 @@ void drawParagliderPage() {
     snprintf(
       windBuf,
       sizeof(windBuf),
-      "WIND %.0f km/h",
-      estimatedWindSpeedKph);
+      "WIND %.0f %s",
+      speedKphToDisplay(estimatedWindSpeedKph),
+      speedUnitLabel());
 
     snprintf(
       windDirBuf,
@@ -3503,15 +3417,17 @@ void drawParagliderPage() {
     snprintf(
       airBuf,
       sizeof(airBuf),
-      "AIR %.0f km/h",
-      estimatedAirspeedKph);
+      "AIR %.0f %s",
+      speedKphToDisplay(estimatedAirspeedKph),
+      speedUnitLabel());
 
   } else {
 
     snprintf(
       windBuf,
       sizeof(windBuf),
-      "WIND -- km/h");
+      "WIND -- %s",
+      speedUnitLabel());
 
     snprintf(
       windDirBuf,
@@ -3521,7 +3437,8 @@ void drawParagliderPage() {
     snprintf(
       airBuf,
       sizeof(airBuf),
-      "AIR -- km/h");
+      "AIR -- %s",
+      speedUnitLabel());
   }
 
 
@@ -3566,11 +3483,12 @@ void drawWeatherPage() {
   }
 
   // ---------------------------------------------------------
-  // 1. Fixed four-row layout
+  // 1. Row layout -- rowHeight/row count follow weatherStationsShown
+  // (Weather Settings > Stations Shown), not the TRACKED_METERS capacity.
   // ---------------------------------------------------------
   const int startY = TOP_BAR_HEIGHT_PX;
   const int availableHeight = SCREEN_H - startY;
-  const int rowHeight = availableHeight / 4;
+  const int rowHeight = availableHeight / weatherStationsShown;
 
   // ---------------------------------------------------------
   // 2. No weather data
@@ -3590,9 +3508,9 @@ void drawWeatherPage() {
   }
 
   // ---------------------------------------------------------
-  // 3. Draw each fixed row
+  // 3. Draw each row (weatherStationsShown of them)
   // ---------------------------------------------------------
-  for (int i = 0; i < TRACKED_METERS; i++) {
+  for (int i = 0; i < weatherStationsShown; i++) {
 
     if (!localMetersSnapshot[i].valid) {
       continue;
@@ -3681,8 +3599,9 @@ void drawWeatherPage() {
     snprintf(
       aveBuf,
       sizeof(aveBuf),
-      "AVE: %.0f km/h",
-      localMetersSnapshot[i].speedKph);
+      "AVE: %.0f %s",
+      speedKphToDisplay(localMetersSnapshot[i].speedKph),
+      speedUnitLabel());
 
     const int line2Y =
       currentBoxY + 56;  // Moved down by +4 pixels
@@ -3719,8 +3638,9 @@ void drawWeatherPage() {
     snprintf(
       gustBuf,
       sizeof(gustBuf),
-      "GUST: %.0f km/h",
-      localMetersSnapshot[i].gustKph);
+      "GUST: %.0f %s",
+      speedKphToDisplay(localMetersSnapshot[i].gustKph),
+      speedUnitLabel());
 
     const int line3Y =
       currentBoxY + rowHeight - 4;
@@ -3841,10 +3761,9 @@ void drawADSBPage() {
   char altitudeText[24];
 
   if (bmpOK && windowCount > 0) {
-    float altFt = currentAltitudeM * 3.28084f;
-    snprintf(altitudeText, sizeof(altitudeText), "ALT: %dft", (int)roundf(altFt));
+    snprintf(altitudeText, sizeof(altitudeText), "ALT: %d%s", (int)roundf(altitudeToDisplay(currentAltitudeM)), altitudeUnitLabel());
   } else {
-    snprintf(altitudeText, sizeof(altitudeText), "ALT: --ft");
+    snprintf(altitudeText, sizeof(altitudeText), "ALT: --%s", altitudeUnitLabel());
   }
 
   int altitudeW = u8g2.getStrWidth(altitudeText) + 10;
@@ -3870,9 +3789,9 @@ void drawADSBPage() {
 
   char gsText[16];
   if (gps.speed.isValid()) {
-    snprintf(gsText, sizeof(gsText), "%d km/h", (int)gps.speed.kmph());
+    snprintf(gsText, sizeof(gsText), "%d %s", (int)roundf(speedKphToDisplay(gps.speed.kmph())), speedUnitLabel());
   } else {
-    snprintf(gsText, sizeof(gsText), "-- km/h");
+    snprintf(gsText, sizeof(gsText), "-- %s", speedUnitLabel());
   }
 
   int gsW = u8g2.getStrWidth(gsText) + 10;
@@ -4066,9 +3985,9 @@ void drawParamotorPage() {
   }
 
   u8g2.setFont(u8g2_font_helvB10_tf);
-  u8g2.drawStr(5, top + 14, "ALTITUDE M");
+  u8g2.drawStr(5, top + 14, "ALTITUDE");
   if (bmpOK && windowCount > 0) {
-    snprintf(buffer, sizeof(buffer), "%d", (int)roundf(currentAltitudeM));
+    snprintf(buffer, sizeof(buffer), "%d %s", (int)roundf(altitudeToDisplay(currentAltitudeM)), altitudeUnitLabel());
   } else {
     snprintf(buffer, sizeof(buffer), "--");
   }
@@ -4077,7 +3996,7 @@ void drawParamotorPage() {
   u8g2.setFont(u8g2_font_helvB10_tf);
   u8g2.drawStr(colW + 5, top + 14, "V GROUND");
   if (gps.speed.isValid()) {
-    snprintf(buffer, sizeof(buffer), "%d km/h", (int)gps.speed.kmph());
+    snprintf(buffer, sizeof(buffer), "%d %s", (int)roundf(speedKphToDisplay(gps.speed.kmph())), speedUnitLabel());
   } else {
     snprintf(buffer, sizeof(buffer), "NO FIX");
   }
@@ -4103,10 +4022,11 @@ void drawParamotorPage() {
   u8g2.drawStr(colW + 5, top + rowH + 14, "ALTITUDE AGL");
   if (bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid) {
     float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
-    snprintf(buffer, sizeof(buffer), "%.0f m", aglM);
+    snprintf(buffer, sizeof(buffer), "%.0f %s", altitudeToDisplay(aglM), altitudeUnitLabel());
     drawLargestBoldCentered(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, buffer);
   } else {
-    drawLargestBoldCentered(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, "-- m");
+    snprintf(buffer, sizeof(buffer), "-- %s", altitudeUnitLabel());
+    drawLargestBoldCentered(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, buffer);
   }
 
   u8g2.setFont(u8g2_font_helvB10_tf);
