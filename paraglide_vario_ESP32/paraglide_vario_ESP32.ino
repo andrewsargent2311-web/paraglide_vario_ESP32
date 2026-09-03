@@ -235,8 +235,8 @@ bool conflictDetectedThisFrame = false;
 // ---- Intercept alarm: fires once per new intruder, alternates tone ----
 #define INTERCEPT_ALARM_DURATION_MS 5000UL
 #define INTERCEPT_TONE_HIGH_HZ 800
-#define INTERCEPT_TONE_LOW_HZ 600
-#define INTERCEPT_TONE_TOGGLE_MS 200UL  // time on each tone before switching
+#define INTERCEPT_TONE_LOW_HZ 700
+#define INTERCEPT_TONE_TOGGLE_MS 100UL  // time on each tone before switching
 bool interceptAlarmActive = false;
 unsigned long interceptAlarmStart = 0;
 volatile bool hasAdsbData = false;
@@ -350,7 +350,7 @@ bool weatherFirstPollDone = false;                                    // True on
 #define KEY_DEBOUNCE_MS 10
 #define KEY_LONG_PRESS_MS 4000
 #define PAGE_BEEP_FREQ 500    // Sets page beep frequency
-#define PAGE_BEEP_MS 300    // This sets how long the page beep tone goes for
+#define PAGE_BEEP_MS 200    // This sets how long the page beep tone goes for
 // A "double press" is two presses with less than this many ms between the
 // first release and the second press-down. 50ms is what was asked for, but
 // note it's faster than most people can physically double-click (a typical
@@ -449,15 +449,15 @@ bool buzzerMuted = false;
 //commented out max sink threshold for debugging as its causing clipping
 // Sink alarm
 #define SINK_BEEP_INTERVAL_MS 300UL  // gap between sink-alarm tone bursts
-#define SINK_BEEP_ON_MS 220UL   //changed from 180 to 220 for better clarity
+#define SINK_BEEP_ON_MS 250UL   //changed from 180 to 220 for better clarity
 #define SINK_TONE_FREQ_HZ 350
 // Climb tone frequency range: climbToneMinHz/climbToneMaxHz (settings.h),
 // editable from Config > Vario Freq in the menu.
 // Climb pulse timing
 #define CLIMB_MIN_GAP_MS 55UL
 #define CLIMB_MAX_GAP_MS 500UL
-#define CLIMB_MIN_PULSE_MS 45UL
-#define CLIMB_MAX_PULSE_MS 190UL
+#define CLIMB_MIN_PULSE_MS 100UL
+#define CLIMB_MAX_PULSE_MS 400UL
 // ============================================================
 // VARIO AUDIO STATE
 // ============================================================
