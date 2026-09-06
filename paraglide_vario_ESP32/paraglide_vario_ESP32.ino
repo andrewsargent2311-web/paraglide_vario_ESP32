@@ -421,6 +421,25 @@ float tonePhase = 0.0f;
 bool buzzerMuted = false;
 
 // =====================================================
+// MUTE / UNMUTE CONFIRMATION TONE
+// A short two-tone jingle played once whenever buzzerMuted is toggled by
+// the long-press gesture (see updatePageButton()), so the pilot gets
+// audible confirmation of which state they just landed in. Sequenced
+// non-blockingly inside updateI2sAudioBuzzer(), same as the rest of the
+// buzzer state machine. Muting plays 650Hz(1s) -> 10ms gap -> 500Hz
+// (0.5s); unmuting plays the same three segments in reverse.
+// =====================================================
+#define MUTE_TONE_FREQ_HIGH_HZ 650.0f
+#define MUTE_TONE_FREQ_LOW_HZ 500.0f
+#define MUTE_TONE_HIGH_MS 1000UL
+#define MUTE_TONE_LOW_MS 500UL
+#define MUTE_TONE_GAP_MS 10UL
+
+bool muteToneActive = false;
+unsigned long muteToneStart = 0;
+bool muteToneIsMuteSequence = false;  // true = muting order (650->gap->500); false = unmuting order (500->gap->650)
+
+// =====================================================
 // BATTERY MONITOR- Variables
 // =====================================================
 #define BATT_ADC_PIN 4
@@ -1034,8 +1053,25 @@ void updatePageButton() {
       buzzerMuted = !buzzerMuted;
       pageBeepUntil = 0;
       setToneFrequency(0);
-      digitalWrite(AMP_ENABLE_PIN, buzzerMuted ? LOW : HIGH);
       beepOn = false;
+
+      // Kick off the confirmation jingle -- actually sequenced
+      // non-blockingly in updateI2sAudioBuzzer(). buzzerMuted already
+      // holds the *new* state here, which is exactly the direction we
+      // want to play.
+      muteToneActive = true;
+      muteToneStart = millis();
+      muteToneIsMuteSequence = buzzerMuted;
+
+      if (buzzerMuted) {
+        // Muting: leave the amp powered through the jingle so it's
+        // actually audible -- it gets switched off only once the jingle
+        // finishes, in updateI2sAudioBuzzer().
+      } else {
+        // Unmuting: turn the amp on immediately so the jingle is audible
+        // right away.
+        digitalWrite(AMP_ENABLE_PIN, HIGH);
+      }
       Serial.println(buzzerMuted ? "VARIO BUZZER MUTED" : "VARIO BUZZER UNMUTED");
     }
   }
@@ -2475,6 +2511,53 @@ void updateI2sAudioBuzzer() {
   }
 
   // ============================================================
+  // MUTE / UNMUTE CONFIRMATION TONE
+  // Takes priority over the plain muted/vario logic below (but not the
+  // page beep or ADS-B intercept alarm above), so the pilot always hears
+  // it clearly -- even though buzzerMuted has often already flipped to
+  // true by the time this plays.
+  // ============================================================
+  if (muteToneActive) {
+
+    unsigned long elapsed = now - muteToneStart;
+
+    float freqA = muteToneIsMuteSequence ? MUTE_TONE_FREQ_HIGH_HZ : MUTE_TONE_FREQ_LOW_HZ;
+    unsigned long durA = muteToneIsMuteSequence ? MUTE_TONE_HIGH_MS : MUTE_TONE_LOW_MS;
+    float freqB = muteToneIsMuteSequence ? MUTE_TONE_FREQ_LOW_HZ : MUTE_TONE_FREQ_HIGH_HZ;
+    unsigned long durB = muteToneIsMuteSequence ? MUTE_TONE_LOW_MS : MUTE_TONE_HIGH_MS;
+
+    if (elapsed < durA) {
+
+      setToneFrequency(freqA);
+      return;
+
+    } else if (elapsed < durA + MUTE_TONE_GAP_MS) {
+
+      setToneFrequency(0);
+      return;
+
+    } else if (elapsed < durA + MUTE_TONE_GAP_MS + durB) {
+
+      setToneFrequency(freqB);
+      return;
+
+    } else {
+
+      muteToneActive = false;
+      setToneFrequency(0);
+
+      if (buzzerMuted) {
+        // The mute confirmation jingle has finished -- now actually cut
+        // the amp. (Unmuting already turned it on immediately, back in
+        // updatePageButton().)
+        digitalWrite(AMP_ENABLE_PIN, LOW);
+      }
+      // Fall through to the MUTED / vario logic below, which now
+      // correctly reflects whichever state buzzerMuted settled on.
+    }
+  }
+
+  // ============================================================
   // MUTED
   // ============================================================
 
@@ -2920,11 +3003,8 @@ void drawTopBar() {
   char timeBuf[8];
 
   if (clockSynced) {
-    time_t now;
-    time(&now);
-
     struct tm localTime;
-    localtime_r(&now, &localTime);
+    getPilotLocalTime(&localTime);
 
     snprintf(
       timeBuf,
@@ -3056,6 +3136,57 @@ void drawLargestBoldCentered(int centerX, int baselineY, int maxWidth, const cha
     }
   }
   u8g2.drawStr(centerX - u8g2.getStrWidth(text) / 2, baselineY, text);
+}
+// =====================================================
+// Same font-fit logic as drawLargestBoldCentered() above, but (a) also
+// requires the chosen font's total height to fit within maxHeight, and
+// (b) draws left-aligned at x instead of centering. Used where several
+// stacked lines need to shrink *together* to fit a shorter row -- e.g.
+// drawWeatherPage() with more stations packed into the same screen --
+// rather than just avoiding horizontal clipping on a single value.
+void drawLargestBold(int x, int baselineY, int maxWidth, int maxHeight, const char* text) {
+  const uint8_t* fonts[] = {
+    u8g2_font_fub20_tf,
+    u8g2_font_helvB18_tf,
+    u8g2_font_helvB14_tf,
+    u8g2_font_helvB12_tf
+  };
+
+  for (const uint8_t* font : fonts) {
+    u8g2.setFont(font);
+    int fontHeight = u8g2.getFontAscent() - u8g2.getFontDescent();
+    if (u8g2.getStrWidth(text) <= maxWidth && fontHeight <= maxHeight) {
+      break;
+    }
+  }
+  u8g2.drawStr(x, baselineY, text);
+}
+// Determines (without drawing) the largest of the same candidate fonts
+// whose total height fits within maxHeight. Used to size a whole block of
+// stacked lines as one unit -- e.g. to work out the line spacing for a
+// weather-station row -- before any of its individual strings are
+// measured or drawn. drawLargestBold() above independently re-checks both
+// width and height per string when it actually draws, so it can only ever
+// pick this font or something smaller -- never something taller than the
+// spacing this was used to plan for.
+const uint8_t* pickBoldFontForHeight(int maxHeight) {
+  const uint8_t* fonts[] = {
+    u8g2_font_fub20_tf,
+    u8g2_font_helvB18_tf,
+    u8g2_font_helvB14_tf,
+    u8g2_font_helvB12_tf
+  };
+
+  const uint8_t* chosen = fonts[3];  // smallest -- fallback if nothing fits
+  for (const uint8_t* font : fonts) {
+    u8g2.setFont(font);
+    int fontHeight = u8g2.getFontAscent() - u8g2.getFontDescent();
+    if (fontHeight <= maxHeight) {
+      chosen = font;
+      break;
+    }
+  }
+  return chosen;
 }
 void drawLargeValueWithSmallUnit(
   int centerX,
@@ -3485,10 +3616,31 @@ void drawWeatherPage() {
   // ---------------------------------------------------------
   // 1. Row layout -- rowHeight/row count follow weatherStationsShown
   // (Weather Settings > Stations Shown), not the TRACKED_METERS capacity.
+  //
+  // Each row stacks 3 lines of text. At 2 or 4 stations rowHeight is tall
+  // enough for those lines at a fixed large font with fixed pixel
+  // offsets, but at 6 stations rowHeight shrinks enough that a fixed
+  // font/offset scheme makes line 2 and line 3 nearly collide. So instead:
+  // pick the largest font whose height lets 3 lines (with a little
+  // padding/gap) actually fit inside rowHeight, and derive the per-line
+  // baselines from that font's real height rather than fixed numbers.
+  // pickBoldFontForHeight()/drawLargestBold() are also used elsewhere on
+  // this screen and don't otherwise need weatherStationsShown at all --
+  // they just react to whatever rowHeight comes out to.
   // ---------------------------------------------------------
   const int startY = TOP_BAR_HEIGHT_PX;
   const int availableHeight = SCREEN_H - startY;
   const int rowHeight = availableHeight / weatherStationsShown;
+
+  const int rowPaddingPx = 6;  // breathing room above line 1 / below line 3
+  const int lineGapPx = 4;     // gap between each stacked line
+
+  int perLineBudget = (rowHeight - rowPaddingPx - 2 * lineGapPx) / 3;
+  if (perLineBudget < 8) perLineBudget = 8;  // sane floor so font metrics stay sensible even in extreme configs
+
+  const uint8_t* rowFont = pickBoldFontForHeight(perLineBudget);
+  u8g2.setFont(rowFont);
+  const int lineHeight = u8g2.getFontAscent() - u8g2.getFontDescent();
 
   // ---------------------------------------------------------
   // 2. No weather data
@@ -3535,10 +3687,8 @@ void drawWeatherPage() {
     // Station name + distance + compass bearing TO the station
     // =====================================================
 
-    u8g2.setFont(u8g2_font_helvB18_tf);
-
     const int line1Y =
-      currentBoxY + 25;
+      currentBoxY + rowPaddingPx + lineHeight;
 
     // Station name - maximum 15 characters
     char stationNameBuf[16];
@@ -3548,9 +3698,14 @@ void drawWeatherPage() {
       "%.15s",
       localMetersSnapshot[i].name);
 
-    u8g2.drawStr(
+    // drawLargestBold() re-checks width/height itself, so it can only
+    // pick rowFont or something smaller -- never anything taller than the
+    // spacing above was planned around.
+    drawLargestBold(
       6,
       line1Y,
+      SCREEN_W - 12,
+      perLineBudget,
       stationNameBuf);
 
     // Compass bearing FROM the glider TO the station (e.g. "NE"), drawn
@@ -3604,11 +3759,13 @@ void drawWeatherPage() {
       speedUnitLabel());
 
     const int line2Y =
-      currentBoxY + 56;  // Moved down by +4 pixels
+      line1Y + lineGapPx + lineHeight;
 
-    u8g2.drawStr(
+    drawLargestBold(
       6,
       line2Y,
+      SCREEN_W - 12,
+      perLineBudget,
       aveBuf);
 
     // Wind direction the station itself is reporting (unrelated to the
@@ -3643,11 +3800,13 @@ void drawWeatherPage() {
       speedUnitLabel());
 
     const int line3Y =
-      currentBoxY + rowHeight - 4;
+      line2Y + lineGapPx + lineHeight;
 
-    u8g2.drawStr(
+    drawLargestBold(
       6,
       line3Y,
+      SCREEN_W - 12,
+      perLineBudget,
       gustBuf);
   }
 }

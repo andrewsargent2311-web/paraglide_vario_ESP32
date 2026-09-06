@@ -8,6 +8,30 @@ SpeedUnit speedUnit = SPEED_UNIT_KMH;
 int climbToneMinHz = 500;
 int climbToneMaxHz = 500 + VARIO_TONE_SPAN_HZ;
 
+// Default matches the app's original behaviour: automatic NZ time with
+// DST applied. utcOffsetHours only takes effect once the pilot picks a
+// manual entry from the Time menu.
+TimeZoneMode timeZoneMode = TZ_MODE_AUTO_NZ;
+int8_t utcOffsetHours = 12;
+
+void getPilotLocalTime(struct tm* outTm) {
+  time_t now;
+  time(&now);
+
+  if (timeZoneMode == TZ_MODE_MANUAL) {
+    // Shift the UTC epoch by the fixed offset and read it back out with
+    // gmtime_r() (not localtime_r()) so the NZ_TIMEZONE DST rule set at
+    // boot never gets applied on top of it.
+    time_t shifted = now + (time_t)utcOffsetHours * 3600L;
+    gmtime_r(&shifted, outTm);
+  } else {
+    // NZ_TIMEZONE (set once via setenv("TZ", ...) in the main .ino's
+    // setup()) already encodes the DST transition rule, so localtime_r()
+    // handles the adjustment automatically.
+    localtime_r(&now, outTm);
+  }
+}
+
 float altitudeToDisplay(float meters) {
   return (altitudeUnit == ALT_UNIT_FEET) ? (meters * 3.28084f) : meters;
 }

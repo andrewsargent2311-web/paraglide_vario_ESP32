@@ -41,7 +41,8 @@ extern uint8_t activePageIndex;
 //   MAIN
 //   |-- MAIN_PAGE_SELECT  (Paraglider / Paramotor)
 //   |-- CONFIG
-//   |     |-- CONFIG_TIME     (placeholder)
+//   |     |-- CONFIG_TIME     ("NZ (Auto)" DST-aware default, or a fixed
+//   |     |                    manual UTC offset from -12 to +14 hours)
 //   |     |-- UNITS           (Altitude / Speed, cycled in place)
 //   |     `-- VARIO_FREQ      (climb-tone min Hz)
 //   |-- MAP                (list of *.ADEM files found on the SD card)

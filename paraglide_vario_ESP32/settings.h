@@ -2,6 +2,7 @@
 #define SETTINGS_H
 
 #include <Arduino.h>
+#include <time.h>
 
 // =====================================================
 // UNITS
@@ -26,6 +27,34 @@ const char* altitudeUnitLabel();
 float speedKphToDisplay(float kph);
 // "km/h", "m/s" or "mph" -- matches speedKphToDisplay().
 const char* speedUnitLabel();
+
+// =====================================================
+// CLOCK / TIMEZONE
+// The system clock (see syncClockFromGPS() in the main .ino) always holds
+// true UTC -- it is never adjusted for timezone or DST. All of that is
+// applied only when producing a value for on-screen display, via
+// getPilotLocalTime() below, so nothing about how the clock is synced or
+// stored needs to change based on this setting.
+//
+// TZ_MODE_AUTO_NZ (the default) reproduces the app's original behaviour:
+// NZ time with daylight saving applied automatically, via the NZ_TIMEZONE
+// POSIX rule (set once at boot in the main .ino's setup()).
+//
+// TZ_MODE_MANUAL applies a fixed whole-hour offset from UTC instead
+// (utcOffsetHours, -12..+14) -- intended for use outside NZ, where the
+// NZ DST rule wouldn't apply anyway. A manual offset does NOT self-adjust
+// for DST; if you're using it in a DST-observing region, you'll need to
+// change it by hand around the local DST transition dates.
+// =====================================================
+enum TimeZoneMode { TZ_MODE_AUTO_NZ = 0,
+                     TZ_MODE_MANUAL };
+
+extern TimeZoneMode timeZoneMode;
+extern int8_t utcOffsetHours;  // only used while timeZoneMode == TZ_MODE_MANUAL
+
+// Fills outTm with the pilot-facing local time (right now), honouring
+// timeZoneMode/utcOffsetHours above. Always reads the live system clock.
+void getPilotLocalTime(struct tm* outTm);
 
 // =====================================================
 // VARIO CLIMB TONE FREQUENCY RANGE

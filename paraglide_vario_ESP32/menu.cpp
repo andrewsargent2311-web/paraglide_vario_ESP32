@@ -137,6 +137,19 @@ static void extractMapLabel(const char* filename, char* out, size_t outLen) {
 }
 
 // =====================================================
+// TIME / TIMEZONE CHOICES
+// Index 0 is always "NZ (Auto)" (DST-aware, TZ_MODE_AUTO_NZ). Indices
+// 1..TIMEZONE_CHOICE_COUNT-1 are fixed manual whole-hour UTC offsets,
+// -12 through +14 inclusive -- the full real-world range -- selecting
+// TZ_MODE_MANUAL. See the TimeZoneMode comment in settings.h for why a
+// manual offset doesn't self-adjust for DST the way "Auto" does.
+// =====================================================
+#define TIMEZONE_MANUAL_MIN_HOURS (-12)
+#define TIMEZONE_MANUAL_MAX_HOURS (14)
+#define TIMEZONE_MANUAL_CHOICE_COUNT (TIMEZONE_MANUAL_MAX_HOURS - TIMEZONE_MANUAL_MIN_HOURS + 1)
+#define TIMEZONE_CHOICE_COUNT (TIMEZONE_MANUAL_CHOICE_COUNT + 1)
+
+// =====================================================
 // VARIO FREQUENCY CHOICES
 // =====================================================
 static const int VARIO_FREQ_CHOICES[] = { 500, 550, 600, 650, 700 };
@@ -171,7 +184,7 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_MAIN: return 5;
     case MENU_SCREEN_MAIN_PAGE_SELECT: return 2;
     case MENU_SCREEN_CONFIG: return 3;
-    case MENU_SCREEN_CONFIG_TIME: return 1;
+    case MENU_SCREEN_CONFIG_TIME: return TIMEZONE_CHOICE_COUNT;
     case MENU_SCREEN_UNITS: return 2;
     case MENU_SCREEN_VARIO_FREQ: return VARIO_FREQ_CHOICE_COUNT;
     case MENU_SCREEN_MAP: return mapFileCount > 0 ? mapFileCount : 1;
@@ -223,7 +236,14 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       break;
     }
     case MENU_SCREEN_CONFIG_TIME:
-      snprintf(buf, buflen, "Coming Soon");
+      if (index == 0) {
+        bool isActive = (timeZoneMode == TZ_MODE_AUTO_NZ);
+        snprintf(buf, buflen, "NZ (Auto)%s", isActive ? " *" : "");
+      } else {
+        int offset = TIMEZONE_MANUAL_MIN_HOURS + (index - 1);
+        bool isActive = (timeZoneMode == TZ_MODE_MANUAL && utcOffsetHours == offset);
+        snprintf(buf, buflen, "UTC%+d%s", offset, isActive ? " *" : "");
+      }
       break;
     case MENU_SCREEN_UNITS:
       if (index == 0) {
@@ -328,8 +348,15 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
       return;
 
     case MENU_SCREEN_CONFIG_TIME:
-      // Placeholder -- nothing to configure yet.
-      playFeedbackTone(300.0f, 60);
+      if (index == 0) {
+        timeZoneMode = TZ_MODE_AUTO_NZ;
+      } else {
+        timeZoneMode = TZ_MODE_MANUAL;
+        utcOffsetHours = (int8_t)(TIMEZONE_MANUAL_MIN_HOURS + (index - 1));
+      }
+      displayDirty = true;
+      playFeedbackTone(1100.0f, 120);
+      menuGoBack();  // back to Config
       return;
 
     case MENU_SCREEN_UNITS:
