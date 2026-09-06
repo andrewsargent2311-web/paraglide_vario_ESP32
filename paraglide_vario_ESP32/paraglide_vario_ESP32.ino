@@ -234,15 +234,14 @@ volatile float sharedGpsAltitudeFeet = 0.0f;
 bool conflictDetectedThisFrame = false;
 // ---- Intercept alarm: fires once per new intruder, alternates tone ----
 #define INTERCEPT_ALARM_DURATION_MS 5000UL
-#define INTERCEPT_TONE_HIGH_HZ 800
-#define INTERCEPT_TONE_LOW_HZ 700
-#define INTERCEPT_TONE_TOGGLE_MS 100UL  // time on each tone before switching
+#define INTERCEPT_TONE_HIGH_HZ 600
+#define INTERCEPT_TONE_LOW_HZ 400
+#define INTERCEPT_TONE_TOGGLE_MS 400UL  // time on each tone before switching
 bool interceptAlarmActive = false;
 unsigned long interceptAlarmStart = 0;
 volatile bool hasAdsbData = false;
 float MY_LAT = -41.3268;   // Replace with your target latitude
 float MY_LON = 174.8069;   // Replace with your target longitude
-const int RADIUS_KM = 30;  // Strictly filtered 30km radius on server side
 
 // A fixed-size, plain-data snapshot of the fields drawADSBPage() actually
 // needs. The page copies out of adsbDoc under backgroundDataMutex very
@@ -473,7 +472,7 @@ bool muteToneIsMuteSequence = false;  // true = muting order (650->gap->500); fa
 // Climb tone frequency range: climbToneMinHz/climbToneMaxHz (settings.h),
 // editable from Config > Vario Freq in the menu.
 // Climb pulse timing
-#define CLIMB_MIN_GAP_MS 55UL
+#define CLIMB_MIN_GAP_MS 100UL
 #define CLIMB_MAX_GAP_MS 500UL
 #define CLIMB_MIN_PULSE_MS 100UL
 #define CLIMB_MAX_PULSE_MS 400UL
@@ -1097,8 +1096,17 @@ void performADSBUpdate() {
   String domain = "https://opendata.adsb.fi";
   String apiPath = "/api/v3/lat/";
 
+  // Requests exactly the current far/default range ring's outer radius
+  // (see the Range Rings menu, ADSB_SETTINGS > Range Rings) -- adsb.fi
+  // filters server-side by this "dist" value, so it must be at least as
+  // large as whatever drawADSBPage() might draw out to, or the outer part
+  // of a wider ring would always appear empty regardless of real traffic.
+  // A menu change here takes effect on the next scheduled poll, not
+  // instantly.
+  int queryRadiusKm = (int)adsbRingOuterKm;
+
   String url =
-    domain + apiPath + String(MY_LAT, 4) + "/lon/" + String(MY_LON, 4) + "/dist/" + String(RADIUS_KM);
+    domain + apiPath + String(MY_LAT, 4) + "/lon/" + String(MY_LON, 4) + "/dist/" + String(queryRadiusKm);
 
   Serial.print("[ADS-B] Connecting to: ");
   Serial.println(url);
@@ -3897,9 +3905,11 @@ void drawADSBPage() {
 
   // 3. Auto-zoom: switch the rings (and the aircraft plot scale) to
   // 10km/5km if any currently-known aircraft is within 10km, otherwise
-  // fall back to the normal 30km/15km rings. Re-evaluated every redraw
-  // from the full snapshot above, so it snaps back out automatically once
-  // nothing is close -- no state is carried between frames.
+  // fall back to the pilot's chosen far/default rings (adsbRingOuterKm/
+  // adsbRingInnerKm -- ADSB_SETTINGS > Range Rings menu, 30km/15km by
+  // default). Re-evaluated every redraw from the full snapshot above, so
+  // it snaps back out automatically once nothing is close -- no state is
+  // carried between frames.
   bool anyPlaneWithin10km = false;
   for (int i = 0; i < snapshotCount; i++) {
     if (getDistanceKM(MY_LAT, MY_LON, snapshotAircraft[i].lat, snapshotAircraft[i].lon) <= 10.0f) {
@@ -3907,9 +3917,24 @@ void drawADSBPage() {
       break;
     }
   }
-  const float MAX_RADIUS_KM = anyPlaneWithin10km ? 10.0f : 30.0f;
-  const char* outerRingLabel = anyPlaneWithin10km ? "10km" : "30km";
-  const char* innerRingLabel = anyPlaneWithin10km ? "5km" : "15km";
+  const float MAX_RADIUS_KM = anyPlaneWithin10km ? 10.0f : adsbRingOuterKm;
+
+  // Labels need to be built into buffers now that the far/default ring
+  // (adsbRingOuterKm/adsbRingInnerKm, see the Range Rings menu) is
+  // configurable rather than a fixed "30km"/"15km" pair. The near-zoom
+  // state (anyPlaneWithin10km) is untouched by that setting and still
+  // always shows 10km/5km.
+  char outerRingLabelBuf[8];
+  char innerRingLabelBuf[8];
+  if (anyPlaneWithin10km) {
+    snprintf(outerRingLabelBuf, sizeof(outerRingLabelBuf), "10km");
+    snprintf(innerRingLabelBuf, sizeof(innerRingLabelBuf), "5km");
+  } else {
+    snprintf(outerRingLabelBuf, sizeof(outerRingLabelBuf), "%.0fkm", adsbRingOuterKm);
+    snprintf(innerRingLabelBuf, sizeof(innerRingLabelBuf), "%.0fkm", adsbRingInnerKm);
+  }
+  const char* outerRingLabel = outerRingLabelBuf;
+  const char* innerRingLabel = innerRingLabelBuf;
 
   // =========================================================
   // ALTITUDE OVERLAY BOX -- top-left
@@ -4000,7 +4025,8 @@ void drawADSBPage() {
   // Range ring labels -- placed along the same N radial as the "N" marker
   // itself, so they rotate together with it in track-up mode rather than
   // staying fixed to the top of the screen. Text now reflects whichever
-  // scale is active this frame (30km/15km, or 10km/5km when zoomed in).
+  // scale is active this frame (the pilot's chosen far/default rings, or
+  // 10km/5km when zoomed in).
   int innerNX = cx + (int)((r / 2) * sin(crosshairAngleRad));
   int innerNY = cy - (int)((r / 2) * cos(crosshairAngleRad));
 

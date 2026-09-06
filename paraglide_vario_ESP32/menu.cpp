@@ -164,6 +164,13 @@ static const uint8_t ADSB_RADIUS_CHOICE_COUNT = 4;
 static const float ADSB_VERTICAL_CHOICES_FT[] = { 1000.0f, 1500.0f, 2000.0f, 3000.0f };
 static const uint8_t ADSB_VERTICAL_CHOICE_COUNT = 4;
 
+// Index 0 ("Default") reproduces the app's original hardcoded far/default
+// rings (30km outer / 15km inner). Inner is always half of outer -- see
+// the adsbRingOuterKm/adsbRingInnerKm comment in settings.h for what this
+// does (and doesn't) affect.
+static const float ADSB_RING_OUTER_CHOICES_KM[] = { 30.0f, 20.0f, 40.0f, 60.0f };
+static const uint8_t ADSB_RING_CHOICE_COUNT = 4;
+
 // =====================================================
 // WEATHER CHOICES
 // =====================================================
@@ -188,9 +195,10 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_UNITS: return 2;
     case MENU_SCREEN_VARIO_FREQ: return VARIO_FREQ_CHOICE_COUNT;
     case MENU_SCREEN_MAP: return mapFileCount > 0 ? mapFileCount : 1;
-    case MENU_SCREEN_ADSB_SETTINGS: return 4;
+    case MENU_SCREEN_ADSB_SETTINGS: return 5;
     case MENU_SCREEN_ADSB_RADIUS: return ADSB_RADIUS_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_VERTICAL: return ADSB_VERTICAL_CHOICE_COUNT;
+    case MENU_SCREEN_ADSB_RANGE_RINGS: return ADSB_RING_CHOICE_COUNT;
     case MENU_SCREEN_WEATHER_SETTINGS: return 2;
     case MENU_SCREEN_WEATHER_POLL_INTERVAL: return WEATHER_POLL_CHOICE_COUNT;
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN: return WEATHER_STATIONS_CHOICE_COUNT;
@@ -210,6 +218,7 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_ADSB_SETTINGS: return "ADSB SETTINGS";
     case MENU_SCREEN_ADSB_RADIUS: return "ALERT RADIUS";
     case MENU_SCREEN_ADSB_VERTICAL: return "VERT THRESHOLD";
+    case MENU_SCREEN_ADSB_RANGE_RINGS: return "RANGE RINGS";
     case MENU_SCREEN_WEATHER_SETTINGS: return "WEATHER SETTINGS";
     case MENU_SCREEN_WEATHER_POLL_INTERVAL: return "POLL INTERVAL";
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN: return "STATIONS SHOWN";
@@ -273,6 +282,8 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         snprintf(buf, buflen, "Auto-Jump: %s", adsbAutoJumpEnabled ? "On" : "Off");
       } else if (index == 3) {
         snprintf(buf, buflen, "Alarm Sound: %s", adsbAlarmMuted ? "Off" : "On");
+      } else if (index == 4) {
+        snprintf(buf, buflen, "Range Rings");
       } else {
         static const char* items[] = { "Alert Radius", "Vertical Threshold" };
         snprintf(buf, buflen, "%s", items[index]);
@@ -289,6 +300,17 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       float ft = ADSB_VERTICAL_CHOICES_FT[index];
       bool isActive = fabsf(adsbAlertVerticalFt - ft) < 0.5f;
       snprintf(buf, buflen, "%.0f ft%s", ft, isActive ? " *" : "");
+      break;
+    }
+    case MENU_SCREEN_ADSB_RANGE_RINGS: {
+      float outer = ADSB_RING_OUTER_CHOICES_KM[index];
+      float inner = outer / 2.0f;
+      bool isActive = fabsf(adsbRingOuterKm - outer) < 0.01f;
+      if (index == 0) {
+        snprintf(buf, buflen, "Default (%.0f/%.0f)%s", inner, outer, isActive ? " *" : "");
+      } else {
+        snprintf(buf, buflen, "%.0f/%.0f km%s", inner, outer, isActive ? " *" : "");
+      }
       break;
     }
     case MENU_SCREEN_WEATHER_SETTINGS: {
@@ -409,6 +431,10 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           displayDirty = true;
           playFeedbackTone(600.0f, 50);
           return;
+        case 4:
+          pushMenuScreen(MENU_SCREEN_ADSB_RANGE_RINGS);
+          playFeedbackTone(900.0f, 80);
+          return;
       }
       return;
 
@@ -420,6 +446,13 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
 
     case MENU_SCREEN_ADSB_VERTICAL:
       adsbAlertVerticalFt = ADSB_VERTICAL_CHOICES_FT[index];
+      playFeedbackTone(1100.0f, 120);
+      menuGoBack();  // back to ADS-B Settings
+      return;
+
+    case MENU_SCREEN_ADSB_RANGE_RINGS:
+      adsbRingOuterKm = ADSB_RING_OUTER_CHOICES_KM[index];
+      adsbRingInnerKm = adsbRingOuterKm / 2.0f;
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to ADS-B Settings
       return;

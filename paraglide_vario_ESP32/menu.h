@@ -50,7 +50,9 @@ extern uint8_t activePageIndex;
 //   |     |-- ADSB_RADIUS       (horizontal alert trigger distance)
 //   |     |-- ADSB_VERTICAL     (vertical alert trigger distance)
 //   |     |-- (Auto-Jump toggle, cycled in place)
-//   |     `-- (Alarm Sound toggle, cycled in place)
+//   |     |-- (Alarm Sound toggle, cycled in place)
+//   |     `-- ADSB_RANGE_RINGS  (far/default range ring pair -- 15/30km,
+//   |                            10/20km, 20/40km, or 30/60km)
 //   `-- WEATHER_SETTINGS
 //         |-- WEATHER_POLL_INTERVAL   (Zephyr station poll cadence)
 //         `-- WEATHER_STATIONS_SHOWN  (how many stations to display)
@@ -72,6 +74,7 @@ enum MenuScreen {
   MENU_SCREEN_ADSB_SETTINGS,
   MENU_SCREEN_ADSB_RADIUS,
   MENU_SCREEN_ADSB_VERTICAL,
+  MENU_SCREEN_ADSB_RANGE_RINGS,
   MENU_SCREEN_WEATHER_SETTINGS,
   MENU_SCREEN_WEATHER_POLL_INTERVAL,
   MENU_SCREEN_WEATHER_STATIONS_SHOWN

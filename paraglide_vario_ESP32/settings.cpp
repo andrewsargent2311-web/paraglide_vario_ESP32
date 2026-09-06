@@ -69,5 +69,10 @@ float adsbAlertVerticalFt = 2000.0f;
 bool adsbAutoJumpEnabled = true;
 bool adsbAlarmMuted = false;
 
+// Default matches the original hardcoded far/default rings (30km outer,
+// 15km inner).
+float adsbRingOuterKm = 30.0f;
+float adsbRingInnerKm = 15.0f;
+
 unsigned long weatherPollIntervalMs = 5UL * 60UL * 1000UL;
 uint8_t weatherStationsShown = 4;

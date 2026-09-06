@@ -87,6 +87,26 @@ extern bool adsbAutoJumpEnabled;
 extern bool adsbAlarmMuted;
 
 // =====================================================
+// ADS-B RANGE RINGS
+// The "far" (default) range rings drawn by drawADSBPage() -- outer and
+// inner -- shown whenever no aircraft is within the near-zoom trigger
+// distance. Chosen from a fixed preset list (see ADSB_RING_OUTER_CHOICES_KM
+// in menu.cpp); inner is always half of outer. Default (30km/15km)
+// matches the app's original hardcoded values.
+//
+// The near-zoom trigger and its own ring pair are a fixed 10km/5km,
+// triggered whenever any aircraft is within 10km -- that's independent
+// of this setting and is NOT changed by it. See drawADSBPage() in the
+// main .ino for both.
+//
+// performADSBUpdate() also reads adsbRingOuterKm directly, as the radius
+// it requests from the adsb.fi API -- see the comment there for why that
+// matters.
+// =====================================================
+extern float adsbRingOuterKm;
+extern float adsbRingInnerKm;
+
+// =====================================================
 // WEATHER
 // =====================================================
 // How often updateWeather() polls the Zephyr station network.
