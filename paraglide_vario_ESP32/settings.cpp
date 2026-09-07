@@ -61,6 +61,16 @@ void setClimbToneMinHz(int minHz) {
   climbToneMaxHz = minHz + VARIO_TONE_SPAN_HZ;
 }
 
+// Defaults match the values that used to be hard-coded (100/500/100/400).
+unsigned long climbGapMinMs = 100UL;
+unsigned long climbGapMaxMs = 500UL;
+unsigned long climbPulseMinMs = 100UL;
+unsigned long climbPulseMaxMs = 400UL;
+
+// Default approximates the original hard-coded ES8311 register value
+// (0xBF of 0xFF, ~75%) at the nearest 20% step.
+uint8_t buzzerVolumePercent = 80;
+
 // Defaults match the values that used to be hard-coded: 5km/2000ft threat
 // trigger, auto-jump on, alarm audible, weather polled every 5 minutes,
 // 4 stations shown.

@@ -471,11 +471,8 @@ bool muteToneIsMuteSequence = false;  // true = muting order (650->gap->500); fa
 #define SINK_TONE_FREQ_HZ 350
 // Climb tone frequency range: climbToneMinHz/climbToneMaxHz (settings.h),
 // editable from Config > Vario Freq in the menu.
-// Climb pulse timing
-#define CLIMB_MIN_GAP_MS 100UL
-#define CLIMB_MAX_GAP_MS 500UL
-#define CLIMB_MIN_PULSE_MS 100UL
-#define CLIMB_MAX_PULSE_MS 400UL
+// Climb pulse timing: climbGapMinMs/climbGapMaxMs/climbPulseMinMs/
+// climbPulseMaxMs (settings.h), editable from Config > Vario Beep.
 // ============================================================
 // VARIO AUDIO STATE
 // ============================================================
@@ -551,6 +548,7 @@ void updatePageButton();
 float computeClimbRateLeastSquares();
 void es8311WriteReg(uint8_t reg, uint8_t value);
 void es8311Init();
+void applyBuzzerVolume();
 void setToneFrequency(float freq);
 bool connectWiFi(unsigned long timeoutMs);
 void performADSBUpdate();
@@ -2733,7 +2731,7 @@ void updateI2sAudioBuzzer() {
   float pulseResponse = powf(factor, 0.70f);    // Changed from - float pulseResponse = sqrtf(factor);
 
   unsigned long gapMs =
-    CLIMB_MAX_GAP_MS - (unsigned long)(pulseResponse * (CLIMB_MAX_GAP_MS - CLIMB_MIN_GAP_MS));
+    climbGapMaxMs - (unsigned long)(pulseResponse * (climbGapMaxMs - climbGapMinMs));
 
 
   // ============================================================
@@ -2743,7 +2741,7 @@ void updateI2sAudioBuzzer() {
   // ============================================================
 
   unsigned long pulseMs =
-    CLIMB_MIN_PULSE_MS + (unsigned long)(response * (CLIMB_MAX_PULSE_MS - CLIMB_MIN_PULSE_MS));
+    climbPulseMinMs + (unsigned long)(response * (climbPulseMaxMs - climbPulseMinMs));
 
 
   // ============================================================
@@ -2880,11 +2878,22 @@ void es8311Init() {
   es8311WriteReg(0x07, 0x00);  // clock manager: LRCK divider (high byte)
   es8311WriteReg(0x08, 0xFF);  // clock manager: LRCK divider (low byte)
 
-  es8311WriteReg(0x32, 0xBF);  // DAC volume: near-max (0xBF of 0xFF range)
+  es8311OK = true;  // must be set before applyBuzzerVolume() below, which checks it
+
+  applyBuzzerVolume();         // DAC volume -- pilot's chosen level (buzzerVolumePercent, Config > Volume menu)
   es8311WriteReg(0x31, 0x00);  // DAC: unmute
 
   Serial.println("ES8311 CODEC INITIALIZED");
-  es8311OK = true;
+}
+// Applies buzzerVolumePercent (settings.h) to the ES8311's DAC digital
+// volume register (0x32): 0x00 = mute, 0xFF = 0dB (loudest). Called once
+// at boot above, and again immediately whenever the pilot changes the
+// Config > Volume menu setting -- see the buzzerVolumePercent comment in
+// settings.h for the dB-linear-vs-perceived-loudness caveat.
+void applyBuzzerVolume() {
+  if (!es8311OK) return;
+  uint8_t reg = (uint8_t)((buzzerVolumePercent / 100.0f) * 255.0f + 0.5f);
+  es8311WriteReg(0x32, reg);
 }
 // =====================================================
 // TONE GENERATION: non-blocking. Unlike a single long i2s_write() call

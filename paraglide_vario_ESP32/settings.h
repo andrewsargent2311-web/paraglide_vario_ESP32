@@ -69,6 +69,44 @@ extern int climbToneMaxHz;
 void setClimbToneMinHz(int minHz);
 
 // =====================================================
+// VARIO BEEP TIMING
+// Controls the climb-tone pulse pattern in updateVario() (main .ino):
+// as lift gets stronger, the gap between beeps shrinks from
+// climbGapMaxMs down to climbGapMinMs, and each beep's length grows from
+// climbPulseMinMs up to climbPulseMaxMs. Adjustable in 100ms steps,
+// 100-1000ms, via Config > Vario Beep in the menu. Defaults match the
+// values that used to be hard-coded (100/500/100/400).
+//
+// NOTE: each of the 4 values below is an independent menu choice --
+// nothing enforces climbGapMinMs <= climbGapMaxMs or
+// climbPulseMinMs <= climbPulseMaxMs. If either pair ends up inverted,
+// the interpolation in updateVario() runs backwards (gaps would
+// lengthen, or pulses would shorten, as lift gets stronger, instead of
+// the intended direction) -- worth keeping min <= max for each pair.
+// =====================================================
+extern unsigned long climbGapMinMs;
+extern unsigned long climbGapMaxMs;
+extern unsigned long climbPulseMinMs;
+extern unsigned long climbPulseMaxMs;
+
+// =====================================================
+// BUZZER VOLUME
+// Applied to the ES8311 codec's DAC digital volume register by
+// applyBuzzerVolume() (main .ino) -- called once at boot (es8311Init())
+// and again immediately whenever this changes via Config > Volume in the
+// menu. Whole 20% steps, 20-100. Default (80%) approximates the app's
+// original hard-coded register value (0xBF of 0xFF, ~75%).
+//
+// NOTE: that register is dB-linear (0.5dB per LSB across its range), not
+// linear in perceived loudness, so a straightforward "percent of the
+// register's full range" mapping means the low end (20%/40%) may come
+// out quieter than a literal "20%/40% as loud" would suggest -- worth a
+// listen on real hardware; see applyBuzzerVolume() if that mapping needs
+// adjusting.
+// =====================================================
+extern uint8_t buzzerVolumePercent;
+
+// =====================================================
 // ADS-B ALERTS
 // A "new threat" is any tracked aircraft within adsbAlertRadiusKm
 // horizontally AND adsbAlertVerticalFt vertically -- see the threat scan

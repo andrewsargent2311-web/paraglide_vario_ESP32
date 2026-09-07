@@ -44,7 +44,13 @@ extern uint8_t activePageIndex;
 //   |     |-- CONFIG_TIME     ("NZ (Auto)" DST-aware default, or a fixed
 //   |     |                    manual UTC offset from -12 to +14 hours)
 //   |     |-- UNITS           (Altitude / Speed, cycled in place)
-//   |     `-- VARIO_FREQ      (climb-tone min Hz)
+//   |     |-- VARIO_FREQ      (climb-tone min Hz)
+//   |     |-- CONFIG_VOLUME   (buzzer volume, 20-100% in 20% steps)
+//   |     `-- VARIO_BEEP
+//   |           |-- VARIO_BEEP_GAP_MIN     (shortest gap between beeps)
+//   |           |-- VARIO_BEEP_GAP_MAX     (longest gap between beeps)
+//   |           |-- VARIO_BEEP_PULSE_MIN   (shortest beep length)
+//   |           `-- VARIO_BEEP_PULSE_MAX   (longest beep length)
 //   |-- MAP                (list of *.ADEM files found on the SD card)
 //   |-- ADSB_SETTINGS
 //   |     |-- ADSB_RADIUS       (horizontal alert trigger distance)
@@ -70,6 +76,12 @@ enum MenuScreen {
   MENU_SCREEN_CONFIG_TIME,
   MENU_SCREEN_UNITS,
   MENU_SCREEN_VARIO_FREQ,
+  MENU_SCREEN_CONFIG_VOLUME,
+  MENU_SCREEN_VARIO_BEEP,
+  MENU_SCREEN_VARIO_BEEP_GAP_MIN,
+  MENU_SCREEN_VARIO_BEEP_GAP_MAX,
+  MENU_SCREEN_VARIO_BEEP_PULSE_MIN,
+  MENU_SCREEN_VARIO_BEEP_PULSE_MAX,
   MENU_SCREEN_MAP,
   MENU_SCREEN_ADSB_SETTINGS,
   MENU_SCREEN_ADSB_RADIUS,
@@ -117,6 +129,11 @@ extern bool displayDirty;
 
 // Short non-blocking UI feedback tone (defined in the main .ino).
 void playFeedbackTone(float freq, unsigned long durationMs);
+
+// Re-applies buzzerVolumePercent (settings.h) to the ES8311 codec's
+// volume register -- call after changing it so the new level takes
+// effect immediately (defined in the main .ino).
+void applyBuzzerVolume();
 
 // =====================================================
 // Menu functions

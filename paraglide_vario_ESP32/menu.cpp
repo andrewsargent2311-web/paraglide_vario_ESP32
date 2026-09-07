@@ -20,8 +20,12 @@ static uint8_t mapFileCount = 0;
 
 // =====================================================
 // SCREEN NAVIGATION STACK
+// 4 deep now that Vario Beep adds a 4th level: MAIN > CONFIG >
+// VARIO_BEEP > (Min Gap / Max Gap / Min Pulse / Max Pulse). Every other
+// screen in the app still only goes 3 deep, so this just adds headroom
+// -- it doesn't change how any existing screen behaves.
 // =====================================================
-#define MENU_MAX_DEPTH 3
+#define MENU_MAX_DEPTH 4
 static MenuScreen menuStack[MENU_MAX_DEPTH] = { MENU_SCREEN_MAIN };
 static uint8_t menuStackDepth = 1;
 
@@ -156,6 +160,21 @@ static const int VARIO_FREQ_CHOICES[] = { 500, 550, 600, 650, 700 };
 static const uint8_t VARIO_FREQ_CHOICE_COUNT = 5;
 
 // =====================================================
+// VOLUME CHOICES
+// =====================================================
+static const uint8_t VOLUME_CHOICES_PERCENT[] = { 20, 40, 60, 80, 100 };
+static const uint8_t VOLUME_CHOICE_COUNT = 5;
+
+// =====================================================
+// VARIO BEEP TIMING CHOICES
+// Same 100ms-1000ms/100ms-step range used for all 4 climbGapMinMs/
+// climbGapMaxMs/climbPulseMinMs/climbPulseMaxMs settings (settings.h) --
+// choice[index] = (index + 1) * 100.
+// =====================================================
+#define VARIO_BEEP_CHOICE_COUNT 10
+#define VARIO_BEEP_CHOICE_MS(index) (((unsigned long)(index) + 1UL) * 100UL)
+
+// =====================================================
 // ADS-B ALERT CHOICES
 // =====================================================
 static const float ADSB_RADIUS_CHOICES_KM[] = { 3.0f, 5.0f, 8.0f, 10.0f };
@@ -190,10 +209,16 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
   switch (screen) {
     case MENU_SCREEN_MAIN: return 5;
     case MENU_SCREEN_MAIN_PAGE_SELECT: return 2;
-    case MENU_SCREEN_CONFIG: return 3;
+    case MENU_SCREEN_CONFIG: return 5;
     case MENU_SCREEN_CONFIG_TIME: return TIMEZONE_CHOICE_COUNT;
     case MENU_SCREEN_UNITS: return 2;
     case MENU_SCREEN_VARIO_FREQ: return VARIO_FREQ_CHOICE_COUNT;
+    case MENU_SCREEN_CONFIG_VOLUME: return VOLUME_CHOICE_COUNT;
+    case MENU_SCREEN_VARIO_BEEP: return 4;
+    case MENU_SCREEN_VARIO_BEEP_GAP_MIN: return VARIO_BEEP_CHOICE_COUNT;
+    case MENU_SCREEN_VARIO_BEEP_GAP_MAX: return VARIO_BEEP_CHOICE_COUNT;
+    case MENU_SCREEN_VARIO_BEEP_PULSE_MIN: return VARIO_BEEP_CHOICE_COUNT;
+    case MENU_SCREEN_VARIO_BEEP_PULSE_MAX: return VARIO_BEEP_CHOICE_COUNT;
     case MENU_SCREEN_MAP: return mapFileCount > 0 ? mapFileCount : 1;
     case MENU_SCREEN_ADSB_SETTINGS: return 5;
     case MENU_SCREEN_ADSB_RADIUS: return ADSB_RADIUS_CHOICE_COUNT;
@@ -214,6 +239,12 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_CONFIG_TIME: return "TIME";
     case MENU_SCREEN_UNITS: return "UNITS";
     case MENU_SCREEN_VARIO_FREQ: return "VARIO FREQ";
+    case MENU_SCREEN_CONFIG_VOLUME: return "VOLUME";
+    case MENU_SCREEN_VARIO_BEEP: return "VARIO BEEP";
+    case MENU_SCREEN_VARIO_BEEP_GAP_MIN: return "MIN GAP";
+    case MENU_SCREEN_VARIO_BEEP_GAP_MAX: return "MAX GAP";
+    case MENU_SCREEN_VARIO_BEEP_PULSE_MIN: return "MIN PULSE";
+    case MENU_SCREEN_VARIO_BEEP_PULSE_MAX: return "MAX PULSE";
     case MENU_SCREEN_MAP: return "MAP";
     case MENU_SCREEN_ADSB_SETTINGS: return "ADSB SETTINGS";
     case MENU_SCREEN_ADSB_RADIUS: return "ALERT RADIUS";
@@ -240,7 +271,7 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       break;
     }
     case MENU_SCREEN_CONFIG: {
-      static const char* items[] = { "Time", "Units", "Vario Freq" };
+      static const char* items[] = { "Time", "Units", "Vario Freq", "Volume", "Vario Beep" };
       snprintf(buf, buflen, "%s", items[index]);
       break;
     }
@@ -265,6 +296,41 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       int hz = VARIO_FREQ_CHOICES[index];
       bool isActive = (climbToneMinHz == hz);
       snprintf(buf, buflen, "%d Hz%s", hz, isActive ? " *" : "");
+      break;
+    }
+    case MENU_SCREEN_CONFIG_VOLUME: {
+      uint8_t pct = VOLUME_CHOICES_PERCENT[index];
+      bool isActive = (buzzerVolumePercent == pct);
+      snprintf(buf, buflen, "%u%%%s", pct, isActive ? " *" : "");
+      break;
+    }
+    case MENU_SCREEN_VARIO_BEEP: {
+      static const char* items[] = { "Min Gap", "Max Gap", "Min Pulse", "Max Pulse" };
+      snprintf(buf, buflen, "%s", items[index]);
+      break;
+    }
+    case MENU_SCREEN_VARIO_BEEP_GAP_MIN: {
+      unsigned long ms = VARIO_BEEP_CHOICE_MS(index);
+      bool isActive = (climbGapMinMs == ms);
+      snprintf(buf, buflen, "%lu ms%s", ms, isActive ? " *" : "");
+      break;
+    }
+    case MENU_SCREEN_VARIO_BEEP_GAP_MAX: {
+      unsigned long ms = VARIO_BEEP_CHOICE_MS(index);
+      bool isActive = (climbGapMaxMs == ms);
+      snprintf(buf, buflen, "%lu ms%s", ms, isActive ? " *" : "");
+      break;
+    }
+    case MENU_SCREEN_VARIO_BEEP_PULSE_MIN: {
+      unsigned long ms = VARIO_BEEP_CHOICE_MS(index);
+      bool isActive = (climbPulseMinMs == ms);
+      snprintf(buf, buflen, "%lu ms%s", ms, isActive ? " *" : "");
+      break;
+    }
+    case MENU_SCREEN_VARIO_BEEP_PULSE_MAX: {
+      unsigned long ms = VARIO_BEEP_CHOICE_MS(index);
+      bool isActive = (climbPulseMaxMs == ms);
+      snprintf(buf, buflen, "%lu ms%s", ms, isActive ? " *" : "");
       break;
     }
     case MENU_SCREEN_MAP:
@@ -365,6 +431,8 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
         case 0: pushMenuScreen(MENU_SCREEN_CONFIG_TIME); break;
         case 1: pushMenuScreen(MENU_SCREEN_UNITS); break;
         case 2: pushMenuScreen(MENU_SCREEN_VARIO_FREQ); break;
+        case 3: pushMenuScreen(MENU_SCREEN_CONFIG_VOLUME); break;
+        case 4: pushMenuScreen(MENU_SCREEN_VARIO_BEEP); break;
       }
       playFeedbackTone(900.0f, 80);
       return;
@@ -397,6 +465,47 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
       setClimbToneMinHz(VARIO_FREQ_CHOICES[index]);
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to Config
+      return;
+
+    case MENU_SCREEN_CONFIG_VOLUME:
+      buzzerVolumePercent = VOLUME_CHOICES_PERCENT[index];
+      applyBuzzerVolume();  // takes effect immediately, not just on next boot
+      playFeedbackTone(1100.0f, 120);
+      menuGoBack();  // back to Config
+      return;
+
+    case MENU_SCREEN_VARIO_BEEP:
+      switch (index) {
+        case 0: pushMenuScreen(MENU_SCREEN_VARIO_BEEP_GAP_MIN); break;
+        case 1: pushMenuScreen(MENU_SCREEN_VARIO_BEEP_GAP_MAX); break;
+        case 2: pushMenuScreen(MENU_SCREEN_VARIO_BEEP_PULSE_MIN); break;
+        case 3: pushMenuScreen(MENU_SCREEN_VARIO_BEEP_PULSE_MAX); break;
+      }
+      playFeedbackTone(900.0f, 80);
+      return;
+
+    case MENU_SCREEN_VARIO_BEEP_GAP_MIN:
+      climbGapMinMs = VARIO_BEEP_CHOICE_MS(index);
+      playFeedbackTone(1100.0f, 120);
+      menuGoBack();  // back to Vario Beep
+      return;
+
+    case MENU_SCREEN_VARIO_BEEP_GAP_MAX:
+      climbGapMaxMs = VARIO_BEEP_CHOICE_MS(index);
+      playFeedbackTone(1100.0f, 120);
+      menuGoBack();  // back to Vario Beep
+      return;
+
+    case MENU_SCREEN_VARIO_BEEP_PULSE_MIN:
+      climbPulseMinMs = VARIO_BEEP_CHOICE_MS(index);
+      playFeedbackTone(1100.0f, 120);
+      menuGoBack();  // back to Vario Beep
+      return;
+
+    case MENU_SCREEN_VARIO_BEEP_PULSE_MAX:
+      climbPulseMaxMs = VARIO_BEEP_CHOICE_MS(index);
+      playFeedbackTone(1100.0f, 120);
+      menuGoBack();  // back to Vario Beep
       return;
 
     case MENU_SCREEN_MAP:
@@ -506,11 +615,47 @@ void drawMenu() {
   u8g2.drawLine(0, 40, SCREEN_W, 40);
 
   const int top = 40;
-  const int rowH = (SCREEN_H - top) / itemCount;
+  const int available = SCREEN_H - top;
 
-  u8g2.setFont(u8g2_font_helvB12_tf);
-  for (int i = 0; i < itemCount; i++) {
-    int rowY = top + i * rowH;
+  // Long lists (currently just the 28-entry Time menu) use a fixed,
+  // comfortably-sized row plus a small gap between rows, scrolling to
+  // keep the highlighted item in view -- like a normal phone menu --
+  // instead of squeezing every item onto the screen at once, which is
+  // what made rows unreadably thin once there were more than about 8 of
+  // them. Short lists keep the original behaviour of stretching evenly
+  // to fill the screen with no gap between rows.
+  const int scrollRowGapPx = 3;
+  const int scrollRowHeightPx = 40;  // sized for u8g2_font_helvB14_tf below
+  const int scrollRowPitchPx = scrollRowHeightPx + scrollRowGapPx;
+  const int visibleRows = available / scrollRowPitchPx;
+
+  bool scrolling = (visibleRows > 0) && (itemCount > (uint8_t)visibleRows);
+
+  int rowH;
+  int rowPitch;
+  int firstVisible = 0;
+  int lastVisible = itemCount - 1;
+
+  if (scrolling) {
+    rowH = scrollRowHeightPx;
+    rowPitch = scrollRowPitchPx;
+
+    // Keeps the highlighted row inside the visible window, scrolling
+    // only as far as necessary -- and never past the point where the
+    // last item would leave a blank gap at the bottom.
+    int maxFirstVisible = itemCount - visibleRows;
+    firstVisible = (int)menuSelectedIndex - (visibleRows - 1);
+    if (firstVisible < 0) firstVisible = 0;
+    if (firstVisible > maxFirstVisible) firstVisible = maxFirstVisible;
+    lastVisible = firstVisible + visibleRows - 1;
+  } else {
+    rowH = available / itemCount;
+    rowPitch = rowH;
+  }
+
+  u8g2.setFont(u8g2_font_helvB14_tf);
+  for (int i = firstVisible; i <= lastVisible; i++) {
+    int rowY = top + (i - firstVisible) * rowPitch;
 
     if (i == menuSelectedIndex) {
       u8g2.setDrawColor(1);
