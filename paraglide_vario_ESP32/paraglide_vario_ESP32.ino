@@ -336,8 +336,7 @@ unsigned long weatherTimerAnchor = 0;                                 // Fresh, 
 bool weatherFirstPollDone = false;                                    // True once the initial 10s poll has fired
 
 // Proximity alarm timing parameters
-// KEY BUTTON (page cycling) -- GPIO18 on this board's onboard KEY
-// button, active low. Confirmed against Waveshare's own docs.
+
 // =====================================================
 // Gestures:
 //   Menu closed: short press cycles the 3 active pages; double press opens
@@ -345,7 +344,7 @@ bool weatherFirstPollDone = false;                                    // True on
 //   Menu open:   short press moves the selection down (wraps); holding 2s
 //                selects the highlighted item and closes the menu.
 // =====================================================
-#define KEY_PIN 18
+#define KEY_PIN 18  
 #define KEY_DEBOUNCE_MS 10
 #define KEY_LONG_PRESS_MS 4000
 #define PAGE_BEEP_FREQ 500    // Sets page beep frequency
@@ -465,14 +464,19 @@ bool muteToneIsMuteSequence = false;  // true = muting order (650->gap->500); fa
 #define CLIMB_TONE_MAX_MS 5.0f
 //#define SINK_RELEASE_MS -5.0f  // Set to -5m/s as not uncommon to hit 4 m/s sink alarm switches off above 5 m/s to avoid distraction
 //commented out max sink threshold for debugging as its causing clipping
-// Sink alarm
-#define SINK_BEEP_INTERVAL_MS 300UL  // gap between sink-alarm tone bursts
-#define SINK_BEEP_ON_MS 250UL   //changed from 180 to 220 for better clarity
-#define SINK_TONE_FREQ_HZ 350
+// Sink alarm -- constant (non-pulsed) tone, pitch dropping as sink
+// strengthens. SINK_TONE_MAX_HZ is the pitch right at the SINK_ALARM_MS
+// threshold; SINK_TONE_MIN_HZ is the floor pitch reached at/beyond
+// SINK_TONE_MAX_MS. See the SINK ALARM OUTPUT block in updateVario().
+#define SINK_TONE_MAX_HZ 350
+#define SINK_TONE_MIN_HZ 150
+#define SINK_TONE_MAX_MS -5.0f
 // Climb tone frequency range: climbToneMinHz/climbToneMaxHz (settings.h),
 // editable from Config > Vario Freq in the menu.
 // Climb pulse timing: climbGapMinMs/climbGapMaxMs/climbPulseMinMs/
-// climbPulseMaxMs (settings.h), editable from Config > Vario Beep.
+// climbPulseMaxMs (settings.h), editable from Config > Vario Beep. Both
+// the gap AND the pulse length shrink together as lift strengthens, so
+// they compress in step toward the continuous-tone region below.
 // ============================================================
 // VARIO AUDIO STATE
 // ============================================================
@@ -2619,21 +2623,25 @@ void updateI2sAudioBuzzer() {
 
   // ============================================================
   // SINK ALARM OUTPUT
+  //
+  // Constant tone (no on/off pulsing) so sink reads as one continuous,
+  // unambiguous warning rather than something that could be mistaken for
+  // weak-lift beeping. Pitch drops as sink strengthens: SINK_TONE_MAX_HZ
+  // right at the SINK_ALARM_MS threshold, down to SINK_TONE_MIN_HZ at/
+  // beyond SINK_TONE_MAX_MS.
   // ============================================================
 
   if (sinkAlarmActive) {
 
-    unsigned long sinkPhase =
-      (now - sinkAlarmStart) % SINK_BEEP_INTERVAL_MS;
+    float sinkFactor =
+      (currentClimbRateMS - SINK_ALARM_MS) / (SINK_TONE_MAX_MS - SINK_ALARM_MS);
 
-    if (sinkPhase < SINK_BEEP_ON_MS) {
+    sinkFactor = constrain(sinkFactor, 0.0f, 1.0f);
 
-      setToneFrequency(SINK_TONE_FREQ_HZ);
+    int sinkToneFreq =
+      SINK_TONE_MAX_HZ - (int)(sinkFactor * (SINK_TONE_MAX_HZ - SINK_TONE_MIN_HZ));
 
-    } else {
-
-      setToneFrequency(0);
-    }
+    setToneFrequency(sinkToneFreq);
 
     return;
   }
@@ -2737,11 +2745,13 @@ void updateI2sAudioBuzzer() {
   // ============================================================
   // PULSE LENGTH
   //
-  // Beeps become progressively longer with increasing lift.
+  // Beeps become progressively shorter with increasing lift, mirroring
+  // the gap timing above -- both compress together as lift strengthens,
+  // toward the continuous-tone region below.
   // ============================================================
 
   unsigned long pulseMs =
-    climbPulseMinMs + (unsigned long)(response * (climbPulseMaxMs - climbPulseMinMs));
+    climbPulseMaxMs - (unsigned long)(response * (climbPulseMaxMs - climbPulseMinMs));
 
 
   // ============================================================

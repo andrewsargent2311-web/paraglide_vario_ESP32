@@ -72,17 +72,18 @@ void setClimbToneMinHz(int minHz);
 // VARIO BEEP TIMING
 // Controls the climb-tone pulse pattern in updateVario() (main .ino):
 // as lift gets stronger, the gap between beeps shrinks from
-// climbGapMaxMs down to climbGapMinMs, and each beep's length grows from
-// climbPulseMinMs up to climbPulseMaxMs. Adjustable in 100ms steps,
+// climbGapMaxMs down to climbGapMinMs, AND each beep's length also
+// shrinks, from climbPulseMaxMs down to climbPulseMinMs -- both compress
+// together toward the continuous-tone region. Adjustable in 100ms steps,
 // 100-1000ms, via Config > Vario Beep in the menu. Defaults match the
 // values that used to be hard-coded (100/500/100/400).
 //
 // NOTE: each of the 4 values below is an independent menu choice --
 // nothing enforces climbGapMinMs <= climbGapMaxMs or
 // climbPulseMinMs <= climbPulseMaxMs. If either pair ends up inverted,
-// the interpolation in updateVario() runs backwards (gaps would
-// lengthen, or pulses would shorten, as lift gets stronger, instead of
-// the intended direction) -- worth keeping min <= max for each pair.
+// the interpolation in updateVario() runs backwards (gaps or pulses
+// would lengthen as lift gets stronger, instead of shrinking) -- worth
+// keeping min <= max for each pair.
 // =====================================================
 extern unsigned long climbGapMinMs;
 extern unsigned long climbGapMaxMs;
