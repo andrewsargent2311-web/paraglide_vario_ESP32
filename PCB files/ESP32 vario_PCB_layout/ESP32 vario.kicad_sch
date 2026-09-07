@@ -1462,10 +1462,6 @@
 		(uuid "3249c33d-70fb-4e15-9f13-7e7a864ab9b6")
 	)
 	(no_connect
-		(at 127 115.57)
-		(uuid "4d70314a-ccc9-422e-87bc-2ab2d1d61369")
-	)
-	(no_connect
 		(at 85.09 82.55)
 		(uuid "5a21a823-c311-4cff-9dda-5e33e84a0be2")
 	)
@@ -1476,10 +1472,6 @@
 	(no_connect
 		(at 85.09 90.17)
 		(uuid "96a84be9-a356-443c-bada-a47633ff3a6b")
-	)
-	(no_connect
-		(at 128.27 67.31)
-		(uuid "a6735947-be2c-40ea-99cf-34720322c8f8")
 	)
 	(no_connect
 		(at 128.27 69.85)
@@ -1556,6 +1548,16 @@
 			(type default)
 		)
 		(uuid "2306231d-5859-485a-a465-029fb674f6d6")
+	)
+	(wire
+		(pts
+			(xy 121.92 115.57) (xy 127 115.57)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "23e42116-f918-4bf3-9fe8-2caabdd01ad3")
 	)
 	(wire
 		(pts
@@ -1786,6 +1788,16 @@
 			(type default)
 		)
 		(uuid "9b9d63dd-64bf-4213-a4de-e447a81d01fe")
+	)
+	(wire
+		(pts
+			(xy 118.11 67.31) (xy 128.27 67.31)
+		)
+		(stroke
+			(width 0)
+			(type default)
+		)
+		(uuid "9cf0dc87-7f48-4179-8812-ad80bfa59f86")
 	)
 	(wire
 		(pts
@@ -2119,6 +2131,30 @@
 			)
 		)
 	)
+	(global_label "DIO1"
+		(shape input)
+		(at 118.11 67.31 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "19f56cd1-5f1a-4c00-979a-bab86e2d3c43")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 110.71 67.31 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+	)
 	(global_label "MISO"
 		(shape bidirectional)
 		(at 123.19 102.87 180)
@@ -2252,6 +2288,30 @@
 		(uuid "62dd5731-2cc5-4b3c-9e3e-24b3b0afb5e9")
 		(property "Intersheetrefs" "${INTERSHEET_REFS}"
 			(at 92.2043 62.23 0)
+			(hide yes)
+			(show_name no)
+			(do_not_autoplace no)
+			(effects
+				(font
+					(size 1.27 1.27)
+				)
+				(justify right)
+			)
+		)
+	)
+	(global_label "DIO1"
+		(shape input)
+		(at 121.92 115.57 180)
+		(fields_autoplaced yes)
+		(effects
+			(font
+				(size 1.27 1.27)
+			)
+			(justify right)
+		)
+		(uuid "674ee884-c338-485a-a351-8b5c427c54c4")
+		(property "Intersheetrefs" "${INTERSHEET_REFS}"
+			(at 114.52 115.57 0)
 			(hide yes)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2826,7 +2886,7 @@
 		(in_pos_files yes)
 		(dnp no)
 		(uuid "30e59d09-a91c-41f8-a4c3-38683a8d9b38")
-		(property "Reference" "C2-Bulk-cap1"
+		(property "Reference" "C2"
 			(at 93.218 98.044 0)
 			(show_name no)
 			(do_not_autoplace no)
@@ -2890,7 +2950,7 @@
 		(instances
 			(project "ESP32 vario"
 				(path "/90e9b6f9-5e99-4c00-9d91-847e39c057df"
-					(reference "C2-Bulk-cap1")
+					(reference "C2")
 					(unit 1)
 				)
 			)
@@ -3127,7 +3187,7 @@
 			)
 		)
 		(property "Value" "100n"
-			(at 109.474 64.516 0)
+			(at 110.49 52.324 0)
 			(show_name no)
 			(do_not_autoplace no)
 			(effects
@@ -3216,7 +3276,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Flight cumputer footprints:BMP580 Header"
+		(property "Footprint" "Connector_PinHeader_2.54mm:PinHeader_1x08_P2.54mm_Vertical"
 			(at 78.232 100.838 0)
 			(hide yes)
 			(show_name no)
@@ -3555,7 +3615,7 @@
 				)
 			)
 		)
-		(property "Footprint" "Flight cumputer footprints:HT-RA62"
+		(property "Footprint" "NiceNano-Everything:HT-RA62"
 			(at 135.128 45.974 0)
 			(hide yes)
 			(show_name no)
