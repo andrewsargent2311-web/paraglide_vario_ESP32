@@ -162,8 +162,8 @@ static const uint8_t VARIO_FREQ_CHOICE_COUNT = 5;
 // =====================================================
 // VOLUME CHOICES
 // =====================================================
-static const uint8_t VOLUME_CHOICES_PERCENT[] = { 20, 40, 60, 80, 100 };
-static const uint8_t VOLUME_CHOICE_COUNT = 5;
+static const uint8_t VOLUME_CHOICES_PERCENT[] = { 20, 40, 60, 80, 85, 90, 95, 100 };
+static const uint8_t VOLUME_CHOICE_COUNT = 8;
 
 // =====================================================
 // VARIO BEEP TIMING CHOICES

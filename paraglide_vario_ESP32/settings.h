@@ -95,7 +95,10 @@ extern unsigned long climbPulseMaxMs;
 // Applied to the ES8311 codec's DAC digital volume register by
 // applyBuzzerVolume() (main .ino) -- called once at boot (es8311Init())
 // and again immediately whenever this changes via Config > Volume in the
-// menu. Whole 20% steps, 20-100. Default (80%) approximates the app's
+// menu. 20-100: 20% steps up to 80%, then 5% steps from 80-100% (see
+// VOLUME_CHOICES_PERCENT in menu.cpp) -- the finer top-end steps exist
+// so a speaker that clips at 100% has room to back off a little without
+// dropping all the way to 80%. Default (80%) approximates the app's
 // original hard-coded register value (0xBF of 0xFF, ~75%).
 //
 // NOTE: that register is dB-linear (0.5dB per LSB across its range), not

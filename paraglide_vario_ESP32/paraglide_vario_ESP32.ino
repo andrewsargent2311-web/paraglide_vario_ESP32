@@ -24,6 +24,8 @@
 #include "OpenAirScanner.h"
 #include "menu.h"
 #include "settings.h"
+#include "Sx126xLink.h"
+#include "Fanet.h"
 // =====================================================
 // WIFI (feeds Weather + ADS-B pages)
 // =====================================================
@@ -54,6 +56,21 @@ bool wifiDisabledUntilReboot = false;
 // against the physical panel with calipers rather than trust this alone.
 #define TOP_BAR_HEIGHT_PX 32
 U8G2_ST7305_300X400_1_4W_HW_SPI u8g2(U8G2_R0, /*cs=*/RLCD_CS, /*dc=*/RLCD_DC, /*reset=*/RLCD_RST);
+
+// =====================================================
+// BOOT SPLASH IMAGE (Roy)
+// =====================================================
+// Loaded from the SD card as a raw 1bpp packed bitmap (XBM byte layout:
+// rows padded to a whole byte, bits LSB-first, 1 = black/ink) rather than
+// baked into the firmware, so it's easy to swap the picture just by
+// replacing the file on the card. Generated from Roy.png at 280x210 --
+// see the accompanying ROY.BIN this was built from.
+#define SPLASH_IMG_FILE "/ROY.BIN"
+#define SPLASH_IMG_W 280
+#define SPLASH_IMG_H 210
+#define SPLASH_IMG_ROW_BYTES ((SPLASH_IMG_W + 7) / 8)
+#define SPLASH_IMG_BYTES (SPLASH_IMG_ROW_BYTES * SPLASH_IMG_H)
+#define SPLASH_DISPLAY_MS 3000UL
 
 
 // =====================================================
@@ -211,6 +228,33 @@ float windCircleMinSpeedTrack = 0.0f;
 // GPS validity
 bool windEstimatorInitialized = false;
 TinyGPSPlus gps;
+// =====================================================
+// FANET (HT-RA62 / SX1262) -- wired MISO=0 SCK=1 BUSY=2 MOSI=3 CS=17,
+// DIO1 and RST both NC (see Sx126xLink.h for why). Own SPI bus, separate
+// from the display's -- no pin overlap with anything else on this board.
+// =====================================================
+Sx126xLink fanetRadio;
+bool fanetRadioOK = false;
+
+// TODO: pick a real manufacturer ID from the FANET spec's registered
+// list (or use a private/testing value while bench-testing) rather than
+// this placeholder, and give this device a unique 16-bit ID.
+FanetAddress myFanetAddress = { 0xFB, 0x0001 };
+FanetStack fanet(fanetRadio, myFanetAddress);
+
+#define FANET_BEACON_INTERVAL_MS 5000UL
+
+// Fires whenever a FANET tracking beacon is received from another
+// aircraft. Just logs for now -- natural next step is to fold this into
+// the same AircraftSnapshot list the ADS-B page already draws from, so
+// FANET traffic shows up on the traffic page alongside ADS-B contacts.
+void onFanetTracking(const FanetAddress& src, const FanetTracking& pkt,
+                      float rssi, float snr) {
+  Serial.printf("[FANET] from %02X:%04X  lat=%.5f lon=%.5f alt=%ldm  spd=%.0fkm/h  rssi=%.0f snr=%.1f\n",
+                src.manufacturer, src.id,
+                pkt.latitude, pkt.longitude, (long)pkt.altitudeM,
+                pkt.speedKmh, rssi, snr);
+}
 // =====================================================
 // ADSB GPS linking
 // =====================================================
@@ -745,6 +789,24 @@ void setup() {
   sdCardOK = SD_MMC.begin("/sdcard", true);  // true = 1-bit mode (only D0 is wired)
   Serial.println(sdCardOK ? "SD CARD MOUNTED" : "SD CARD NOT FOUND -- IGC recording disabled");
 
+  // ---------------------------------------------------------
+  // FANET radio (HT-RA62 / SX1262). Own SPI bus (see pin comment at the
+  // fanetRadio declaration) -- independent of the display's SPI.begin()
+  // above, so order relative to that doesn't matter.
+  // ---------------------------------------------------------
+  fanetRadioOK = fanetRadio.begin(/*freqMHz=*/868.2f, /*bwKHz=*/250.0f,
+                                   /*sf=*/7, /*cr=*/5, /*syncWord=*/0xF1,
+                                   /*powerDbm=*/14, /*preambleLen=*/8);
+  if (fanetRadioOK) {
+    fanet.begin();
+    fanet.onTracking(onFanetTracking);
+    fanet.setBeaconIntervalMs(FANET_BEACON_INTERVAL_MS);
+    Serial.println("FANET RADIO INITIALIZED");
+  } else {
+    Serial.printf("FANET RADIO INIT FAILED -- status=%d (FANET disabled)\n",
+                  fanetRadio.lastStatus());
+  }
+
   wifiConnected = connectWiFi(WIFI_CONNECT_TIMEOUT_MS);
   if (wifiConnected) {
     Serial.print("WIFI CONNECTED, IP: ");
@@ -778,13 +840,55 @@ void setup() {
   pinMode(KEY_PIN, INPUT_PULLUP);
 
   Serial.println("[BOOT] Drawing splash screen...");
+
+  // Try to load the boot image from the SD card. Kept as a plain malloc'd
+  // buffer scoped to setup() -- it's only needed for this one draw, so
+  // there's no reason to keep ~7KB of RAM reserved for it afterwards.
+  bool splashImageLoaded = false;
+  uint8_t* splashBuf = nullptr;
+
+  if (sdCardOK) {
+    File splashFile = SD_MMC.open(SPLASH_IMG_FILE, FILE_READ);
+    if (splashFile && splashFile.size() == SPLASH_IMG_BYTES) {
+      splashBuf = (uint8_t*)malloc(SPLASH_IMG_BYTES);
+      if (splashBuf != nullptr) {
+        size_t readBytes = splashFile.read(splashBuf, SPLASH_IMG_BYTES);
+        splashImageLoaded = (readBytes == SPLASH_IMG_BYTES);
+        if (!splashImageLoaded) {
+          Serial.println("[BOOT] Splash image read short -- using text splash");
+        }
+      } else {
+        Serial.println("[BOOT] Failed to allocate splash image buffer -- using text splash");
+      }
+    } else if (splashFile) {
+      Serial.printf("[BOOT] %s is %u bytes, expected %u -- using text splash\n",
+                    SPLASH_IMG_FILE, (unsigned)splashFile.size(), (unsigned)SPLASH_IMG_BYTES);
+    } else {
+      Serial.printf("[BOOT] %s not found on SD card -- using text splash\n", SPLASH_IMG_FILE);
+    }
+    if (splashFile) splashFile.close();
+  } else {
+    Serial.println("[BOOT] SD card not mounted -- using text splash");
+  }
+
   u8g2.firstPage();
   do {
-    u8g2.setFont(u8g2_font_fub20_tf);
-    u8g2.drawStr(20, 200, "FLIGHT COMPUTER");
+    if (splashImageLoaded) {
+      u8g2.drawXBMP((SCREEN_W - SPLASH_IMG_W) / 2, (SCREEN_H - SPLASH_IMG_H) / 2,
+                    SPLASH_IMG_W, SPLASH_IMG_H, splashBuf);
+    } else {
+      u8g2.setFont(u8g2_font_fub20_tf);
+      u8g2.drawStr(20, 200, "FLIGHT COMPUTER");
+    }
   } while (u8g2.nextPage());
-  Serial.println("[BOOT] Splash screen drawn, entering 1.5s delay...");
-  delay(1500);
+
+  if (splashBuf != nullptr) {
+    free(splashBuf);
+  }
+
+  Serial.println(splashImageLoaded ? "[BOOT] Splash image drawn, entering 3s delay..."
+                                    : "[BOOT] Splash screen drawn, entering 3s delay...");
+  delay(SPLASH_DISPLAY_MS);
   //esp_task_wdt_reset(); // feed the watchdog after the splash delay, before any blocking HTTP work
   Serial.println("[BOOT] Splash delay complete");
 
@@ -886,6 +990,29 @@ void loop() {
   if (bmpOK && now - lastBaroSample >= BARO_SAMPLE_MS) {
     lastBaroSample = now;
     updateVario();
+  }
+  // ---------------------------------------------------------
+  // 3.5 FANET -- feed current position/state, then let the stack handle
+  //     its own RX polling and beacon schedule. update() is cheap (an
+  //     SPI status read plus a millis() check) so it's fine to call every
+  //     pass rather than duty-cycling it separately.
+  // ---------------------------------------------------------
+  if (fanetRadioOK && gps.location.isValid() && gps.location.age() < 2000) {
+    // Prefer the QNH-calibrated baro altitude once available, same
+    // preference order already used for sharedPosition above.
+    int32_t altM = qnhCalibrated ? (int32_t)lroundf(currentAltitudeM)
+                                  : (int32_t)lroundf(gps.altitude.meters());
+    float speedKmh = gps.speed.isValid() ? gps.speed.kmph() : 0.0f;
+    float headingDeg = gps.course.isValid() ? gps.course.deg() : 0.0f;
+
+    fanet.setPosition(gps.location.lat(), gps.location.lng(), altM,
+                       speedKmh, currentClimbRateMS, headingDeg);
+    // 1 = paraglider, 8 = paramotor -- VERIFY both against the FANET
+    // spec's aircraft-type table before relying on this for real traffic.
+    fanet.setAircraftType(currentPage == PAGE_PARAMOTOR ? 8 : 1);
+  }
+  if (fanetRadioOK) {
+    fanet.update();
   }
   // ---------------------------------------------------------
   // 4. User input
