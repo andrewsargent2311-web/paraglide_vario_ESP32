@@ -1612,6 +1612,75 @@ void backgroundTask(void* parameter) {
 //=====================================================
 // Weather data handling
 //=====================================================
+// ---------------------------------------------------------
+// Find the end of one JSON object in a JSON array.
+//
+// Starts at '{' and returns the number of characters
+// occupied by the complete object, including the braces.
+//
+// Handles nested objects/arrays and braces inside strings.
+// ---------------------------------------------------------
+size_t findJsonObjectLength(const char* start, size_t remaining) {
+
+  if (start == nullptr || remaining == 0 || *start != '{') {
+    return 0;
+  }
+
+  int depth = 0;
+  bool inString = false;
+  bool escaped = false;
+
+  for (size_t i = 0; i < remaining; i++) {
+
+    char c = start[i];
+
+    // -----------------------------------------------------
+    // Handle JSON strings
+    // -----------------------------------------------------
+    if (inString) {
+
+      if (escaped) {
+        escaped = false;
+        continue;
+      }
+
+      if (c == '\\') {
+        escaped = true;
+        continue;
+      }
+
+      if (c == '"') {
+        inString = false;
+      }
+
+      continue;
+    }
+
+    // -----------------------------------------------------
+    // Outside a string
+    // -----------------------------------------------------
+    if (c == '"') {
+      inString = true;
+      continue;
+    }
+
+    if (c == '{') {
+      depth++;
+    }
+    else if (c == '}') {
+
+      depth--;
+
+      if (depth == 0) {
+        return i + 1;
+      }
+    }
+  }
+
+  // Incomplete/malformed object
+  return 0;
+}
+
 void updateWeather() {
   Serial.println("[Zephyr] ENTERED weather function");
 
@@ -1771,104 +1840,102 @@ void updateWeather() {
 
   // ---------------------------------------------------------
   // ArduinoJson filter
+    // ---------------------------------------------------------
+  // We deliberately DO NOT deserialize the entire 550-station
+  // array into one ArduinoJson document.
   //
-  // API returns an ARRAY of station objects.
-  // Only retain the fields we actually need.
+  // Instead:
+  //
+  //   downloaded payload
+  //          |
+  //          v
+  //   find one station object
+  //          |
+  //          v
+  //   parse that station only
+  //          |
+  //          v
+  //   keep/discard it
+  //          |
+  //          v
+  //   clear small JSON document
+  //          |
+  //          v
+  //   next station
+  //
+  // This keeps RAM usage essentially independent of the number
+  // of stations in the Zephyr response.
   // ---------------------------------------------------------
-  JsonDocument filter;
 
-  filter[0]["name"] = true;
-  filter[0]["isOffline"] = true;
-  filter[0]["currentAverage"] = true;
-  filter[0]["currentBearing"] = true;
-  filter[0]["currentGust"] = true;
-  filter[0]["location"]["coordinates"][0] = true;
-  filter[0]["location"]["coordinates"][1] = true;
+  // ---------------------------------------------------------
+  // Filter for ONE station object.
+  //
+  // Note that there is NO [0] here because we are parsing an
+  // individual station object rather than the whole array.
+  // ---------------------------------------------------------
+  JsonDocument stationFilter;
+
+  stationFilter["name"] = true;
+  stationFilter["isOffline"] = true;
+  stationFilter["currentAverage"] = true;
+  stationFilter["currentBearing"] = true;
+  stationFilter["currentGust"] = true;
+  stationFilter["location"]["coordinates"][0] = true;
+  stationFilter["location"]["coordinates"][1] = true;
 
   // ---------------------------------------------------------
-  // JSON document
+  // Small JSON document for ONE station only.
+  //
+  // 2048 bytes is deliberately much smaller than the previous
+  // 50000-byte document.
   // ---------------------------------------------------------
+  DynamicJsonDocument stationDoc(2048);
+
   Serial.printf(
-    "[Zephyr] Heap before weatherDoc: %u | Min heap: %u\n",
+    "[Zephyr] Heap before station processing: %u | Min heap: %u\n",
     ESP.getFreeHeap(),
     ESP.getMinFreeHeap());
 
-  DynamicJsonDocument weatherDoc(50000);
+  // ---------------------------------------------------------
+  // Pointer into our already-downloaded mutable String.
+  //
+  // payload.begin() gives us access to the downloaded buffer
+  // without making another 277 KB copy.
+  // ---------------------------------------------------------
+  char* json = payload.begin();
 
-  Serial.printf(
-    "[Zephyr] Heap after weatherDoc: %u | Min heap: %u\n",
-    ESP.getFreeHeap(),
-    ESP.getMinFreeHeap());
+  size_t jsonLength = payload.length();
 
   // ---------------------------------------------------------
-  // Parse complete downloaded response
+  // Find the beginning of the top-level JSON array.
   // ---------------------------------------------------------
-  Serial.println("[Zephyr] Starting JSON deserialize...");
+  char* cursor = json;
+  size_t remaining = jsonLength;
 
-  DeserializationError error = deserializeJson(
-    weatherDoc,
-    payload,
-    DeserializationOption::Filter(filter));
+  while (remaining > 0 && *cursor != '[') {
+    cursor++;
+    remaining--;
+  }
 
-  Serial.println("[Zephyr] JSON deserialize returned");
+  if (remaining == 0) {
 
-  // ---------------------------------------------------------
-  // JSON error handling
-  // ---------------------------------------------------------
-  if (error) {
-
-    Serial.printf(
-      "[Zephyr] JSON parsing failed: %s\n",
-      error.c_str());
-
-    Serial.printf(
-      "[Zephyr] JSON document capacity: %u bytes\n",
-      weatherDoc.capacity());
-
-    Serial.printf(
-      "[Zephyr] JSON document memory usage: %u bytes\n",
-      weatherDoc.memoryUsage());
-
-    Serial.printf(
-      "[Zephyr] Heap after JSON parse failure: "
-      "%u | Min heap: %u\n",
-      ESP.getFreeHeap(),
-      ESP.getMinFreeHeap());
+    Serial.println(
+      "[Zephyr] ERROR: Could not find JSON array");
 
     hasWeatherData = false;
 
-    // Release HTTP resources before returning.
     http.end();
-
-    Serial.printf(
-      "[Zephyr] Weather HTTP connection closed after "
-      "parse failure. Free heap: %u | Min heap: %u\n",
-      ESP.getFreeHeap(),
-      ESP.getMinFreeHeap());
 
     return;
   }
 
-  // ---------------------------------------------------------
-  // Successful JSON parse
-  // ---------------------------------------------------------
-  Serial.println("[Zephyr] JSON parsed successfully!");
-
-  Serial.printf(
-    "[Zephyr] Heap after JSON parse: %u | Min heap: %u\n",
-    ESP.getFreeHeap(),
-    ESP.getMinFreeHeap());
+  // Move past '['
+  cursor++;
+  remaining--;
 
   // ---------------------------------------------------------
-  // Get station array
+  // Lock shared weather data while we populate localMeters.
   // ---------------------------------------------------------
-  JsonArray stations = weatherDoc.as<JsonArray>();
-
-  // This now runs on the Core 0 background task while drawWeatherPage()
-  // reads localMeters[]/hasWeatherData from Core 1 -- lock around the
-  // whole population pass. It's pure in-memory JSON iteration (the slow
-  // network fetch and parse already finished above), so holding the lock
-  // for its duration is fast and bounded.
   if (backgroundDataMutex != nullptr) {
     xSemaphoreTake(backgroundDataMutex, portMAX_DELAY);
   }
@@ -1880,152 +1947,266 @@ void updateWeather() {
     localMeters[i].valid = false;
   }
 
-  const int totalStations = stations.size();
+  // ---------------------------------------------------------
+  // Station counter
+  // ---------------------------------------------------------
+  int processedStations = 0;
+  int validStations = 0;
 
-  Serial.printf(
-    "[Zephyr] Processing %d stations...\n",
-    totalStations);
+  Serial.println(
+    "[Zephyr] Processing stations one at a time...");
 
   // ---------------------------------------------------------
-  // Keep only the closest TRACKED_METERS stations.
-  //
-  // This avoids allocating a large sorting array.
+  // Scan the top-level array.
   // ---------------------------------------------------------
-  for (int i = 0; i < totalStations; i++) {
+  while (remaining > 0) {
 
-    JsonObject st = stations[i];
-
-    // -----------------------------------------------------
-    // Ignore offline stations
-    // -----------------------------------------------------
-    if (st["isOffline"] == true) {
-      continue;
+    // -------------------------------------------------------
+    // Skip whitespace and commas between objects.
+    // -------------------------------------------------------
+    while (
+      remaining > 0 &&
+      (*cursor == ' ' ||
+       *cursor == '\r' ||
+       *cursor == '\n' ||
+       *cursor == '\t' ||
+       *cursor == ',')
+    ) {
+      cursor++;
+      remaining--;
     }
 
-    // -----------------------------------------------------
-    // Get GeoJSON coordinates
+    // -------------------------------------------------------
+    // End of array
+    // -------------------------------------------------------
+    if (remaining == 0 || *cursor == ']') {
+      break;
+    }
+
+    // -------------------------------------------------------
+    // We expect a station object.
+    // -------------------------------------------------------
+    if (*cursor != '{') {
+
+      Serial.printf(
+        "[Zephyr] Unexpected JSON character '%c' "
+        "after %d stations\n",
+        *cursor,
+        processedStations);
+
+      break;
+    }
+
+    // -------------------------------------------------------
+    // Find complete object length.
+    // -------------------------------------------------------
+    size_t objectLength =
+      findJsonObjectLength(cursor, remaining);
+
+    if (objectLength == 0) {
+
+      Serial.printf(
+        "[Zephyr] ERROR: Could not find end of station "
+        "object after %d stations\n",
+        processedStations);
+
+      break;
+    }
+
+    processedStations++;
+
+    // -------------------------------------------------------
+    // Clear previous station.
     //
-    // GeoJSON = [longitude, latitude]
-    // -----------------------------------------------------
-    JsonArray coords =
-      st["location"]["coordinates"].as<JsonArray>();
+    // This means stationDoc never contains more than ONE
+    // station at a time.
+    // -------------------------------------------------------
+    stationDoc.clear();
 
-    if (coords.size() < 2) {
-      continue;
-    }
+    // -------------------------------------------------------
+    // Parse this single station.
+    //
+    // cursor points directly into payload's mutable buffer,
+    // so ArduinoJson can use zero-copy parsing.
+    // -------------------------------------------------------
+    DeserializationError stationError =
+      deserializeJson(
+        stationDoc,
+        cursor,
+        objectLength,
+        DeserializationOption::Filter(stationFilter));
 
-    float stLon = coords[0].as<float>();
-    float stLat = coords[1].as<float>();
+    if (!stationError) {
 
-    // -----------------------------------------------------
-    // Validate coordinates
-    // -----------------------------------------------------
-    if (!isfinite(stLat) || !isfinite(stLon)) {
-      continue;
-    }
+      JsonObject st =
+        stationDoc.as<JsonObject>();
 
-    if (stLat == 0.0f || stLon == 0.0f) {
-      continue;
-    }
+      // -----------------------------------------------------
+      // Ignore offline stations
+      // -----------------------------------------------------
+      if (st["isOffline"] == true) {
+        cursor += objectLength;
+        remaining -= objectLength;
+        continue;
+      }
 
-    // -----------------------------------------------------
-    // Calculate distance from aircraft/user location
-    // -----------------------------------------------------
-    float distanceKm =
-      getDistanceKM(
-        MY_LAT,
-        MY_LON,
-        stLat,
-        stLon);
+      // -----------------------------------------------------
+      // Get GeoJSON coordinates
+      //
+      // GeoJSON = [longitude, latitude]
+      // -----------------------------------------------------
+      JsonArray coords =
+        st["location"]["coordinates"].as<JsonArray>();
 
-    // Compass bearing from the glider to the station (separate from the
-    // station's own reported wind bearing below).
-    float geoBearing =
-      getBearing(
-        MY_LAT,
-        MY_LON,
-        stLat,
-        stLon);
+      if (coords.size() < 2) {
+        cursor += objectLength;
+        remaining -= objectLength;
+        continue;
+      }
 
-    // -----------------------------------------------------
-    // Find insertion position among closest stations
-    // -----------------------------------------------------
-    int insertAt = -1;
+      float stLon =
+        coords[0].as<float>();
 
-    for (int j = 0; j < TRACKED_METERS; j++) {
+      float stLat =
+        coords[1].as<float>();
 
-      if (!localMeters[j].valid || distanceKm < localMeters[j].distanceKm) {
+      // -----------------------------------------------------
+      // Validate coordinates
+      // -----------------------------------------------------
+      if (!isfinite(stLat) ||
+          !isfinite(stLon) ||
+          stLat == 0.0f ||
+          stLon == 0.0f) {
 
-        insertAt = j;
-        break;
+        cursor += objectLength;
+        remaining -= objectLength;
+        continue;
+      }
+
+      validStations++;
+
+      // -----------------------------------------------------
+      // Calculate distance from aircraft/user location
+      // -----------------------------------------------------
+      float distanceKm =
+        getDistanceKM(
+          MY_LAT,
+          MY_LON,
+          stLat,
+          stLon);
+
+      // -----------------------------------------------------
+      // Compass bearing from glider to station.
+      // -----------------------------------------------------
+      float geoBearing =
+        getBearing(
+          MY_LAT,
+          MY_LON,
+          stLat,
+          stLon);
+
+      // -----------------------------------------------------
+      // Find insertion position among closest stations.
+      // -----------------------------------------------------
+      int insertAt = -1;
+
+      for (int j = 0; j < TRACKED_METERS; j++) {
+
+        if (!localMeters[j].valid ||
+            distanceKm < localMeters[j].distanceKm) {
+
+          insertAt = j;
+          break;
+        }
+      }
+
+      // -----------------------------------------------------
+      // Station isn't close enough to enter our list.
+      // -----------------------------------------------------
+      if (insertAt >= 0) {
+
+        // ---------------------------------------------------
+        // Shift existing stations down.
+        // ---------------------------------------------------
+        for (
+          int j = TRACKED_METERS - 1;
+          j > insertAt;
+          j--
+        ) {
+          localMeters[j] =
+            localMeters[j - 1];
+        }
+
+        // ---------------------------------------------------
+        // Extract station data.
+        // ---------------------------------------------------
+        const char* name =
+          st["name"].as<const char*>();
+
+        float averageKph =
+          st["currentAverage"].as<float>();
+
+        float gustKph =
+          st["currentGust"].as<float>();
+
+        float bearing =
+          st["currentBearing"].as<float>();
+
+        // ---------------------------------------------------
+        // Copy station name safely.
+        // ---------------------------------------------------
+        strncpy(
+          localMeters[insertAt].name,
+          name ? name : "ANON",
+          sizeof(localMeters[insertAt].name) - 1);
+
+        localMeters[insertAt]
+          .name[
+            sizeof(localMeters[insertAt].name) - 1
+          ] = '\0';
+
+        // ---------------------------------------------------
+        // Store station data.
+        // ---------------------------------------------------
+        localMeters[insertAt].distanceKm =
+          distanceKm;
+
+        localMeters[insertAt].speedKph =
+          averageKph;
+
+        localMeters[insertAt].gustKph =
+          gustKph;
+
+        localMeters[insertAt].bearingDeg =
+          bearing;
+
+        localMeters[insertAt].geoBearingDeg =
+          geoBearing;
+
+        localMeters[insertAt].valid = true;
       }
     }
+    else {
 
-    // Station isn't close enough to enter our list.
-    if (insertAt < 0) {
-      continue;
+      // -----------------------------------------------------
+      // Don't abort the entire weather update because one
+      // station is malformed.
+      // -----------------------------------------------------
+      Serial.printf(
+        "[Zephyr] Station %d parse error: %s\n",
+        processedStations,
+        stationError.c_str());
     }
 
-    // -----------------------------------------------------
-    // Shift existing stations down
-    // -----------------------------------------------------
-    for (
-      int j = TRACKED_METERS - 1;
-      j > insertAt;
-      j--) {
-      localMeters[j] = localMeters[j - 1];
-    }
-
-    // -----------------------------------------------------
-    // Extract station data
-    // -----------------------------------------------------
-    const char* name =
-      st["name"].as<const char*>();
-
-    float averageKph =
-      st["currentAverage"].as<float>();
-
-    float gustKph =
-      st["currentGust"].as<float>();
-
-    float bearing =
-      st["currentBearing"].as<float>();
-
-    // -----------------------------------------------------
-    // Copy station name safely
-    // -----------------------------------------------------
-    strncpy(
-      localMeters[insertAt].name,
-      name ? name : "ANON",
-      sizeof(localMeters[insertAt].name) - 1);
-
-    localMeters[insertAt]
-      .name[sizeof(localMeters[insertAt].name) - 1] = '\0';
-
-    // -----------------------------------------------------
-    // Store station data
-    // -----------------------------------------------------
-    localMeters[insertAt].distanceKm =
-      distanceKm;
-
-    // Zephyr wind values are km/h.
-    localMeters[insertAt].speedKph =
-      averageKph;
-
-    localMeters[insertAt].gustKph =
-      gustKph;
-
-    localMeters[insertAt].bearingDeg =
-      bearing;
-
-    localMeters[insertAt].geoBearingDeg =
-      geoBearing;
-
-    localMeters[insertAt].valid = true;
+    // -------------------------------------------------------
+    // Advance to next station.
+    // -------------------------------------------------------
+    cursor += objectLength;
+    remaining -= objectLength;
   }
 
   // ---------------------------------------------------------
-  // Determine whether we have usable weather data
+  // Determine whether we have usable weather data.
   // ---------------------------------------------------------
   hasWeatherData = false;
 
@@ -2037,8 +2218,53 @@ void updateWeather() {
     }
   }
 
+  // ---------------------------------------------------------
+  // Release shared weather data.
+  // ---------------------------------------------------------
   if (backgroundDataMutex != nullptr) {
     xSemaphoreGive(backgroundDataMutex);
+  }
+
+  Serial.printf(
+    "[Zephyr] Station processing complete: "
+    "%d stations scanned, %d valid\n",
+    processedStations,
+    validStations);
+
+  Serial.printf(
+    "[Zephyr] Heap after station processing: "
+    "%u | Min heap: %u\n",
+    ESP.getFreeHeap(),
+    ESP.getMinFreeHeap());
+
+  // ---------------------------------------------------------
+  // Print closest stations
+  // ---------------------------------------------------------
+  if (hasWeatherData) {
+
+    Serial.println("[Zephyr] Closest stations:");
+
+    for (int i = 0; i < TRACKED_METERS; i++) {
+
+      if (!localMeters[i].valid) {
+        continue;
+      }
+
+      Serial.printf(
+        "  %d: %s | %.1f km | %.1f kt | "
+        "gust %.1f kt | %.0f deg\n",
+        i + 1,
+        localMeters[i].name,
+        localMeters[i].distanceKm,
+        localMeters[i].speedKph,
+        localMeters[i].gustKph,
+        localMeters[i].bearingDeg);
+    }
+
+  } else {
+
+    Serial.println(
+      "[Zephyr] No valid weather stations found.");
   }
 
   // ---------------------------------------------------------
@@ -2713,12 +2939,20 @@ void updateI2sAudioBuzzer() {
   // ============================================================
   // SINK ALARM WITH HYSTERESIS
   //
-  // Enter sink alarm at <= -0.5 m/s
-  // Remain in alarm until climb rate rises above -5.0 m/s
+  // Enter sink alarm at <= -0.5 m/s (SINK_ALARM_MS).
+  // Remain in alarm until climb rate recovers past
+  // SINK_ALARM_RELEASE_MS (-0.2 m/s) -- a separate, less-negative
+  // threshold from the entry point.
   //
-  // This prevents rapid ON/OFF switching when the measured
-  // sink rate is hovering around -2.0 m/s.
+  // FIX: this used to release at the same threshold it entered on
+  // (SINK_ALARM_MS for both), which is not hysteresis at all -- a climb
+  // rate hovering around -0.5 m/s from sensor noise would flicker the
+  // alarm on/off rapidly ("motorboating"). Entry and release now use
+  // different thresholds, so the climb rate has to genuinely recover
+  // before the alarm clears.
   // ============================================================
+
+  const float SINK_ALARM_RELEASE_MS = -0.2f;  // must recover past this (less negative than SINK_ALARM_MS) to release
 
   if (!sinkAlarmActive) {
 
@@ -2736,10 +2970,10 @@ void updateI2sAudioBuzzer() {
 
     // Hysteresis release.
     // Keep the sink alarm active while descending.
-    // Release only when the climb rate rises above
-    // the configured sink threshold.
+    // Release only once the climb rate has recovered past the
+    // separate release threshold above.
 
-    if (currentClimbRateMS > SINK_ALARM_MS) {
+    if (currentClimbRateMS > SINK_ALARM_RELEASE_MS) {
 
         sinkAlarmActive = false;
 
@@ -3055,24 +3289,54 @@ void i2sToneService() {
     // throughout this audio chunk.
     float freq = toneFrequency;
 
+    // ---------------------------------------------------------
+    // ANTI-CLICK ENVELOPE
+    // Every on/off transition (climb pulse, sink alarm entry/exit, page
+    // beep, mute jingle...) used to snap chunk[i] straight between 0 and a
+    // mid-cycle sine value -- an instantaneous amplitude jump, which is
+    // audible as a click/pop. At the vario's pulse rate (every 100-500ms
+    // all flight) that's a constant background tick.
+    //
+    // Fix: toneAmplitude chases a target (TONE_PEAK_AMPLITUDE when sounding,
+    // 0 when silent) by TONE_RAMP_STEP per sample instead of jumping. At
+    // 16kHz / 50.0f per sample that's a ~6.25ms fade -- short enough not to
+    // blur beep timing, long enough that the ear hears a fade, not a click.
+    //
+    // lastAudibleFreq keeps the waveform actually oscillating during a
+    // fade-out (rather than freezing on one held sample) so the tail of
+    // each beep decays like a real tone, not a ramped DC offset.
+    // ---------------------------------------------------------
+    const float TONE_PEAK_AMPLITUDE = 5000.0f;  // matches the previous fixed amplitude
+    const float TONE_RAMP_STEP = 50.0f;         // ~6.25ms fade to/from full amplitude at 16kHz
+
+    static float toneAmplitude = 0.0f;
+    static float lastAudibleFreq = 440.0f;
+
+    if (freq > 0.0f) {
+        lastAudibleFreq = freq;
+    }
+
+    const float phaseIncFreq = (freq > 0.0f) ? freq : lastAudibleFreq;
+    const float targetAmplitude = (freq > 0.0f) ? TONE_PEAK_AMPLITUDE : 0.0f;
+
     for (int i = 0; i < I2S_TONE_CHUNK; i++) {
 
-        if (freq > 0.0f) {
+        if (toneAmplitude < targetAmplitude) {
+            toneAmplitude += TONE_RAMP_STEP;
+            if (toneAmplitude > targetAmplitude) toneAmplitude = targetAmplitude;
+        } else if (toneAmplitude > targetAmplitude) {
+            toneAmplitude -= TONE_RAMP_STEP;
+            if (toneAmplitude < targetAmplitude) toneAmplitude = targetAmplitude;
+        }
 
-            chunk[i] = (int16_t)(
-                5000.0f * sinf(2.0f * PI * tonePhase)
-            );
+        chunk[i] = (int16_t)(
+            toneAmplitude * sinf(2.0f * PI * tonePhase)
+        );
 
-            tonePhase += freq / (float)I2S_SAMPLE_RATE;
+        tonePhase += phaseIncFreq / (float)I2S_SAMPLE_RATE;
 
-            if (tonePhase >= 1.0f) {
-                tonePhase -= 1.0f;
-            }
-
-        } else {
-
-            // Explicitly generate silence rather than stopping I2S.
-            chunk[i] = 0;
+        if (tonePhase >= 1.0f) {
+            tonePhase -= 1.0f;
         }
     }
 
@@ -3750,60 +4014,61 @@ void drawParagliderPage() {
 // =====================================================
 void drawWeatherPage() {
   // ---------------------------------------------------------
-  // 0. Snapshot localMeters under the mutex, then release it immediately
-  // -- rendering below runs lock-free, matching the same pattern used in
-  // drawADSBPage(). WindMeter is small plain data (TRACKED_METERS entries),
-  // so a full-array copy is cheap.
+  // 0. Snapshot localMeters under the mutex, then release it
   // ---------------------------------------------------------
   WindMeter localMetersSnapshot[TRACKED_METERS];
   bool snapshotHasWeatherData = hasWeatherData;
 
-  if (snapshotHasWeatherData && backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-    memcpy(localMetersSnapshot, localMeters, sizeof(localMeters));
+  if (snapshotHasWeatherData &&
+      backgroundDataMutex != nullptr &&
+      xSemaphoreTake(
+        backgroundDataMutex,
+        pdMS_TO_TICKS(20)) == pdTRUE) {
+
+    memcpy(
+      localMetersSnapshot,
+      localMeters,
+      sizeof(localMeters));
+
     xSemaphoreGive(backgroundDataMutex);
+
   } else {
+
     for (int i = 0; i < TRACKED_METERS; i++) {
       localMetersSnapshot[i].valid = false;
     }
   }
 
   // ---------------------------------------------------------
-  // 1. Row layout -- rowHeight/row count follow weatherStationsShown
-  // (Weather Settings > Stations Shown), not the TRACKED_METERS capacity.
-  //
-  // Each row stacks 3 lines of text. At 2 or 4 stations rowHeight is tall
-  // enough for those lines at a fixed large font with fixed pixel
-  // offsets, but at 6 stations rowHeight shrinks enough that a fixed
-  // font/offset scheme makes line 2 and line 3 nearly collide. So instead:
-  // pick the largest font whose height lets 3 lines (with a little
-  // padding/gap) actually fit inside rowHeight, and derive the per-line
-  // baselines from that font's real height rather than fixed numbers.
-  // pickBoldFontForHeight()/drawLargestBold() are also used elsewhere on
-  // this screen and don't otherwise need weatherStationsShown at all --
-  // they just react to whatever rowHeight comes out to.
+  // 1. Row layout
   // ---------------------------------------------------------
   const int startY = TOP_BAR_HEIGHT_PX;
   const int availableHeight = SCREEN_H - startY;
-  const int rowHeight = availableHeight / weatherStationsShown;
 
-  const int rowPaddingPx = 6;  // breathing room above line 1 / below line 3
-  const int lineGapPx = 4;     // gap between each stacked line
+  const int rowHeight =
+    availableHeight / weatherStationsShown;
 
-  int perLineBudget = (rowHeight - rowPaddingPx - 2 * lineGapPx) / 3;
-  if (perLineBudget < 8) perLineBudget = 8;  // sane floor so font metrics stay sensible even in extreme configs
+  const int rowPaddingPx = 6;
+  const int lineGapPx = 4;
 
-  const uint8_t* rowFont = pickBoldFontForHeight(perLineBudget);
-  u8g2.setFont(rowFont);
-  const int lineHeight = u8g2.getFontAscent() - u8g2.getFontDescent();
+  int perLineBudget =
+    (rowHeight - rowPaddingPx - 2 * lineGapPx) / 3;
+
+  if (perLineBudget < 8) {
+    perLineBudget = 8;
+  }
 
   // ---------------------------------------------------------
   // 2. No weather data
   // ---------------------------------------------------------
   if (!snapshotHasWeatherData) {
+
     u8g2.setFont(u8g2_font_helvB24_tf);
 
     const char* msg = "No Weather Data";
-    int msgWidth = u8g2.getStrWidth(msg);
+
+    int msgWidth =
+      u8g2.getStrWidth(msg);
 
     u8g2.drawStr(
       (SCREEN_W - msgWidth) / 2,
@@ -3814,56 +4079,51 @@ void drawWeatherPage() {
   }
 
   // ---------------------------------------------------------
-  // 3. Draw each row (weatherStationsShown of them)
+  // 3. Determine vertical font sizing.
+  //
+  // This continues to control the three-line row spacing for
+  // 2 / 4 / 6 station modes.
   // ---------------------------------------------------------
-  for (int i = 0; i < weatherStationsShown; i++) {
+  const uint8_t* rowFont =
+    pickBoldFontForHeight(perLineBudget);
+
+  u8g2.setFont(rowFont);
+
+  const int lineHeight =
+    u8g2.getFontAscent() -
+    u8g2.getFontDescent();
+
+  // ---------------------------------------------------------
+  // 4. Determine the REAL horizontal space available for
+  //    station names.
+  //
+  // Distance and compass are calculated using the actual
+  // contents of each row rather than reserving an arbitrary
+  // fixed number of pixels.
+  //
+  // We use the smallest available width from all displayed
+  // rows so every station name can use the same font.
+  // ---------------------------------------------------------
+  const int stationNameX = 6;
+  const int stationNameRightGap = 8;
+
+  int minimumNameWidth =
+    SCREEN_W - stationNameX;
+
+  u8g2.setFont(u8g2_font_helvR10_tf);
+
+  for (int i = 0;
+       i < weatherStationsShown &&
+       i < TRACKED_METERS;
+       i++) {
 
     if (!localMetersSnapshot[i].valid) {
       continue;
     }
 
-    const int currentBoxY =
-      startY + (i * rowHeight);
-
-    // -----------------------------------------------------
-    // Row separator
-    // -----------------------------------------------------
-    if (i > 0) {
-      u8g2.drawLine(
-        0,
-        currentBoxY,
-        SCREEN_W,
-        currentBoxY);
-    }
-
-    // =====================================================
-    // LINE 1
-    // Station name + distance + compass bearing TO the station
-    // =====================================================
-
-    const int line1Y =
-      currentBoxY + rowPaddingPx + lineHeight;
-
-    // Station name - maximum 15 characters
-    char stationNameBuf[16];
-    snprintf(
-      stationNameBuf,
-      sizeof(stationNameBuf),
-      "%.15s",
-      localMetersSnapshot[i].name);
-
-    // drawLargestBold() re-checks width/height itself, so it can only
-    // pick rowFont or something smaller -- never anything taller than the
-    // spacing above was planned around.
-    drawLargestBold(
-      6,
-      line1Y,
-      SCREEN_W - 12,
-      perLineBudget,
-      stationNameBuf);
-
-    // Compass bearing FROM the glider TO the station (e.g. "NE"), drawn
-    // flush against the right edge -- distance sits just to its left.
+    // -------------------------------------------------------
+    // Compass to station
+    // -------------------------------------------------------
     const char* geoCompass =
       getCompassDirection(
         localMetersSnapshot[i].geoBearingDeg);
@@ -3872,14 +4132,13 @@ void drawWeatherPage() {
       u8g2.getStrWidth(geoCompass);
 
     const int geoCompassX =
-      SCREEN_W - geoCompassWidth - 6;
+      SCREEN_W -
+      geoCompassWidth -
+      6;
 
-    u8g2.drawStr(
-      geoCompassX,
-      line1Y,
-      geoCompass);
-
+    // -------------------------------------------------------
     // Distance
+    // -------------------------------------------------------
     char distBuf[16];
 
     snprintf(
@@ -3891,77 +4150,416 @@ void drawWeatherPage() {
     int distanceWidth =
       u8g2.getStrWidth(distBuf);
 
-    const int distGap = 10;  // small fixed gap between distance and bearing
+    const int distGap = 8;
+
+    const int distanceX =
+      geoCompassX -
+      distGap -
+      distanceWidth;
+
+    // -------------------------------------------------------
+    // Name must stop before the distance.
+    // -------------------------------------------------------
+    const int availableNameWidth =
+      distanceX -
+      stationNameRightGap -
+      stationNameX;
+
+    if (availableNameWidth < minimumNameWidth) {
+      minimumNameWidth = availableNameWidth;
+    }
+  }
+
+  // Safety floor.
+  if (minimumNameWidth < 20) {
+    minimumNameWidth = 20;
+  }
+
+  // ---------------------------------------------------------
+  // 5. Find the LONGEST displayed station name.
+  //
+  // The 15-character display limit is retained.
+  // ---------------------------------------------------------
+  char longestStationName[16] = "";
+  int longestNameLength = 0;
+
+  for (int i = 0;
+       i < weatherStationsShown &&
+       i < TRACKED_METERS;
+       i++) {
+
+    if (!localMetersSnapshot[i].valid) {
+      continue;
+    }
+
+    char nameBuf[22];
+
+    snprintf(
+      nameBuf,
+      sizeof(nameBuf),
+      "%.20s",
+      localMetersSnapshot[i].name);
+
+    int nameLength =
+      strlen(nameBuf);
+
+    if (nameLength > longestNameLength) {
+
+      longestNameLength = nameLength;
+
+      strncpy(
+        longestStationName,
+        nameBuf,
+        sizeof(longestStationName) - 1);
+
+      longestStationName[
+        sizeof(longestStationName) - 1
+      ] = '\0';
+    }
+  }
+
+  // ---------------------------------------------------------
+  // 6. Select ONE normal-weight font for ALL station names.
+  //
+  // We start with 14 px and reduce only if the LONGEST name
+  // won't fit in the smallest available row width.
+  // ---------------------------------------------------------
+  const uint8_t* stationNameFont =
+    u8g2_font_helvR10_tf;
+
+  if (longestNameLength > 0) {
+
+    u8g2.setFont(u8g2_font_helvR14_tf);
+
+    int width14 =
+      u8g2.getStrWidth(longestStationName);
+
+    if (width14 <= minimumNameWidth) {
+
+      stationNameFont =
+        u8g2_font_helvR14_tf;
+
+    } else {
+
+      u8g2.setFont(u8g2_font_helvR12_tf);
+
+      int width12 =
+        u8g2.getStrWidth(longestStationName);
+
+      if (width12 <= minimumNameWidth) {
+
+        stationNameFont =
+          u8g2_font_helvR12_tf;
+
+      } else {
+
+        stationNameFont =
+          u8g2_font_helvR10_tf;
+      }
+    }
+  }
+
+  // ---------------------------------------------------------
+  // 7. Draw each station row
+  // ---------------------------------------------------------
+  for (int i = 0;
+       i < weatherStationsShown &&
+       i < TRACKED_METERS;
+       i++) {
+
+    if (!localMetersSnapshot[i].valid) {
+      continue;
+    }
+
+    const int currentBoxY =
+      startY + (i * rowHeight);
+
+    // -------------------------------------------------------
+    // Row separator
+    // -------------------------------------------------------
+    if (i > 0) {
+
+      u8g2.drawLine(
+        0,
+        currentBoxY,
+        SCREEN_W,
+        currentBoxY);
+    }
+
+    // =======================================================
+    // LINE 1
+    // Station name + distance + compass
+    // =======================================================
+
+    const int line1Y =
+      currentBoxY +
+      rowPaddingPx +
+      lineHeight;
+
+    // -------------------------------------------------------
+    // Station name
+    // -------------------------------------------------------
+    char stationNameBuf[16];
+
+    snprintf(
+      stationNameBuf,
+      sizeof(stationNameBuf),
+      "%.15s",
+      localMetersSnapshot[i].name);
+
+    // -------------------------------------------------------
+    // Calculate this row's actual right-hand information
+    // position before drawing the station name.
+    // -------------------------------------------------------
+    u8g2.setFont(u8g2_font_helvR10_tf);
+
+    const char* geoCompass =
+      getCompassDirection(
+        localMetersSnapshot[i].geoBearingDeg);
+
+    int geoCompassWidth =
+      u8g2.getStrWidth(geoCompass);
+
+    const int geoCompassX =
+      SCREEN_W -
+      geoCompassWidth -
+      6;
+
+    char distBuf[16];
+
+    snprintf(
+      distBuf,
+      sizeof(distBuf),
+      "%.1f km",
+      localMetersSnapshot[i].distanceKm);
+
+    int distanceWidth =
+      u8g2.getStrWidth(distBuf);
+
+    const int distGap = 8;
+
+    const int distanceX =
+      geoCompassX -
+      distGap -
+      distanceWidth;
+
+    const int maxNameWidth =
+      distanceX -
+      stationNameRightGap -
+      stationNameX;
+
+    // -------------------------------------------------------
+    // Final safety clipping.
+    //
+    // Normally this isn't needed because stationNameFont was
+    // selected using the longest name. It protects us if a
+    // particular row has less room than expected.
+    // -------------------------------------------------------
+    char clippedStationName[16];
+
+    strncpy(
+      clippedStationName,
+      stationNameBuf,
+      sizeof(clippedStationName) - 1);
+
+    clippedStationName[
+      sizeof(clippedStationName) - 1
+    ] = '\0';
+
+    u8g2.setFont(stationNameFont);
+
+    while (
+      strlen(clippedStationName) > 0 &&
+      u8g2.getStrWidth(clippedStationName) >
+        maxNameWidth) {
+
+      size_t len =
+        strlen(clippedStationName);
+
+      clippedStationName[len - 1] =
+        '\0';
+    }
 
     u8g2.drawStr(
-      geoCompassX - distGap - distanceWidth,
+      stationNameX,
+      line1Y,
+      clippedStationName);
+
+    // -------------------------------------------------------
+    // Draw distance
+    // -------------------------------------------------------
+    u8g2.setFont(u8g2_font_helvR10_tf);
+
+    u8g2.drawStr(
+      distanceX,
       line1Y,
       distBuf);
 
-    // =====================================================
+    // -------------------------------------------------------
+    // Draw compass to station
+    // -------------------------------------------------------
+    u8g2.drawStr(
+      geoCompassX,
+      line1Y,
+      geoCompass);
+
+    // =======================================================
     // LINE 2
-    // AVE speed + the station's own reported wind direction (e.g. "N")
-    // =====================================================
-
-    char aveBuf[24];
-
-    snprintf(
-      aveBuf,
-      sizeof(aveBuf),
-      "AVE: %.0f %s",
-      speedKphToDisplay(localMetersSnapshot[i].speedKph),
-      speedUnitLabel());
+    // AVE: [BOLD NUMBER] [unit] [wind direction]
+    // =======================================================
 
     const int line2Y =
-      line1Y + lineGapPx + lineHeight;
+      line1Y +
+      lineGapPx +
+      lineHeight;
 
-    drawLargestBold(
+    char aveNumberBuf[12];
+
+    snprintf(
+      aveNumberBuf,
+      sizeof(aveNumberBuf),
+      "%.0f",
+      speedKphToDisplay(
+        localMetersSnapshot[i].speedKph));
+
+    // -------------------------------------------------------
+    // AVE label - small normal font
+    // -------------------------------------------------------
+    u8g2.setFont(u8g2_font_helvR10_tf);
+
+    const char* aveLabel =
+      "AVE:";
+
+    const int aveLabelWidth =
+      u8g2.getStrWidth(aveLabel);
+
+    u8g2.drawStr(
       6,
       line2Y,
-      SCREEN_W - 12,
-      perLineBudget,
-      aveBuf);
+      aveLabel);
 
-    // Wind direction the station itself is reporting (unrelated to the
-    // geo bearing above) -- placed right after the AVE text with a small
-    // fixed gap.
+    // -------------------------------------------------------
+    // Average speed NUMBER - large bold font
+    // -------------------------------------------------------
+    u8g2.setFont(u8g2_font_helvB14_tf);
+
+    const int aveNumberX =
+      6 +
+      aveLabelWidth +
+      5;
+
+    u8g2.drawStr(
+      aveNumberX,
+      line2Y,
+      aveNumberBuf);
+
+    // -------------------------------------------------------
+    // Unit - small normal font
+    // -------------------------------------------------------
+    u8g2.setFont(u8g2_font_helvR10_tf);
+
+    const char* unit =
+      speedUnitLabel();
+
+    const int aveNumberWidth =
+      u8g2.getStrWidth(aveNumberBuf);
+
+    const int unitX =
+      aveNumberX +
+      aveNumberWidth +
+      4;
+
+    u8g2.drawStr(
+      unitX,
+      line2Y,
+      unit);
+
+    // -------------------------------------------------------
+    // Wind direction reported by station
+    // -------------------------------------------------------
     const char* windCompass =
       getCompassDirection(
         localMetersSnapshot[i].bearingDeg);
 
-    int aveWidth =
-      u8g2.getStrWidth(aveBuf);
+    const int unitWidth =
+      u8g2.getStrWidth(unit);
 
     const int windCompassGap = 8;
 
     u8g2.drawStr(
-      6 + aveWidth + windCompassGap,
+      unitX +
+      unitWidth +
+      windCompassGap,
       line2Y,
       windCompass);
 
-    // =====================================================
+    // =======================================================
     // LINE 3
-    // GUST speed -- baseline sits 4px above this row's bottom edge
-    // =====================================================
-
-    char gustBuf[24];
-
-    snprintf(
-      gustBuf,
-      sizeof(gustBuf),
-      "GUST: %.0f %s",
-      speedKphToDisplay(localMetersSnapshot[i].gustKph),
-      speedUnitLabel());
+    // GUST: [BOLD NUMBER] [unit]
+    // =======================================================
 
     const int line3Y =
-      line2Y + lineGapPx + lineHeight;
+      line2Y +
+      lineGapPx +
+      lineHeight;
 
-    drawLargestBold(
+    char gustNumberBuf[12];
+
+    snprintf(
+      gustNumberBuf,
+      sizeof(gustNumberBuf),
+      "%.0f",
+      speedKphToDisplay(
+        localMetersSnapshot[i].gustKph));
+
+    // -------------------------------------------------------
+    // GUST label - small normal font
+    // -------------------------------------------------------
+    u8g2.setFont(u8g2_font_helvR10_tf);
+
+    const char* gustLabel =
+      "GUST:";
+
+    const int gustLabelWidth =
+      u8g2.getStrWidth(gustLabel);
+
+    u8g2.drawStr(
       6,
       line3Y,
-      SCREEN_W - 12,
-      perLineBudget,
-      gustBuf);
+      gustLabel);
+
+    // -------------------------------------------------------
+    // Gust speed NUMBER - large bold font
+    // -------------------------------------------------------
+    u8g2.setFont(u8g2_font_helvB14_tf);
+
+    const int gustNumberX =
+      6 +
+      gustLabelWidth +
+      5;
+
+    u8g2.drawStr(
+      gustNumberX,
+      line3Y,
+      gustNumberBuf);
+
+    // -------------------------------------------------------
+    // Unit - small normal font
+    // -------------------------------------------------------
+    u8g2.setFont(u8g2_font_helvR10_tf);
+
+    const int gustNumberWidth =
+      u8g2.getStrWidth(gustNumberBuf);
+
+    const int gustUnitX =
+      gustNumberX +
+      gustNumberWidth +
+      4;
+
+    u8g2.drawStr(
+      gustUnitX,
+      line3Y,
+      unit);
   }
 }
 // =====================================================
