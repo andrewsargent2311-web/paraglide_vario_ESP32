@@ -239,7 +239,7 @@ bool fanetRadioOK = false;
 // TODO: pick a real manufacturer ID from the FANET spec's registered
 // list (or use a private/testing value while bench-testing) rather than
 // this placeholder, and give this device a unique 16-bit ID.
-FanetAddress myFanetAddress = { 0xFB, 0x0001 };
+FanetAddress myFanetAddress = { 0xFC, 0x0001 };
 FanetStack fanet(fanetRadio, myFanetAddress);
 
 #define FANET_BEACON_INTERVAL_MS 5000UL
@@ -1009,7 +1009,7 @@ void loop() {
                        speedKmh, currentClimbRateMS, headingDeg);
     // 1 = paraglider, 8 = paramotor -- VERIFY both against the FANET
     // spec's aircraft-type table before relying on this for real traffic.
-    fanet.setAircraftType(currentPage == PAGE_PARAMOTOR ? 8 : 1);
+    fanet.setAircraftType(currentPage == PAGE_PARAMOTOR ? 1 : 1);
   }
   if (fanetRadioOK) {
     fanet.update();

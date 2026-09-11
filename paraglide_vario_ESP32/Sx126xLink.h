@@ -1,25 +1,37 @@
 // Sx126xLink.h
 //
-// Thin wrapper around RadioLib's SX1262 driver, built specifically for a
-// wiring where DIO1 is NOT connected (no free GPIO) and RST is tied
-// externally (to 3.3V or to the host MCU's EN line) rather than to a pin
-// this firmware drives.
+// Thin SX1262 / HT-RA62 radio wrapper.
 //
-// Consequences of that wiring, baked into this class:
-//   - No hardware interrupt on packet events. We use RadioLib's
-//     non-blocking startTransmit()/startReceive() calls and poll
-//     getIrqFlags() ourselves from the main loop (call poll() often).
-//   - No software-triggered radio reset. begin() assumes the chip is
-//     already out of reset (power-on state) when it runs.
+// IMPORTANT HARDWARE CONSTRAINT:
 //
-// Pin mapping (per your wiring):
-//   MISO  -> GPIO0
-//   SCK   -> GPIO1
-//   BUSY  -> GPIO2
-//   MOSI  -> GPIO3
-//   CS/NSS-> GPIO17
-//   DIO1  -> not connected (RADIOLIB_NC)
-//   RST   -> not connected (RADIOLIB_NC) -- tied externally
+// DIO1 is NOT connected to the ESP32-S3.
+// RST is also not controlled by an ESP32 GPIO.
+//
+// Therefore this class NEVER uses RadioLib's blocking scanChannel(),
+// because RadioLib's scanChannel() waits for the DIO1 interrupt.
+//
+// Instead:
+//
+//   - TX completion is detected by polling the SX1262 IRQ register.
+//   - RX completion is detected by polling the SX1262 IRQ register.
+//   - CAD/channel activity is started normally but its IRQ register is
+//     polled directly over SPI.
+//
+// This allows the HT-RA62 to operate without consuming another ESP32 GPIO.
+//
+// Hardware:
+//
+//   HT-RA62 / SX1262
+//     MISO -> GPIO0
+//     SCK  -> GPIO1
+//     BUSY -> GPIO2
+//     MOSI -> GPIO3
+//     NSS  -> GPIO17
+//     DIO1 -> NC
+//     RST  -> NC / externally handled
+//
+// DIO2 is used by the SX1262 as the RF switch control.
+//
 
 #pragma once
 
@@ -27,67 +39,150 @@
 #include <SPI.h>
 #include <RadioLib.h>
 
-// ---- Pin definitions -------------------------------------------------
-static const int PIN_LORA_MISO = 0;
-static const int PIN_LORA_SCK  = 1;
-static const int PIN_LORA_BUSY = 2;
-static const int PIN_LORA_MOSI = 3;
-static const int PIN_LORA_CS   = 17;
+// ============================================================================
+// HT-RA62 pin mapping
+// ============================================================================
 
-// Radio link states, surfaced to the protocol layer so it knows what
-// happened without needing to know about IRQ bits itself.
+static constexpr int PIN_LORA_MISO = 0;
+static constexpr int PIN_LORA_SCK  = 1;
+static constexpr int PIN_LORA_BUSY = 2;
+static constexpr int PIN_LORA_MOSI = 3;
+static constexpr int PIN_LORA_CS   = 17;
+
+// ============================================================================
+// Radio events
+// ============================================================================
+
 enum class RadioEvent {
+
     NONE,
+
     TX_DONE,
+
     RX_DONE,
+
     TIMEOUT,
+
     CRC_ERROR
 };
 
+// ============================================================================
+// SX1262 link
+// ============================================================================
+
 class Sx126xLink {
+
 public:
+
     Sx126xLink();
 
-    // Bring up SPI + the radio. Call once from setup().
-    // Returns true on success. On failure, check lastStatus() for the
-    // RadioLib status code (see RadioLib's RADIOLIB_ERR_* constants).
-    bool begin(float freqMHz, float bwKHz, uint8_t sf, uint8_t cr,
-               uint8_t syncWord, int8_t powerDbm, uint16_t preambleLen);
+    // Initialise the HT-RA62.
+    //
+    // freqMHz:
+    //   FANET NZ = 868.2 MHz
+    //
+    // bwKHz:
+    //   FANET NZ = 250 kHz
+    //
+    // sf:
+    //   FANET = SF7
+    //
+    // cr:
+    //   RadioLib coding-rate denominator.
+    //   5 = 4/5.
+    //
+    // syncWord:
+    //   FANET = 0xF1
+    //
+    // powerDbm:
+    //   HT-RA62 output power.
+    //
+    // preambleLen:
+    //   FANET = 8 symbols in this implementation.
+    bool begin(
+        float freqMHz,
+        float bwKHz,
+        uint8_t sf,
+        uint8_t cr,
+        uint8_t syncWord,
+        int8_t powerDbm,
+        uint16_t preambleLen
+    );
 
-    // Must be called frequently from loop() (every few ms is plenty for
-    // FANET's timing). Polls IRQ status over SPI, handles the
-    // TX-done -> re-arm-RX housekeeping, and copies out received packets.
+    // Poll the SX1262 IRQ register.
+    //
+    // Call this frequently from loop().
+    //
+    // No DIO1 is required.
     RadioEvent poll();
 
-    // Queue a packet for transmission. Internally does a channel-activity
-    // check first (best-effort CSMA) before calling startTransmit().
-    // Returns true if the packet was handed to the radio.
-    bool send(const uint8_t* data, size_t len);
+    // Check the channel using SX1262 CAD and transmit if clear.
+    //
+    // This does NOT call RadioLib::scanChannel(), because that function
+    // waits for DIO1.
+    //
+    // Returns true only when startTransmit() successfully starts the TX.
+    bool send(
+        const uint8_t* data,
+        size_t len
+    );
 
-    // After poll() returns RX_DONE, call these to retrieve the packet.
-    size_t receivedLength() const { return _rxLen; }
-    const uint8_t* receivedData() const { return _rxBuf; }
-    float lastRssi() const { return _lastRssi; }
-    float lastSnr() const { return _lastSnr; }
+    size_t receivedLength() const {
+        return _rxLen;
+    }
 
-    int16_t lastStatus() const { return _lastStatus; }
+    const uint8_t* receivedData() const {
+        return _rxBuf;
+    }
 
-    // True while a transmit is in flight (poll() hasn't seen TX_DONE yet).
-    bool isTransmitting() const { return _txInFlight; }
+    float lastRssi() const {
+        return _lastRssi;
+    }
+
+    float lastSnr() const {
+        return _lastSnr;
+    }
+
+    int16_t lastStatus() const {
+        return _lastStatus;
+    }
+
+    bool isTransmitting() const {
+        return _txInFlight;
+    }
 
 private:
-    static const size_t RX_BUF_SIZE = 256;
 
-    SPIClass    _spi;
-    Module*     _module;
-    SX1262*     _radio;
+    static constexpr size_t RX_BUF_SIZE = 256;
 
-    bool        _txInFlight;
-    uint8_t     _rxBuf[RX_BUF_SIZE];
-    size_t      _rxLen;
-    float       _lastRssi;
-    float       _lastSnr;
-    int16_t     _lastStatus;
+    // CAD should finish in only a few milliseconds at SF7 / 250 kHz.
+    // This is deliberately bounded so a radio fault can never stall the
+    // flight-computer loop indefinitely.
+    static constexpr uint32_t CAD_TIMEOUT_MS = 25;
 
+    SPIClass _spi;
+
+    Module* _module;
+    SX1262* _radio;
+
+    bool _txInFlight;
+
+    uint8_t _rxBuf[RX_BUF_SIZE];
+
+    size_t _rxLen;
+
+    float _lastRssi;
+    float _lastSnr;
+
+    int16_t _lastStatus;
+
+    // Re-arm the radio in continuous receive mode.
     void restartReceive();
+
+    // Perform DIO1-independent CAD.
+    //
+    // Returns:
+    //   true  = channel clear
+    //   false = channel busy or CAD failure
+    bool channelClear();
 };
