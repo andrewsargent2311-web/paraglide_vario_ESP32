@@ -1,4 +1,7 @@
 #include "menu.h"
+#include "wifi_manager.h"
+#include "ble_manager.h"
+#include "secrets.h"
 #include <FS.h>
 #include <SD_MMC.h>
 #include <string.h>
@@ -44,9 +47,18 @@ static void pushMenuScreen(MenuScreen screen) {
   if (screen == MENU_SCREEN_MAP) {
     scanMapFiles();
   }
+  if (screen == MENU_SCREEN_BLUETOOTH_SCAN) {
+    bleStartScan();
+  }
 }
 
 void menuGoBack() {
+  // Leaving the scan screen -- no point burning radio time on a scan
+  // nobody's looking at anymore.
+  if (currentMenuScreen() == MENU_SCREEN_BLUETOOTH_SCAN) {
+    bleStopScan();
+  }
+
   if (menuStackDepth > 1) {
     menuStackDepth--;
     menuSelectedIndex = 0;
@@ -207,7 +219,7 @@ static const uint8_t WEATHER_STATIONS_CHOICE_COUNT = 3;
 // =====================================================
 static uint8_t getMenuItemCount(MenuScreen screen) {
   switch (screen) {
-    case MENU_SCREEN_MAIN: return 5;
+    case MENU_SCREEN_MAIN: return 6;
     case MENU_SCREEN_MAIN_PAGE_SELECT: return 2;
     case MENU_SCREEN_CONFIG: return 5;
     case MENU_SCREEN_CONFIG_TIME: return TIMEZONE_CHOICE_COUNT;
@@ -219,6 +231,10 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_VARIO_BEEP_GAP_MAX: return VARIO_BEEP_CHOICE_COUNT;
     case MENU_SCREEN_VARIO_BEEP_PULSE_MIN: return VARIO_BEEP_CHOICE_COUNT;
     case MENU_SCREEN_VARIO_BEEP_PULSE_MAX: return VARIO_BEEP_CHOICE_COUNT;
+    case MENU_SCREEN_CONNECTIONS: return 2;
+    case MENU_SCREEN_WIFI_LIST: return WIFI_NETWORK_COUNT;
+    case MENU_SCREEN_BLUETOOTH: return 3;
+    case MENU_SCREEN_BLUETOOTH_SCAN: return bleScanResultCount() > 0 ? bleScanResultCount() : 1;
     case MENU_SCREEN_MAP: return mapFileCount > 0 ? mapFileCount : 1;
     case MENU_SCREEN_ADSB_SETTINGS: return 5;
     case MENU_SCREEN_ADSB_RADIUS: return ADSB_RADIUS_CHOICE_COUNT;
@@ -245,6 +261,10 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_VARIO_BEEP_GAP_MAX: return "MAX GAP";
     case MENU_SCREEN_VARIO_BEEP_PULSE_MIN: return "MIN PULSE";
     case MENU_SCREEN_VARIO_BEEP_PULSE_MAX: return "MAX PULSE";
+    case MENU_SCREEN_CONNECTIONS: return "CONNECTIONS";
+    case MENU_SCREEN_WIFI_LIST: return "WIFI";
+    case MENU_SCREEN_BLUETOOTH: return "BLUETOOTH";
+    case MENU_SCREEN_BLUETOOTH_SCAN: return "SCAN DEVICES";
     case MENU_SCREEN_MAP: return "MAP";
     case MENU_SCREEN_ADSB_SETTINGS: return "ADSB SETTINGS";
     case MENU_SCREEN_ADSB_RADIUS: return "ALERT RADIUS";
@@ -260,7 +280,7 @@ static const char* getMenuTitle(MenuScreen screen) {
 static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t buflen) {
   switch (screen) {
     case MENU_SCREEN_MAIN: {
-      static const char* items[] = { "Main Page", "Config", "Map", "ADSB Settings", "Weather Settings" };
+      static const char* items[] = { "Main Page", "Config", "Connections", "Map", "ADSB Settings", "Weather Settings" };
       snprintf(buf, buflen, "%s", items[index]);
       break;
     }
@@ -333,6 +353,58 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       snprintf(buf, buflen, "%lu ms%s", ms, isActive ? " *" : "");
       break;
     }
+    case MENU_SCREEN_CONNECTIONS: {
+      static const char* items[] = { "WiFi", "Bluetooth" };
+      snprintf(buf, buflen, "%s", items[index]);
+      break;
+    }
+    case MENU_SCREEN_WIFI_LIST: {
+      const char* ssid = WIFI_NETWORKS[index].ssid;
+      bool isEmpty = (ssid == nullptr || ssid[0] == '\0');
+      bool isSelected = (index == selectedWifiIndex);
+      if (isEmpty) {
+        snprintf(buf, buflen, "(empty)");
+      } else if (isSelected) {
+        snprintf(buf, buflen, "%s%s", ssid, wifiConnected ? " * connected" : " * connecting");
+      } else {
+        snprintf(buf, buflen, "%s", ssid);
+      }
+      break;
+    }
+    case MENU_SCREEN_BLUETOOTH:
+      switch (index) {
+        case 0:
+          snprintf(buf, buflen, "Bluetooth: %s", bleEnabled ? "On" : "Off");
+          break;
+        case 1:
+          snprintf(buf, buflen, "Scan for Devices");
+          break;
+        case 2:
+          if (bleRememberedAddress[0] != '\0') {
+            const char* label = (bleRememberedName[0] != '\0') ? bleRememberedName : bleRememberedAddress;
+            snprintf(buf, buflen, "Forget: %s%s", label, bleConnected ? " (connected)" : "");
+          } else {
+            snprintf(buf, buflen, "No Device Saved");
+          }
+          break;
+      }
+      break;
+    case MENU_SCREEN_BLUETOOTH_SCAN:
+      if (!bleEnabled) {
+        snprintf(buf, buflen, "Bluetooth is Off");
+      } else if (bleScanResultCount() == 0) {
+        snprintf(buf, buflen, "Scanning...");
+      } else {
+        BleScanResult r = bleScanResultAt(index);
+        const char* label = (r.name[0] != '\0') ? r.name : r.address;
+        bool isConnectedRow = bleConnected && bleRememberedAddress[0] != '\0'
+                               && strcasecmp(r.address, bleRememberedAddress) == 0;
+        char shortLabel[20];
+        strncpy(shortLabel, label, sizeof(shortLabel) - 1);
+        shortLabel[sizeof(shortLabel) - 1] = '\0';
+        snprintf(buf, buflen, "%s %ddBm%s", shortLabel, r.rssi, isConnectedRow ? " *" : "");
+      }
+      break;
     case MENU_SCREEN_MAP:
       if (mapFileCount == 0) {
         snprintf(buf, buflen, "No Maps Found");
@@ -410,9 +482,10 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
       switch (index) {
         case 0: pushMenuScreen(MENU_SCREEN_MAIN_PAGE_SELECT); break;
         case 1: pushMenuScreen(MENU_SCREEN_CONFIG); break;
-        case 2: pushMenuScreen(MENU_SCREEN_MAP); break;
-        case 3: pushMenuScreen(MENU_SCREEN_ADSB_SETTINGS); break;
-        case 4: pushMenuScreen(MENU_SCREEN_WEATHER_SETTINGS); break;
+        case 2: pushMenuScreen(MENU_SCREEN_CONNECTIONS); break;
+        case 3: pushMenuScreen(MENU_SCREEN_MAP); break;
+        case 4: pushMenuScreen(MENU_SCREEN_ADSB_SETTINGS); break;
+        case 5: pushMenuScreen(MENU_SCREEN_WEATHER_SETTINGS); break;
       }
       playFeedbackTone(900.0f, 80);
       return;
@@ -506,6 +579,62 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
       climbPulseMaxMs = VARIO_BEEP_CHOICE_MS(index);
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to Vario Beep
+      return;
+
+    case MENU_SCREEN_CONNECTIONS:
+      switch (index) {
+        case 0: pushMenuScreen(MENU_SCREEN_WIFI_LIST); break;
+        case 1: pushMenuScreen(MENU_SCREEN_BLUETOOTH); break;
+      }
+      playFeedbackTone(900.0f, 80);
+      return;
+
+    case MENU_SCREEN_WIFI_LIST: {
+      const char* ssid = WIFI_NETWORKS[index].ssid;
+      if (ssid != nullptr && ssid[0] != '\0') {
+        selectWifiNetwork(index);
+        playFeedbackTone(1100.0f, 120);
+      } else {
+        playFeedbackTone(300.0f, 60);  // empty slot -- nothing to connect to
+      }
+      menuGoBack();  // back to Connections
+      return;
+    }
+
+    case MENU_SCREEN_BLUETOOTH:
+      switch (index) {
+        case 0:
+          // Cycles in place, like the ADS-B toggles -- stays on this
+          // screen so the pilot can immediately hit "Scan for Devices"
+          // right after turning it on.
+          bleSetEnabled(!bleEnabled);
+          displayDirty = true;
+          playFeedbackTone(600.0f, 50);
+          return;
+        case 1:
+          pushMenuScreen(MENU_SCREEN_BLUETOOTH_SCAN);
+          playFeedbackTone(900.0f, 80);
+          return;
+        case 2:
+          if (bleRememberedAddress[0] != '\0') {
+            bleForgetDevice();
+            playFeedbackTone(600.0f, 50);
+          } else {
+            playFeedbackTone(300.0f, 60);
+          }
+          displayDirty = true;
+          return;
+      }
+      return;
+
+    case MENU_SCREEN_BLUETOOTH_SCAN:
+      if (bleEnabled && bleScanResultCount() > 0) {
+        bleConnectToScanResult(index);
+        playFeedbackTone(1100.0f, 120);
+      } else {
+        playFeedbackTone(300.0f, 60);
+      }
+      menuGoBack();  // back to Bluetooth (also stops the scan -- see menuGoBack())
       return;
 
     case MENU_SCREEN_MAP:

@@ -51,6 +51,15 @@ extern uint8_t activePageIndex;
 //   |           |-- VARIO_BEEP_GAP_MAX     (longest gap between beeps)
 //   |           |-- VARIO_BEEP_PULSE_MIN   (shortest beep length)
 //   |           `-- VARIO_BEEP_PULSE_MAX   (longest beep length)
+//   |-- CONNECTIONS
+//   |     |-- WIFI              (pick a saved network -- see secrets.h;
+//   |     |                      choice is remembered across reboots)
+//   |     `-- BLUETOOTH
+//   |           |-- (On/Off toggle, cycled in place)
+//   |           |-- SCAN        (live-updating list of nearby BLE
+//   |           |                devices -- select one to connect; this
+//   |           |                board is BLE-only, no Classic BT)
+//   |           `-- (Forget Device -- only actionable once one's saved)
 //   |-- MAP                (list of *.ADEM files found on the SD card)
 //   |-- ADSB_SETTINGS
 //   |     |-- ADSB_RADIUS       (horizontal alert trigger distance)
@@ -82,6 +91,10 @@ enum MenuScreen {
   MENU_SCREEN_VARIO_BEEP_GAP_MAX,
   MENU_SCREEN_VARIO_BEEP_PULSE_MIN,
   MENU_SCREEN_VARIO_BEEP_PULSE_MAX,
+  MENU_SCREEN_CONNECTIONS,
+  MENU_SCREEN_WIFI_LIST,
+  MENU_SCREEN_BLUETOOTH,
+  MENU_SCREEN_BLUETOOTH_SCAN,
   MENU_SCREEN_MAP,
   MENU_SCREEN_ADSB_SETTINGS,
   MENU_SCREEN_ADSB_RADIUS,

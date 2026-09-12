@@ -26,17 +26,16 @@
 #include "settings.h"
 #include "Sx126xLink.h"
 #include "Fanet.h"
+#include "wifi_manager.h"
+#include "ble_manager.h"
 // =====================================================
-// WIFI (feeds Weather + ADS-B pages)
+// WIFI (feeds Weather + ADS-B pages) + BLUETOOTH (engine meter)
+// Connection details (saved networks, remembered BLE device) live in
+// secrets.h / wifi_manager.cpp / ble_manager.cpp, and are picked/managed
+// from the Connections menu -- see menu.cpp. wifiConnected/bleConnected
+// are declared in wifi_manager.h/ble_manager.h respectively.
 // =====================================================
-//#define WIFI_SSID "Your SSID goes here" uncomment to set SSID
-//#define WIFI_PASSWORD "Your wifi password goes here" uncomment to set password
 #define WIFI_CONNECT_TIMEOUT_MS 10000  // give up after this long in setup()
-#define WIFI_RETRY_MS 50000            // how often loop() retries a dropped connection
-unsigned long lastWifiRetry = 0;
-uint8_t wifiRetryCount = 0;
-constexpr uint8_t MAX_WIFI_RETRIES = 10;
-bool wifiDisabledUntilReboot = false;
 // =====================================================
 // ESP32-S3-RLCD-4.2 DISPLAY
 // =====================================================
@@ -366,6 +365,11 @@ struct WindMeter {
   bool valid;
 };
 
+// How many characters of a station's name drawWeatherPage() will show --
+// matches WindMeter::name's own storage above, so nothing gets truncated
+// that wasn't already cut off further upstream.
+#define WEATHER_STATION_NAME_MAX 20
+
 // Max stations collected and sorted by distance; weatherStationsShown
 // (settings.h), editable from Weather Settings > Stations Shown, controls
 // how many of these drawWeatherPage() actually draws (2/4/6).
@@ -553,12 +557,9 @@ uint8_t batteryPercent = 0;
 unsigned long lastBattSample = 0;
 bool battInitialized = false;
 
-// Placeholder connectivity state -- not yet wired to real WiFi/BT.
-// WiFi gets initialized for real when the Weather page is built out
-// (item 6); this just gives the top bar something honest to show
-// ("--") until then instead of a fabricated status.
-volatile bool wifiConnected = false;
-bool btConnected = false;
+// wifiConnected (wifi_manager.h) and bleConnected/bleEnabled
+// (ble_manager.h) are the real connectivity state now -- see the
+// Connections menu (menu.cpp) for where they're set.
 
 // =====================================================
 // TIME & SCHEDULING
@@ -598,7 +599,6 @@ void es8311WriteReg(uint8_t reg, uint8_t value);
 void es8311Init();
 void applyBuzzerVolume();
 void setToneFrequency(float freq);
-bool connectWiFi(unsigned long timeoutMs);
 void performADSBUpdate();
 float getDistanceKM(float lat1, float lon1, float lat2, float lon2);
 float getBearing(float lat1, float lon1, float lat2, float lon2);
@@ -807,14 +807,19 @@ void setup() {
                   fanetRadio.lastStatus());
   }
 
-  wifiConnected = connectWiFi(WIFI_CONNECT_TIMEOUT_MS);
+  loadWifiSettings();
+  wifiConnected = connectSavedWifi(WIFI_CONNECT_TIMEOUT_MS);
   if (wifiConnected) {
     Serial.print("WIFI CONNECTED, IP: ");
     Serial.println(WiFi.localIP());
   } else {
     Serial.println("WIFI NOT CONNECTED -- will retry in background");
   }
-  lastWifiRetry = millis();
+
+  // Brings up the BLE stack and, if a device was remembered from a
+  // previous session (e.g. the engine meter), turns Bluetooth on and
+  // starts looking for it -- see ble_manager.cpp.
+  loadBleSettings();
 
   // I2S data path first (no I2C dependency), then the ES8311 chip
   // itself over I2C -- Wire.begin() already ran above, so this is
@@ -1468,49 +1473,12 @@ void backgroundTask(void* parameter) {
     uint32_t now = millis();
 
     // ---------------------------------------------------------
-    // Wi-Fi monitoring / reconnect
+    // Wi-Fi + Bluetooth connection management -- the connect/retry state
+    // machines themselves now live in wifi_manager.cpp/ble_manager.cpp
+    // (this used to all be inline here).
     // ---------------------------------------------------------
-    if (!wifiConnected && wifiRetryCount < MAX_WIFI_RETRIES && now - lastWifiRetry >= WIFI_RETRY_MS) {
-
-      lastWifiRetry = now;
-
-      if (WiFi.status() == WL_CONNECTED) {
-
-        wifiConnected = true;
-        wifiRetryCount = 0;
-
-        Serial.println("WIFI RECONNECTED");
-
-      } else {
-
-        wifiRetryCount++;
-
-        WiFi.disconnect();
-        WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-        Serial.print("WIFI RETRY ");
-        Serial.print(wifiRetryCount);
-        Serial.print("/");
-        Serial.println(MAX_WIFI_RETRIES);
-
-        if (wifiRetryCount >= MAX_WIFI_RETRIES) {
-          WiFi.disconnect(true);
-          WiFi.mode(WIFI_OFF);
-
-          Serial.println("WIFI DISABLED UNTIL REBOOT");
-        }
-      }
-    }
-
-    // Detect Wi-Fi drop
-    if (wifiConnected && WiFi.status() != WL_CONNECTED) {
-
-      wifiConnected = false;
-
-      Serial.println("WIFI DROPPED");
-
-      wifiRetryCount = 0;
-    }
+    wifiManagerLoop();
+    bleManagerLoop();
 
     // ---------------------------------------------------------
     // Network state machines
@@ -2742,22 +2710,6 @@ void updateBattery() {
 
   float pct = (batteryVoltage - BATT_EMPTY_V) / (BATT_FULL_V - BATT_EMPTY_V) * 100.0f;
   batteryPercent = (uint8_t)constrain(pct, 0.0f, 100.0f);
-}
-// =====================================================
-// WIFI: non-blocking connect attempt. Called once from setup() with a
-// bounded timeout, and periodically from loop() to retry a dropped
-// connection -- never blocks loop() the way WiFi.begin()+delay() would.
-// =====================================================
-bool connectWiFi(unsigned long timeoutMs) {
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
-    delay(200);  // only used here, during the bounded setup() attempt
-  }
-
-  return WiFi.status() == WL_CONNECTED;
 }
 // =====================================================
 // CLOCK
@@ -4041,6 +3993,12 @@ void drawWeatherPage() {
 
   // ---------------------------------------------------------
   // 1. Row layout
+  //
+  // topPaddingPx/bottomPaddingPx are independent, so line 1 (station
+  // name) can sit close to the box top while line 3 (GUST) stays
+  // anchored to the box bottom -- line 2 is split evenly between them
+  // below (see step 7), rather than every line being a fixed offset
+  // stacked from the top the way it used to be.
   // ---------------------------------------------------------
   const int startY = TOP_BAR_HEIGHT_PX;
   const int availableHeight = SCREEN_H - startY;
@@ -4048,11 +4006,12 @@ void drawWeatherPage() {
   const int rowHeight =
     availableHeight / weatherStationsShown;
 
-  const int rowPaddingPx = 6;
+  const int topPaddingPx = 3;
+  const int bottomPaddingPx = 6;
   const int lineGapPx = 4;
 
   int perLineBudget =
-    (rowHeight - rowPaddingPx - 2 * lineGapPx) / 3;
+    (rowHeight - topPaddingPx - bottomPaddingPx - 2 * lineGapPx) / 3;
 
   if (perLineBudget < 8) {
     perLineBudget = 8;
@@ -4081,17 +4040,30 @@ void drawWeatherPage() {
   // ---------------------------------------------------------
   // 3. Determine vertical font sizing.
   //
-  // This continues to control the three-line row spacing for
-  // 2 / 4 / 6 station modes.
+  // ONE bold font is picked here and used for BOTH the AVE/GUST values
+  // AND the line spacing (lineHeight), so the spacing always matches
+  // what's actually drawn -- previously these were sized independently
+  // (numbers were hardcoded to helvB14 regardless of this), which is
+  // part of why the station name ended up sitting well below the box
+  // top no matter how much room a row actually had.
   // ---------------------------------------------------------
-  const uint8_t* rowFont =
+  const uint8_t* boldNumberFont =
     pickBoldFontForHeight(perLineBudget);
 
-  u8g2.setFont(rowFont);
+  u8g2.setFont(boldNumberFont);
 
   const int lineHeight =
     u8g2.getFontAscent() -
     u8g2.getFontDescent();
+
+  // Small labels/units/distance/compass -- one step larger than before
+  // (10px -> 12px), but only if that still fits under whatever
+  // lineHeight this row ended up with, so it can never overflow a line.
+  const uint8_t* regularFont = u8g2_font_helvR12_tf;
+  u8g2.setFont(regularFont);
+  if (u8g2.getFontAscent() - u8g2.getFontDescent() > lineHeight) {
+    regularFont = u8g2_font_helvR10_tf;
+  }
 
   // ---------------------------------------------------------
   // 4. Determine the REAL horizontal space available for
@@ -4110,7 +4082,7 @@ void drawWeatherPage() {
   int minimumNameWidth =
     SCREEN_W - stationNameX;
 
-  u8g2.setFont(u8g2_font_helvR10_tf);
+  u8g2.setFont(regularFont);
 
   for (int i = 0;
        i < weatherStationsShown &&
@@ -4178,9 +4150,11 @@ void drawWeatherPage() {
   // ---------------------------------------------------------
   // 5. Find the LONGEST displayed station name.
   //
-  // The 15-character display limit is retained.
+  // WEATHER_STATION_NAME_MAX (20) characters are allowed -- matches
+  // WindMeter::name's own storage, so nothing gets truncated here that
+  // wasn't already cut off further upstream.
   // ---------------------------------------------------------
-  char longestStationName[16] = "";
+  char longestStationName[WEATHER_STATION_NAME_MAX + 1] = "";
   int longestNameLength = 0;
 
   for (int i = 0;
@@ -4192,12 +4166,12 @@ void drawWeatherPage() {
       continue;
     }
 
-    char nameBuf[22];
+    char nameBuf[WEATHER_STATION_NAME_MAX + 1];
 
     snprintf(
       nameBuf,
       sizeof(nameBuf),
-      "%.20s",
+      "%.20s",  // keep in sync with WEATHER_STATION_NAME_MAX
       localMetersSnapshot[i].name);
 
     int nameLength =
@@ -4219,43 +4193,36 @@ void drawWeatherPage() {
   }
 
   // ---------------------------------------------------------
-  // 6. Select ONE normal-weight font for ALL station names.
-  //
-  // We start with 14 px and reduce only if the LONGEST name
-  // won't fit in the smallest available row width.
+  // 6. Select ONE font for ALL station names -- one step larger than
+  // before (14/12/10 -> 18/14/12/10 ladder), but every candidate is
+  // checked against lineHeight as well as width, so a bigger station
+  // name font can never vertically overflow into the next line even
+  // when there's plenty of horizontal room for it.
   // ---------------------------------------------------------
-  const uint8_t* stationNameFont =
-    u8g2_font_helvR10_tf;
+  const uint8_t* nameFontLadder[] = {
+    u8g2_font_helvR18_tf,
+    u8g2_font_helvR14_tf,
+    u8g2_font_helvR12_tf,
+    u8g2_font_helvR10_tf
+  };
 
-  if (longestNameLength > 0) {
+  const uint8_t* stationNameFont = u8g2_font_helvR10_tf;  // safe fallback
 
-    u8g2.setFont(u8g2_font_helvR14_tf);
+  for (const uint8_t* candidate : nameFontLadder) {
+    u8g2.setFont(candidate);
 
-    int width14 =
-      u8g2.getStrWidth(longestStationName);
+    int candidateHeight =
+      u8g2.getFontAscent() -
+      u8g2.getFontDescent();
 
-    if (width14 <= minimumNameWidth) {
+    if (candidateHeight > lineHeight) {
+      continue;  // would overflow this row vertically -- try smaller
+    }
 
-      stationNameFont =
-        u8g2_font_helvR14_tf;
-
-    } else {
-
-      u8g2.setFont(u8g2_font_helvR12_tf);
-
-      int width12 =
-        u8g2.getStrWidth(longestStationName);
-
-      if (width12 <= minimumNameWidth) {
-
-        stationNameFont =
-          u8g2_font_helvR12_tf;
-
-      } else {
-
-        stationNameFont =
-          u8g2_font_helvR10_tf;
-      }
+    if (longestNameLength == 0 ||
+        u8g2.getStrWidth(longestStationName) <= minimumNameWidth) {
+      stationNameFont = candidate;
+      break;
     }
   }
 
@@ -4287,31 +4254,46 @@ void drawWeatherPage() {
     }
 
     // =======================================================
+    // Line baselines -- line 1 sits close to the top (small
+    // topPaddingPx), line 3 is anchored to the bottom (bottomPaddingPx
+    // up from the box's bottom edge, same margin GUST always used to
+    // land on by accident before), and line 2 is split evenly between
+    // them so it never bunches up against either neighbour.
+    // =======================================================
+    const int line1Y =
+      currentBoxY +
+      topPaddingPx +
+      lineHeight;
+
+    const int line3Y =
+      currentBoxY +
+      rowHeight -
+      bottomPaddingPx;
+
+    const int line2Y =
+      (line1Y + line3Y) / 2;
+
+    // =======================================================
     // LINE 1
     // Station name + distance + compass
     // =======================================================
 
-    const int line1Y =
-      currentBoxY +
-      rowPaddingPx +
-      lineHeight;
-
     // -------------------------------------------------------
     // Station name
     // -------------------------------------------------------
-    char stationNameBuf[16];
+    char stationNameBuf[WEATHER_STATION_NAME_MAX + 1];
 
     snprintf(
       stationNameBuf,
       sizeof(stationNameBuf),
-      "%.15s",
+      "%.20s",  // keep in sync with WEATHER_STATION_NAME_MAX
       localMetersSnapshot[i].name);
 
     // -------------------------------------------------------
     // Calculate this row's actual right-hand information
     // position before drawing the station name.
     // -------------------------------------------------------
-    u8g2.setFont(u8g2_font_helvR10_tf);
+    u8g2.setFont(regularFont);
 
     const char* geoCompass =
       getCompassDirection(
@@ -4355,7 +4337,7 @@ void drawWeatherPage() {
     // selected using the longest name. It protects us if a
     // particular row has less room than expected.
     // -------------------------------------------------------
-    char clippedStationName[16];
+    char clippedStationName[WEATHER_STATION_NAME_MAX + 1];
 
     strncpy(
       clippedStationName,
@@ -4388,7 +4370,7 @@ void drawWeatherPage() {
     // -------------------------------------------------------
     // Draw distance
     // -------------------------------------------------------
-    u8g2.setFont(u8g2_font_helvR10_tf);
+    u8g2.setFont(regularFont);
 
     u8g2.drawStr(
       distanceX,
@@ -4408,11 +4390,6 @@ void drawWeatherPage() {
     // AVE: [BOLD NUMBER] [unit] [wind direction]
     // =======================================================
 
-    const int line2Y =
-      line1Y +
-      lineGapPx +
-      lineHeight;
-
     char aveNumberBuf[12];
 
     snprintf(
@@ -4425,7 +4402,7 @@ void drawWeatherPage() {
     // -------------------------------------------------------
     // AVE label - small normal font
     // -------------------------------------------------------
-    u8g2.setFont(u8g2_font_helvR10_tf);
+    u8g2.setFont(regularFont);
 
     const char* aveLabel =
       "AVE:";
@@ -4441,7 +4418,7 @@ void drawWeatherPage() {
     // -------------------------------------------------------
     // Average speed NUMBER - large bold font
     // -------------------------------------------------------
-    u8g2.setFont(u8g2_font_helvB14_tf);
+    u8g2.setFont(boldNumberFont);
 
     const int aveNumberX =
       6 +
@@ -4456,7 +4433,7 @@ void drawWeatherPage() {
     // -------------------------------------------------------
     // Unit - small normal font
     // -------------------------------------------------------
-    u8g2.setFont(u8g2_font_helvR10_tf);
+    u8g2.setFont(regularFont);
 
     const char* unit =
       speedUnitLabel();
@@ -4498,11 +4475,6 @@ void drawWeatherPage() {
     // GUST: [BOLD NUMBER] [unit]
     // =======================================================
 
-    const int line3Y =
-      line2Y +
-      lineGapPx +
-      lineHeight;
-
     char gustNumberBuf[12];
 
     snprintf(
@@ -4515,7 +4487,7 @@ void drawWeatherPage() {
     // -------------------------------------------------------
     // GUST label - small normal font
     // -------------------------------------------------------
-    u8g2.setFont(u8g2_font_helvR10_tf);
+    u8g2.setFont(regularFont);
 
     const char* gustLabel =
       "GUST:";
@@ -4531,7 +4503,7 @@ void drawWeatherPage() {
     // -------------------------------------------------------
     // Gust speed NUMBER - large bold font
     // -------------------------------------------------------
-    u8g2.setFont(u8g2_font_helvB14_tf);
+    u8g2.setFont(boldNumberFont);
 
     const int gustNumberX =
       6 +
@@ -4546,7 +4518,7 @@ void drawWeatherPage() {
     // -------------------------------------------------------
     // Unit - small normal font
     // -------------------------------------------------------
-    u8g2.setFont(u8g2_font_helvR10_tf);
+    u8g2.setFont(regularFont);
 
     const int gustNumberWidth =
       u8g2.getStrWidth(gustNumberBuf);
