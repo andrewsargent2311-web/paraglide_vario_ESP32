@@ -98,4 +98,25 @@ void bleForgetDevice();
 // the number of bytes copied.
 size_t bleReadLatestEngineData(uint8_t* outBuf, size_t outBufLen, bool* outIsNew);
 
+// =====================================================
+// DECODED ENGINE TELEMETRY
+//
+// bleManagerLoop() decodes the nRF52840 engine meter's 9-byte NUS packet
+// (see the layout comment above decodeEnginePacket() in ble_manager.cpp)
+// into these fields every time a new, checksum-valid notification
+// arrives. Pages/menus should read these rather than touching
+// bleReadLatestEngineData()'s raw bytes directly.
+//
+// engineDataValid is automatically cleared ~2s after the last good
+// packet (engine meter out of range, powered off, or disconnected) so a
+// stale reading doesn't sit on screen looking current -- always check it
+// before displaying engineRpm/engineEgtC/engineChtC.
+// =====================================================
+extern volatile bool engineDataValid;
+extern volatile float engineRpm;     // RPM
+extern volatile float engineEgtC;    // Exhaust gas temp, deg C
+extern volatile float engineChtC;    // Cylinder head temp, deg C
+extern volatile bool engineEgtFault; // true if the EGT thermocouple amp reported a fault (open/short circuit)
+extern volatile bool engineChtFault; // same, for the CHT channel
+
 #endif  // BLE_MANAGER_H

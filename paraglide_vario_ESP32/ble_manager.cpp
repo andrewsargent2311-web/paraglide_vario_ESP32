@@ -64,6 +64,26 @@ static void startScanBurst();
 static void onScanComplete(BLEScanResults results);
 static void tryConnect(BLEAddress address, const char* name);
 static void rememberDevice(const char* address, const char* name);
+static void decodeEnginePacket(const uint8_t* buf, size_t len);
+
+// =====================================================
+// DECODED ENGINE TELEMETRY -- see ble_manager.h for field docs. Written
+// only from decodeEnginePacket(), called from bleManagerLoop() (main/UI
+// core), so no separate mutex needed the way engineDataBuf's raw bytes
+// have one -- there's no BLE-stack-task writer to race against here.
+// =====================================================
+#define ENGINE_DATA_TIMEOUT_MS 2000UL
+#define ENGINE_PKT_HEADER 0xAE
+#define ENGINE_PKT_LEN 9
+
+volatile bool engineDataValid = false;
+volatile float engineRpm = 0.0f;
+volatile float engineEgtC = 0.0f;
+volatile float engineChtC = 0.0f;
+volatile bool engineEgtFault = false;
+volatile bool engineChtFault = false;
+
+static unsigned long lastEngineDataMillis = 0;
 
 // =====================================================
 // ADVERTISED-DEVICE CALLBACK: runs on the BLE stack's own task, once per
@@ -76,6 +96,17 @@ class VarioAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
     String addr = advertisedDevice.getAddress().toString().c_str();
     String name = advertisedDevice.haveName() ? advertisedDevice.getName().c_str() : "";
     int rssi = advertisedDevice.haveRSSI() ? advertisedDevice.getRSSI() : -127;
+
+    Serial.printf("[BLE SCAN] Address: %s | Name: %s | RSSI: %d\n",
+              advertisedDevice.getAddress().toString().c_str(),
+              advertisedDevice.haveName() ? advertisedDevice.getName().c_str() : "(none)",
+              advertisedDevice.getRSSI());
+
+     Serial.printf("[BLE SCAN] hasName=%d hasServiceUUID=%d hasManufacturerData=%d\n",
+              advertisedDevice.haveName(),
+              advertisedDevice.haveServiceUUID(),
+              advertisedDevice.haveManufacturerData());
+
 
     if (bleStateMutex != nullptr && xSemaphoreTake(bleStateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
       int slot = -1;
@@ -91,8 +122,15 @@ class VarioAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
       if (slot >= 0) {
         strncpy(scanResults[slot].address, addr.c_str(), sizeof(scanResults[slot].address) - 1);
         scanResults[slot].address[sizeof(scanResults[slot].address) - 1] = '\0';
-        strncpy(scanResults[slot].name, name.c_str(), BLE_DEVICE_NAME_MAX_LEN - 1);
-        scanResults[slot].name[BLE_DEVICE_NAME_MAX_LEN - 1] = '\0';
+        // Only replace the stored name if this advertisement actually contains one.
+        // A BLE peripheral may send its name in a scan-response packet after the
+        // initial advertisement, so don't erase a previously discovered name.
+        if (name.length() > 0) {
+        strncpy(scanResults[slot].name,
+            name.c_str(),
+            BLE_DEVICE_NAME_MAX_LEN - 1);
+    scanResults[slot].name[BLE_DEVICE_NAME_MAX_LEN - 1] = '\0';
+}
         scanResults[slot].rssi = rssi;
       }
       xSemaphoreGive(bleStateMutex);
@@ -336,6 +374,18 @@ void bleSetEnabled(bool enabled) {
 }
 
 void bleManagerLoop() {
+  // ---- Engine telemetry: decode any new notification, and time out a
+  // stale reading, regardless of connect/reconnect state below. ----
+  uint8_t rawBuf[BLE_ENGINE_DATA_MAX_LEN];
+  bool isNew = false;
+  size_t n = bleReadLatestEngineData(rawBuf, sizeof(rawBuf), &isNew);
+  if (isNew) {
+    decodeEnginePacket(rawBuf, n);
+  }
+  if (engineDataValid && millis() - lastEngineDataMillis > ENGINE_DATA_TIMEOUT_MS) {
+    engineDataValid = false;  // engine meter went quiet -- out of range, off, or disconnected
+  }
+
   if (!bleEnabled || bleConnected || connectPending) return;
   if (bleRememberedAddress[0] == '\0') return;  // nothing to look for
 
@@ -344,6 +394,43 @@ void bleManagerLoop() {
 
   lastReconnectAttempt = now;
   startScanBurst();  // VarioAdvertisedDeviceCallbacks::onResult() triggers the actual connect on a match
+}
+
+// =====================================================
+// ENGINE PACKET DECODE -- matches the nice!nano engine meter's fixed
+// 9-byte layout (see sendEnginePacket() in the engine meter's firmware):
+//   byte 0    : 0xAE header
+//   byte 1-2  : uint16_t RPM, little-endian
+//   byte 3-4  : int16_t  EGT, little-endian, 0.1 degC units
+//   byte 5-6  : int16_t  CHT, little-endian, 0.1 degC units
+//   byte 7    : flags (bit0 = EGT fault, bit1 = CHT fault)
+//   byte 8    : checksum = XOR of bytes 0..7
+// Silently drops anything that doesn't match length/header/checksum --
+// a garbled or torn notification just gets skipped rather than shown.
+// =====================================================
+static void decodeEnginePacket(const uint8_t* buf, size_t len) {
+  if (len != ENGINE_PKT_LEN || buf[0] != ENGINE_PKT_HEADER) return;
+
+  uint8_t chk = 0;
+  for (int i = 0; i < 8; i++) chk ^= buf[i];
+  if (chk != buf[8]) {
+    Serial.println("[BLE] Engine packet checksum mismatch -- dropped");
+    return;
+  }
+
+  uint16_t rpmRaw = (uint16_t)buf[1] | ((uint16_t)buf[2] << 8);
+  int16_t egtRaw = (int16_t)((uint16_t)buf[3] | ((uint16_t)buf[4] << 8));
+  int16_t chtRaw = (int16_t)((uint16_t)buf[5] | ((uint16_t)buf[6] << 8));
+  uint8_t flags = buf[7];
+
+  engineRpm = (float)rpmRaw;
+  engineEgtC = egtRaw / 10.0f;
+  engineChtC = chtRaw / 10.0f;
+  engineEgtFault = (flags & 0x01) != 0;
+  engineChtFault = (flags & 0x02) != 0;
+
+  engineDataValid = true;
+  lastEngineDataMillis = millis();
 }
 
 // =====================================================

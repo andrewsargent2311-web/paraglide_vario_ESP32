@@ -25,6 +25,7 @@
 #include "OpenAirScanner.h"  // AirspaceResult
 #include "menu.h"            // Page, PAGE_PARAGLIDER / PAGE_WEATHER / PAGE_ADSB / PAGE_PARAMOTOR, PAGE_COUNT
 #include "settings.h"        // altitudeUnitLabel(), altitudeToDisplay(), speedUnitLabel(), speedKphToDisplay(), etc.
+#include "ble_manager.h"     // engineDataValid/engineRpm/engineEgtC/engineChtC for drawParamotorPage()
 
 // =====================================================
 // Display-related constants (moved here from the .ino so both the .ino

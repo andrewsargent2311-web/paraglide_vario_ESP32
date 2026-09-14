@@ -1584,8 +1584,16 @@ void drawADSBPage() {
 }
 
 // =====================================================
-// PARAMOTOR PAGE: same flight data layout as the paraglider page, with
-// engine temperature and RPM reserved in the bottom row.
+// PARAMOTOR PAGE: ALTITUDE / V GROUND / AGL/AIR SPC boxes are copied
+// straight from drawParagliderPage() (same code, same positions) so the
+// two pages stay visually consistent and any future tweak to those boxes
+// only has to be made in one place conceptually (this duplication is a
+// known tradeoff -- see the note below if that becomes annoying).
+// WIND/AIRSPEED moves into the CLIMB RATE box's old slot (row 1, col 0)
+// since climb rate isn't meaningful under power. Bottom row is engine
+// data: RPM (col 0), CHT (col 1). EGT is intentionally left out here --
+// a menu option to show CHT-only vs CHT+EGT is coming (not every motor
+// has an EGT bung), so this page doesn't touch engineEgtC yet.
 // =====================================================
 void drawParamotorPage() {
   const int top = TOP_BAR_HEIGHT_PX;
@@ -1599,58 +1607,123 @@ void drawParamotorPage() {
     }
   }
 
+  // =========================================================
+  // BOX (0,0): ALTITUDE -- identical to drawParagliderPage()
+  // =========================================================
   u8g2.setFont(u8g2_font_helvB10_tf);
   u8g2.drawStr(5, top + 14, "ALTITUDE");
-  if (bmpOK && windowCount > 0) {
-    snprintf(buffer, sizeof(buffer), "%d %s", (int)roundf(altitudeToDisplay(currentAltitudeM)), altitudeUnitLabel());
-  } else {
-    snprintf(buffer, sizeof(buffer), "--");
-  }
-  drawLargestBoldCentered(colW / 2, top + rowH / 2 + 10, colW - 10, buffer);
 
+  if (bmpOK && windowCount > 0) {
+    snprintf(buffer, sizeof(buffer), "%d", (int)roundf(altitudeToDisplay(currentAltitudeM)));
+    drawLargeValueWithSmallUnit(colW / 2, top + rowH / 2 + 20, colW - 10, buffer, altitudeUnitLabel());
+  } else {
+    drawLargeValueWithSmallUnit(colW / 2, top + rowH / 2 + 10, colW - 10, "--", altitudeUnitLabel());
+  }
+
+  // =========================================================
+  // BOX (0,1): V GROUND + HDG -- identical to drawParagliderPage()
+  // =========================================================
   u8g2.setFont(u8g2_font_helvB10_tf);
   u8g2.drawStr(colW + 5, top + 14, "V GROUND");
+
   if (gps.speed.isValid()) {
-    snprintf(buffer, sizeof(buffer), "%d %s", (int)roundf(speedKphToDisplay(gps.speed.kmph())), speedUnitLabel());
+    snprintf(buffer, sizeof(buffer), "%d", (int)roundf(speedKphToDisplay(gps.speed.kmph())));
+    drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH / 2, colW - 10, buffer, speedUnitLabel());
   } else {
-    snprintf(buffer, sizeof(buffer), "NO FIX");
+    drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH / 2, colW - 10, "--", speedUnitLabel());
   }
-  drawLargestBoldCentered(colW + colW / 2, top + rowH / 2, colW - 10, buffer);
+
+  u8g2.setFont(u8g2_font_helvB10_tf);
   if (gps.course.isValid()) {
-    snprintf(buffer, sizeof(buffer), "HDG %d deg", (int)gps.course.deg());
+    snprintf(buffer, sizeof(buffer), "HDG %s", getCompassDirection(gps.course.deg()));
   } else {
     snprintf(buffer, sizeof(buffer), "HDG ---");
   }
-  u8g2.setFont(u8g2_font_helvB10_tf);
-  u8g2.drawStr(colW + (colW - u8g2.getStrWidth(buffer)) / 2, top + rowH - 16, buffer);
+  u8g2.drawStr(colW + (colW - u8g2.getStrWidth(buffer)) / 2 - 20, top + rowH - 16, buffer);
 
+  // =========================================================
+  // BOX (1,0): WIND / AIRSPEED -- same code as drawParagliderPage()'s
+  // box (2,1), just re-anchored to row 1 / col 0 (no colW offset, one
+  // rowH instead of two).
+  // =========================================================
   u8g2.setFont(u8g2_font_helvB10_tf);
-  u8g2.drawStr(5, top + rowH + 14, "CLIMB RATE");
-  if (bmpOK && windowCount >= 3) {
-    snprintf(buffer, sizeof(buffer), "%+.1f m/s", currentClimbRateMS);
+  u8g2.drawStr(5, top + rowH + 14, "WIND / AIRSPEED");
+
+  char windBuf[20];
+  char airBuf[20];
+  char windDirBuf[20];
+  if (windEstimateValid) {
+    snprintf(windBuf, sizeof(windBuf), "WIND %.0f %s", speedKphToDisplay(estimatedWindSpeedKph), speedUnitLabel());
+    snprintf(windDirBuf, sizeof(airBuf), "FROM %s", getCompassDirection(estimatedWindDirectionDeg));
+    snprintf(airBuf, sizeof(airBuf), "AIR %.0f %s", speedKphToDisplay(estimatedAirspeedKph), speedUnitLabel());
   } else {
-    snprintf(buffer, sizeof(buffer), "-- m/s");
+    snprintf(windBuf, sizeof(windBuf), "WIND -- %s", speedUnitLabel());
+    snprintf(windDirBuf, sizeof(windDirBuf), "FROM --");
+    snprintf(airBuf, sizeof(airBuf), "AIR -- %s", speedUnitLabel());
   }
-  drawLargestBoldCentered(colW / 2, top + rowH + rowH / 2 + 10, colW - 10, buffer);
 
+  u8g2.setFont(u8g2_font_helvB14_tf);
+  u8g2.drawStr((colW - u8g2.getStrWidth(windBuf)) / 2, top + rowH + 40, windBuf);
+  u8g2.drawStr((colW - u8g2.getStrWidth(windBuf)) / 2, top + rowH + 60, windDirBuf);
+  u8g2.drawStr((colW - u8g2.getStrWidth(airBuf)) / 2, top + rowH + 100, airBuf);
+
+  // =========================================================
+  // BOX (1,1): ALT AGL / AIR SPC -- identical to drawParagliderPage()
+  // =========================================================
   u8g2.setFont(u8g2_font_helvB10_tf);
-  u8g2.drawStr(colW + 5, top + rowH + 14, "ALTITUDE AGL");
+  u8g2.drawStr(colW + 5, top + rowH + 14, "AGL/AIR SPC");
+
+  char aglLineBuf[24];
   if (bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid) {
     float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
-    snprintf(buffer, sizeof(buffer), "%.0f %s", altitudeToDisplay(aglM), altitudeUnitLabel());
-    drawLargestBoldCentered(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, buffer);
+    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: %d%s", (int)roundf(altitudeToDisplay(aglM)), altitudeUnitLabel());
   } else {
-    snprintf(buffer, sizeof(buffer), "-- %s", altitudeUnitLabel());
-    drawLargestBoldCentered(colW + colW / 2, top + rowH + rowH / 2 + 10, colW - 10, buffer);
+    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: --%s", altitudeUnitLabel());
   }
 
-  u8g2.setFont(u8g2_font_helvB10_tf);
-  u8g2.drawStr(5, top + 2 * rowH + 14, "ENG TEMP");
-  drawLargestBoldCentered(colW / 2, top + 2 * rowH + rowH / 2 + 10, colW - 10, "-- C");
+  AirspaceResult boxAirspace;
+  bool boxAirspaceValid = getAirspaceSnapshot(boxAirspace);
 
+  char vertBuf[24];
+  char horiBuf[24];
+  if (boxAirspaceValid) {
+    snprintf(vertBuf, sizeof(vertBuf), "NR VERT: %dft", (int)roundf(boxAirspace.vertDistance_ft));
+    snprintf(horiBuf, sizeof(horiBuf), "NR HORI: %.1fkm", boxAirspace.horizDistance_km);
+  } else {
+    snprintf(vertBuf, sizeof(vertBuf), "NR VERT: --ft");
+    snprintf(horiBuf, sizeof(horiBuf), "NR HORI: --km");
+  }
+
+  u8g2.drawStr(colW + 5, top + rowH + rowH / 2, aglLineBuf);
+  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 20, vertBuf);
+  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 40, horiBuf);
+
+  // =========================================================
+  // BOX (2,0): RPM -- from the nRF52840 engine meter over BLE, see
+  // engineDataValid/engineRpm in ble_manager.h.
+  // =========================================================
   u8g2.setFont(u8g2_font_helvB10_tf);
-  u8g2.drawStr(colW + 5, top + 2 * rowH + 14, "RPM");
-  drawLargestBoldCentered(colW + colW / 2, top + 2 * rowH + rowH / 2 + 10, colW - 10, "----");
+  u8g2.drawStr(5, top + 2 * rowH + 14, "RPM");
+  if (engineDataValid) {
+    snprintf(buffer, sizeof(buffer), "%.0f", engineRpm);
+  } else {
+    snprintf(buffer, sizeof(buffer), "----");
+  }
+  drawLargestBoldCentered(colW / 2, top + 2 * rowH + rowH / 2 + 10, colW - 10, buffer);
+
+  // =========================================================
+  // BOX (2,1): CHT -- EGT intentionally omitted for now (see function
+  // header comment); a per-channel thermocouple fault shows as "--"
+  // rather than a wrong-looking number.
+  // =========================================================
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  u8g2.drawStr(colW + 5, top + 2 * rowH + 14, "CHT");
+  if (engineDataValid && !engineChtFault) {
+    snprintf(buffer, sizeof(buffer), "%.0f C", engineChtC);
+  } else {
+    snprintf(buffer, sizeof(buffer), "-- C");
+  }
+  drawLargestBoldCentered(colW + colW / 2, top + 2 * rowH + rowH / 2 + 10, colW - 10, buffer);
 }
 
 void drawDashboard() {
