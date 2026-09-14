@@ -46,21 +46,18 @@ void loadWifiSettings() {
   selectedWifiIndex = networkSlotValid(saved) ? saved : 0;
 }
 
-bool connectSavedWifi(unsigned long timeoutMs) {
+void startWifiConnect() {
   if (!networkSlotValid(selectedWifiIndex)) {
     Serial.println("[WIFI] Selected network slot is empty -- skipping connect");
-    return false;
+    return;
   }
 
   beginConnect(selectedWifiIndex);
 
-  unsigned long start = millis();
-  while (WiFi.status() != WL_CONNECTED && millis() - start < timeoutMs) {
-    delay(200);  // only used here, during the bounded setup() attempt
-  }
-
-  wifiConnected = (WiFi.status() == WL_CONNECTED);
-  return wifiConnected;
+  // Stops wifiManagerLoop() from firing an immediate extra retry on top
+  // of the attempt we just started -- give this one WIFI_RETRY_MS to
+  // land before the retry backoff considers it stale.
+  lastWifiRetry = millis();
 }
 
 // Checks WiFi.status() every call (cheap) so a fresh connect after

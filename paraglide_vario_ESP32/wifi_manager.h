@@ -22,16 +22,20 @@ extern volatile bool wifiConnected;
 // write and the reconnect attempt always happen together.
 extern uint8_t selectedWifiIndex;
 
-// Call once from setup(), before connectSavedWifi(). Reads
+// Call once from setup(), before startWifiConnect(). Reads
 // selectedWifiIndex back from flash (defaults to 0 -- the first slot --
 // if nothing has been saved yet, e.g. first boot ever).
 void loadWifiSettings();
 
-// Bounded blocking connect attempt using whichever network is currently
-// selected -- same call site/semantics as the old connectWiFi(), for
-// setup() to call once at boot. Returns false without blocking if the
-// selected slot is empty.
-bool connectSavedWifi(unsigned long timeoutMs);
+// Non-blocking. Kicks off WiFi.begin() for whichever network is
+// currently selected and returns immediately -- does NOT wait to find
+// out whether the connection succeeds. wifiManagerLoop() (already
+// polled continuously from backgroundTask() on Core 0) picks up the
+// moment WiFi.status() flips to WL_CONNECTED and takes over retry duty
+// from there. Safe to call from setup() without stalling boot -- this
+// replaces the old connectSavedWifi(), which blocked setup() for up to
+// WIFI_CONNECT_TIMEOUT_MS (10s) waiting for the connection.
+void startWifiConnect();
 
 // Non-blocking. Call this from backgroundTask()'s existing poll loop
 // (same place the old inline retry block lived) -- reconnects a dropped

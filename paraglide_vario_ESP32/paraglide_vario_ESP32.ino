@@ -36,7 +36,6 @@
 // from the Connections menu -- see menu.cpp. wifiConnected/bleConnected
 // are declared in wifi_manager.h/ble_manager.h respectively.
 // =====================================================
-#define WIFI_CONNECT_TIMEOUT_MS 10000  // give up after this long in setup()
 // =====================================================
 // ESP32-S3-RLCD-4.2 DISPLAY
 // =====================================================
@@ -621,7 +620,7 @@ bool utcTmToEpoch(const struct tm& utc, time_t& epoch) {
 }
 void setup() {
   Serial.begin(115200);
-  delay(2000);  // give the USB CDC host a moment to attach before the first print, or it's often lost
+  delay(1000);  // give the USB CDC host a moment to attach before the first print, or it's often lost
   Serial.println("BOOTING FLIGHT COMPUTER...");
   Serial.printf("[BOOT] Free heap: %u | Min heap: %u\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
 
@@ -656,156 +655,29 @@ void setup() {
   Serial1.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
   Serial.println("GPS UART INITIALIZED");
 
+  // ---------------------------------------------------------
+  // Display + SD card brought up first, ahead of everything else that
+  // used to sit in front of them, so the splash screen can be drawn as
+  // early as possible. Previously the splash didn't appear until AFTER
+  // the BMP test loop, RTC, FANET radio, and a blocking up-to-10s WiFi
+  // connect attempt had all already run -- that's what made the screen
+  // look "dead" for ~14s after power-on even though everything was
+  // working fine the whole time (visible on Serial immediately).
+  // ---------------------------------------------------------
   SPI.begin(RLCD_SCK, -1 /*MISO unused*/, RLCD_MOSI, RLCD_CS);
   u8g2.begin();
   Serial.println("DISPLAY INITIALIZED");
   Serial.printf("[BOOT] After display - Free heap: %u | Min heap: %u\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
 
-  Wire.begin(I2C_SDA, I2C_SCL);
-  Wire.setTimeOut(50);
-
-  // Cheap presence check before touching any library's begin()/readTime():
-  // a plain I2C address probe is bounded by Wire.setTimeOut() above, so
-  // it can't hang even if a device is fully absent. This protects against
-  // library-internal init loops that might not have their own timeout --
-  // we simply never call into them for a device that isn't there.
-  uint8_t bmpAddress = 0;
-  if (i2cDevicePresent(BMP5XX_DEFAULT_I2C_ADDR)) {
-    bmpAddress = BMP5XX_DEFAULT_I2C_ADDR;
-  } else if (i2cDevicePresent(BMP5XX_ALT_I2C_ADDR)) {
-    bmpAddress = BMP5XX_ALT_I2C_ADDR;
-  }
-  bmpOK = (bmpAddress != 0) && bmp.begin(bmpAddress, &Wire);
-  if (bmpOK) {
-    // begin() leaves the sensor in NORMAL mode. Per the BMP5xx datasheet,
-    // OSR/ODR/press-enable config registers should only be written while in
-    // STANDBY -- but setOutputDataRate()/setPressureOversampling()/
-    // enablePressure() don't enforce that themselves (only the IIR filter
-    // setter does), so writing them straight after begin() means they hit
-    // the sensor mid-measurement with no guarantee they're actually applied.
-    // Force standby first, configure everything, then switch to NORMAL last
-    // so measurement only starts once the config is known-good.
-    bmp.setPowerMode(BMP5XX_POWERMODE_STANDBY);
-    bmp.setTemperatureOversampling(BMP5XX_OVERSAMPLING_2X);
-    bmp.setPressureOversampling(BMP5XX_OVERSAMPLING_8X);
-    bmp.setIIRFilterCoeff(BMP5XX_IIR_FILTER_COEFF_3);
-    bmp.setOutputDataRate(BMP5XX_ODR_50_HZ);
-    bmp.enablePressure(true);
-    bmp.setPowerMode(BMP5XX_POWERMODE_NORMAL);
-    Serial.println("BMP580 FOUND -- VARIO ACTIVE");
-    delay(100);
-
-    Serial.println("[BMP TEST] Testing sensor...");
-
-    for (int i = 0; i < 10; i++) {
-      Serial.printf("[BMP TEST] dataReady=%d\n", bmp.dataReady());
-
-      if (bmp.performReading()) {
-        Serial.printf(
-          "[BMP TEST] TEMP=%.2f C  PRESSURE=%.2f hPa\n",
-          bmp.temperature,
-          bmp.pressure);
-      } else {
-        Serial.println("[BMP TEST] performReading FAILED");
-      }
-
-      delay(100);
-    }
-  } else {
-    Serial.println("BMP580 NOT FOUND -- check wiring/address, vario disabled");
-  }
-
-  shtc3OK = shtc3.begin();
-  Serial.println(shtc3OK ? "SHTC3 TEMPERATURE SENSOR FOUND" : "SHTC3 NOT FOUND");
-
-  // RTC was previously unguarded -- readTime() ran unconditionally with
-  // no check the chip was even present. Same presence-check pattern here.
-  rtcOK = i2cDevicePresent(PCF85063_I2C_ADDR);
-  if (rtcOK) {
-    rtc.readTime();
-    struct tm rtcTm = {};
-    rtcTm.tm_hour = rtc.getHour();
-    rtcTm.tm_min = rtc.getMinute();
-    rtcTm.tm_sec = rtc.getSecond();
-    rtcTm.tm_mday = rtc.getDay();
-    rtcTm.tm_mon = rtc.getMonth() - 1;
-    rtcTm.tm_year = rtc.getYear() - 1900;
-
-    // The RTC is stored as UTC (see syncClockFromGPS()).
-    time_t rtcEpoch;
-    if (utcTmToEpoch(rtcTm, rtcEpoch)) {
-      struct timeval rtcTv = { .tv_sec = rtcEpoch, .tv_usec = 0 };
-      settimeofday(&rtcTv, nullptr);
-      clockSynced = true;
-      Serial.println("Clock seeded from PCF85063 hardware RTC");
-    } else {
-      Serial.println("PCF85063 RTC has no valid date -- waiting for GPS");
-    }
-  } else {
-    Serial.println("PCF85063 RTC NOT FOUND -- clock will sync from GPS once it has a fix");
-  }
   // ESP32-S3 has no fixed default SDMMC pin set (unlike classic ESP32) --
-  // pins must be assigned explicitly before begin().
+  // pins must be assigned explicitly before begin(). Done here, ahead of
+  // its old spot further down, purely so the splash image can be loaded
+  // from SD before everything else runs.
   if (!SD_MMC.setPins(SD_MMC_CLK_PIN, SD_MMC_CMD_PIN, SD_MMC_D0_PIN)) {
     Serial.println("SD_MMC.setPins() failed");
   }
   sdCardOK = SD_MMC.begin("/sdcard", true);  // true = 1-bit mode (only D0 is wired)
   Serial.println(sdCardOK ? "SD CARD MOUNTED" : "SD CARD NOT FOUND -- IGC recording disabled");
-
-  // ---------------------------------------------------------
-  // FANET radio (HT-RA62 / SX1262). Own SPI bus (see pin comment at the
-  // fanetRadio declaration) -- independent of the display's SPI.begin()
-  // above, so order relative to that doesn't matter.
-  // ---------------------------------------------------------
-  fanetRadioOK = fanetRadio.begin(/*freqMHz=*/868.2f, /*bwKHz=*/250.0f,
-                                   /*sf=*/7, /*cr=*/5, /*syncWord=*/0xF1,
-                                   /*powerDbm=*/14, /*preambleLen=*/8);
-  if (fanetRadioOK) {
-    fanet.begin();
-    fanet.onTracking(onFanetTracking);
-    fanet.setBeaconIntervalMs(FANET_BEACON_INTERVAL_MS);
-    Serial.println("FANET RADIO INITIALIZED");
-  } else {
-    Serial.printf("FANET RADIO INIT FAILED -- status=%d (FANET disabled)\n",
-                  fanetRadio.lastStatus());
-  }
-
-  loadWifiSettings();
-  wifiConnected = connectSavedWifi(WIFI_CONNECT_TIMEOUT_MS);
-  if (wifiConnected) {
-    Serial.print("WIFI CONNECTED, IP: ");
-    Serial.println(WiFi.localIP());
-  } else {
-    Serial.println("WIFI NOT CONNECTED -- will retry in background");
-  }
-
-  // Brings up the BLE stack and, if a device was remembered from a
-  // previous session (e.g. the engine meter), turns Bluetooth on and
-  // starts looking for it -- see ble_manager.cpp.
-  loadBleSettings();
-
-  // I2S data path first (no I2C dependency), then the ES8311 chip
-  // itself over I2C -- Wire.begin() already ran above, so this is
-  // safe here. Order matters: es8311Init() before the chip exists
-  // would just fail its presence check.
-  Serial.println("[BOOT] Calling setupI2sCodec()...");
-  setupI2sCodec();
-  Serial.println("[BOOT] setupI2sCodec() returned OK");
-
-  Serial.println("[BOOT] Calling es8311Init()...");
-  es8311Init();
-  Serial.println("[BOOT] es8311Init() returned OK");
-
-  // Enable the speaker amp ONCE here and leave it enabled for the rest of
-  // the flight (see AMP_ENABLE_PIN comments in updateI2sAudioBuzzer() for
-  // why -- toggling it on/off per beep was clipping/silencing every short
-  // tone). "No sound" is produced by writing silence over I2S, not by
-  // powering the amp down.
-  if (codecOK && es8311OK) {
-    digitalWrite(AMP_ENABLE_PIN, HIGH);
-  }
-
-  pinMode(KEY_PIN, INPUT_PULLUP);
 
   Serial.println("[BOOT] Drawing splash screen...");
 
@@ -854,11 +726,180 @@ void setup() {
     free(splashBuf);
   }
 
-  Serial.println(splashImageLoaded ? "[BOOT] Splash image drawn, entering 3s delay..."
-                                    : "[BOOT] Splash screen drawn, entering 3s delay...");
-  delay(SPLASH_DISPLAY_MS);
-  //esp_task_wdt_reset(); // feed the watchdog after the splash delay, before any blocking HTTP work
-  Serial.println("[BOOT] Splash delay complete");
+  // Timestamp the draw rather than just sleeping SPLASH_DISPLAY_MS right
+  // here -- everything below now runs WHILE the splash is already on
+  // screen, and we only make up the remaining time (if any) once it's
+  // all done. See the "Splash hold" block below.
+  unsigned long splashDrawnAt = millis();
+  Serial.println(splashImageLoaded ? "[BOOT] Splash image drawn"
+                                    : "[BOOT] Splash screen drawn (text fallback)");
+
+  // ---------------------------------------------------------
+  // Everything below is init that the pilot doesn't need to see happen
+  // -- it now runs after something is already showing on screen instead
+  // of before it.
+  // ---------------------------------------------------------
+
+  Wire.begin(I2C_SDA, I2C_SCL);
+  Wire.setTimeOut(50);
+
+  // Cheap presence check before touching any library's begin()/readTime():
+  // a plain I2C address probe is bounded by Wire.setTimeOut() above, so
+  // it can't hang even if a device is fully absent. This protects against
+  // library-internal init loops that might not have their own timeout --
+  // we simply never call into them for a device that isn't there.
+  uint8_t bmpAddress = 0;
+  if (i2cDevicePresent(BMP5XX_DEFAULT_I2C_ADDR)) {
+    bmpAddress = BMP5XX_DEFAULT_I2C_ADDR;
+  } else if (i2cDevicePresent(BMP5XX_ALT_I2C_ADDR)) {
+    bmpAddress = BMP5XX_ALT_I2C_ADDR;
+  }
+  bmpOK = (bmpAddress != 0) && bmp.begin(bmpAddress, &Wire);
+  if (bmpOK) {
+    // begin() leaves the sensor in NORMAL mode. Per the BMP5xx datasheet,
+    // OSR/ODR/press-enable config registers should only be written while in
+    // STANDBY -- but setOutputDataRate()/setPressureOversampling()/
+    // enablePressure() don't enforce that themselves (only the IIR filter
+    // setter does), so writing them straight after begin() means they hit
+    // the sensor mid-measurement with no guarantee they're actually applied.
+    // Force standby first, configure everything, then switch to NORMAL last
+    // so measurement only starts once the config is known-good.
+    bmp.setPowerMode(BMP5XX_POWERMODE_STANDBY);
+    bmp.setTemperatureOversampling(BMP5XX_OVERSAMPLING_2X);
+    bmp.setPressureOversampling(BMP5XX_OVERSAMPLING_8X);
+    bmp.setIIRFilterCoeff(BMP5XX_IIR_FILTER_COEFF_3);
+    bmp.setOutputDataRate(BMP5XX_ODR_50_HZ);
+    bmp.enablePressure(true);
+    bmp.setPowerMode(BMP5XX_POWERMODE_NORMAL);
+    Serial.println("BMP580 FOUND -- VARIO ACTIVE");
+    delay(100);
+
+    Serial.println("[BMP TEST] Testing sensor...");
+
+    // Trimmed from 10 iterations to 3 -- this is just a diagnostic
+    // sanity check, and each extra iteration cost a further 100ms of
+    // boot time for no functional benefit.
+    for (int i = 0; i < 3; i++) {
+      Serial.printf("[BMP TEST] dataReady=%d\n", bmp.dataReady());
+
+      if (bmp.performReading()) {
+        Serial.printf(
+          "[BMP TEST] TEMP=%.2f C  PRESSURE=%.2f hPa\n",
+          bmp.temperature,
+          bmp.pressure);
+      } else {
+        Serial.println("[BMP TEST] performReading FAILED");
+      }
+
+      delay(100);
+    }
+  } else {
+    Serial.println("BMP580 NOT FOUND -- check wiring/address, vario disabled");
+  }
+
+  shtc3OK = shtc3.begin();
+  Serial.println(shtc3OK ? "SHTC3 TEMPERATURE SENSOR FOUND" : "SHTC3 NOT FOUND");
+
+  // RTC was previously unguarded -- readTime() ran unconditionally with
+  // no check the chip was even present. Same presence-check pattern here.
+  rtcOK = i2cDevicePresent(PCF85063_I2C_ADDR);
+  if (rtcOK) {
+    rtc.readTime();
+    struct tm rtcTm = {};
+    rtcTm.tm_hour = rtc.getHour();
+    rtcTm.tm_min = rtc.getMinute();
+    rtcTm.tm_sec = rtc.getSecond();
+    rtcTm.tm_mday = rtc.getDay();
+    rtcTm.tm_mon = rtc.getMonth() - 1;
+    rtcTm.tm_year = rtc.getYear() - 1900;
+
+    // The RTC is stored as UTC (see syncClockFromGPS()).
+    time_t rtcEpoch;
+    if (utcTmToEpoch(rtcTm, rtcEpoch)) {
+      struct timeval rtcTv = { .tv_sec = rtcEpoch, .tv_usec = 0 };
+      settimeofday(&rtcTv, nullptr);
+      clockSynced = true;
+      Serial.println("Clock seeded from PCF85063 hardware RTC");
+    } else {
+      Serial.println("PCF85063 RTC has no valid date -- waiting for GPS");
+    }
+  } else {
+    Serial.println("PCF85063 RTC NOT FOUND -- clock will sync from GPS once it has a fix");
+  }
+
+  // ---------------------------------------------------------
+  // FANET radio (HT-RA62 / SX1262). Own SPI bus (see pin comment at the
+  // fanetRadio declaration) -- independent of the display's SPI.begin()
+  // above, so order relative to that doesn't matter.
+  // ---------------------------------------------------------
+  fanetRadioOK = fanetRadio.begin(/*freqMHz=*/868.2f, /*bwKHz=*/250.0f,
+                                   /*sf=*/7, /*cr=*/5, /*syncWord=*/0xF1,
+                                   /*powerDbm=*/14, /*preambleLen=*/8);
+  if (fanetRadioOK) {
+    fanet.begin();
+    fanet.onTracking(onFanetTracking);
+    fanet.setBeaconIntervalMs(FANET_BEACON_INTERVAL_MS);
+    Serial.println("FANET RADIO INITIALIZED");
+  } else {
+    Serial.printf("FANET RADIO INIT FAILED -- status=%d (FANET disabled)\n",
+                  fanetRadio.lastStatus());
+  }
+
+  // ---------------------------------------------------------
+  // WiFi: kicked off here but no longer BLOCKS setup() waiting for it.
+  // WiFi.begin() is async by nature -- wifiManagerLoop(), which already
+  // runs continuously from backgroundTask() on Core 0, picks up the
+  // moment WiFi.status() flips to WL_CONNECTED and takes over from there
+  // (retries, drop detection, etc), exactly as it already does for a
+  // connection that drops mid-flight. This used to cost up to 10 full
+  // seconds of dead time here if the saved network wasn't immediately
+  // reachable -- the single biggest contributor to the slow boot.
+  // ---------------------------------------------------------
+  loadWifiSettings();
+  startWifiConnect();
+  Serial.println("[BOOT] WiFi connect started in background");
+
+  // Brings up the BLE stack and, if a device was remembered from a
+  // previous session (e.g. the engine meter), turns Bluetooth on and
+  // starts looking for it -- see ble_manager.cpp.
+  loadBleSettings();
+
+  // I2S data path first (no I2C dependency), then the ES8311 chip
+  // itself over I2C -- Wire.begin() already ran above, so this is
+  // safe here. Order matters: es8311Init() before the chip exists
+  // would just fail its presence check.
+  Serial.println("[BOOT] Calling setupI2sCodec()...");
+  setupI2sCodec();
+  Serial.println("[BOOT] setupI2sCodec() returned OK");
+
+  Serial.println("[BOOT] Calling es8311Init()...");
+  es8311Init();
+  Serial.println("[BOOT] es8311Init() returned OK");
+
+  // Enable the speaker amp ONCE here and leave it enabled for the rest of
+  // the flight (see AMP_ENABLE_PIN comments in updateI2sAudioBuzzer() for
+  // why -- toggling it on/off per beep was clipping/silencing every short
+  // tone). "No sound" is produced by writing silence over I2S, not by
+  // powering the amp down.
+  if (codecOK && es8311OK) {
+    digitalWrite(AMP_ENABLE_PIN, HIGH);
+  }
+
+  pinMode(KEY_PIN, INPUT_PULLUP);
+
+  // ---------------------------------------------------------
+  // Hold the splash on screen for at least SPLASH_DISPLAY_MS total,
+  // measured from when it was actually drawn -- not a flat delay tacked
+  // on top of everything above. All the init above has already been
+  // "spent" against that time, so most boots see little or no extra
+  // wait here at all.
+  // ---------------------------------------------------------
+  unsigned long splashElapsedMs = millis() - splashDrawnAt;
+  if (splashElapsedMs < SPLASH_DISPLAY_MS) {
+    delay(SPLASH_DISPLAY_MS - splashElapsedMs);
+  }
+  //esp_task_wdt_reset(); // feed the watchdog after the splash hold, before any blocking HTTP work
+  Serial.println("[BOOT] Splash hold complete");
 
   // ---------------------------------------------------------
   // Cross-core plumbing for the background task (Wi-Fi reconnect,
