@@ -629,8 +629,11 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
 
     case MENU_SCREEN_BLUETOOTH_SCAN:
       if (bleEnabled && bleScanResultCount() > 0) {
-        bleConnectToScanResult(index);
-        playFeedbackTone(1100.0f, 120);
+        if (bleConnectToScanResult(index)) {
+          playFeedbackTone(1100.0f, 120);  // success
+        } else {
+          playFeedbackTone(200.0f, 250);   // low/long tone -- connect failed, check Serial for why
+        }
       } else {
         playFeedbackTone(300.0f, 60);
       }

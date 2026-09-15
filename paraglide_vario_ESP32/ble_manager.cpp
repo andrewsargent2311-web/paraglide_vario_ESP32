@@ -1,9 +1,5 @@
 #include "ble_manager.h"
-#include <BLEDevice.h>
-#include <BLEScan.h>
-#include <BLEAdvertisedDevice.h>
-#include <BLEClient.h>
-#include <BLEUtils.h>
+#include <NimBLEDevice.h>
 #include <Preferences.h>
 
 // =====================================================
@@ -23,8 +19,8 @@ static const char* NUS_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
 static const char* NUS_CHAR_TX_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";  // notify: peripheral -> us
 
 // Seconds per scan burst while the Scan menu screen is open, and while
-// hunting for a remembered device -- BLEScan::start() below is given a
-// callback so this never blocks the caller.
+// hunting for a remembered device -- NimBLEScan::start() below is given
+// a callback so this never blocks the caller.
 #define BLE_SCAN_WINDOW_S 4
 // How often bleManagerLoop() starts a fresh scan burst to look for the
 // remembered device when we're not currently connected to it.
@@ -50,9 +46,17 @@ static BleScanResult scanResults[BLE_MAX_SCAN_RESULTS];
 static uint8_t scanResultCount = 0;
 static bool scanWanted = false;  // true while the Bluetooth Scan menu screen is open
 
-static BLEClient* pClient = nullptr;
-static BLEAdvertisedDevice* pPendingConnectDevice = nullptr;
+static NimBLEClient* pClient = nullptr;
+
+// A match against the remembered device is recorded here (NOT as a
+// pointer into the scan's own device cache -- that cache gets cleared by
+// onScanComplete() right after the burst ends, so anything we want to
+// survive past the burst has to be copied out into plain fields while
+// still inside onResult()).
 static volatile bool connectPending = false;
+static char pendingConnectAddress[18] = "";
+static uint8_t pendingConnectAddressType = 0;
+static char pendingConnectName[BLE_DEVICE_NAME_MAX_LEN] = "";
 
 static uint8_t engineDataBuf[BLE_ENGINE_DATA_MAX_LEN];
 static size_t engineDataLen = 0;
@@ -61,8 +65,8 @@ static bool engineDataIsNew = false;
 static unsigned long lastReconnectAttempt = 0;
 
 static void startScanBurst();
-static void onScanComplete(BLEScanResults results);
-static void tryConnect(BLEAddress address, const char* name);
+static void onScanComplete(const NimBLEScanResults& results, int reason);
+static bool tryConnect(NimBLEAddress address, const char* name);
 static void rememberDevice(const char* address, const char* name);
 static void decodeEnginePacket(const uint8_t* buf, size_t len);
 
@@ -86,27 +90,27 @@ volatile bool engineChtFault = false;
 static unsigned long lastEngineDataMillis = 0;
 
 // =====================================================
-// ADVERTISED-DEVICE CALLBACK: runs on the BLE stack's own task, once per
-// advertisement seen during a scan burst. Records/refreshes the device
-// in our results list (for the Scan menu screen), and -- if it matches
-// whatever device we're remembering -- flags it for auto-reconnect.
+// SCAN CALLBACKS: runs on the BLE stack's own task. NimBLEScanCallbacks::
+// onResult() fires once per device per scan result, AFTER scan-response
+// data (if the device sends any -- which is where a lot of peripherals,
+// especially small nRF52 boards, put their name to leave room for a
+// service UUID in the primary advertising packet) has been merged in.
+// That merge is exactly the step the classic Bluedroid-based BLE library
+// has a long-standing open bug against, which is why this port is here.
 // =====================================================
-class VarioAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
-  void onResult(BLEAdvertisedDevice advertisedDevice) override {
-    String addr = advertisedDevice.getAddress().toString().c_str();
-    String name = advertisedDevice.haveName() ? advertisedDevice.getName().c_str() : "";
-    int rssi = advertisedDevice.haveRSSI() ? advertisedDevice.getRSSI() : -127;
+class VarioScanCallbacks : public NimBLEScanCallbacks {
+  void onResult(const NimBLEAdvertisedDevice* advertisedDevice) override {
+    String addr = advertisedDevice->getAddress().toString().c_str();
+    String name = advertisedDevice->haveName() ? advertisedDevice->getName().c_str() : "";
+    int rssi = advertisedDevice->getRSSI();
+    uint8_t addrType = advertisedDevice->getAddress().getType();
 
-    Serial.printf("[BLE SCAN] Address: %s | Name: %s | RSSI: %d\n",
-              advertisedDevice.getAddress().toString().c_str(),
-              advertisedDevice.haveName() ? advertisedDevice.getName().c_str() : "(none)",
-              advertisedDevice.getRSSI());
-
-     Serial.printf("[BLE SCAN] hasName=%d hasServiceUUID=%d hasManufacturerData=%d\n",
-              advertisedDevice.haveName(),
-              advertisedDevice.haveServiceUUID(),
-              advertisedDevice.haveManufacturerData());
-
+    Serial.printf("[BLE SCAN] Address: %s (type=%d) | Name: %s | RSSI: %d\n",
+              addr.c_str(), addrType, name.length() ? name.c_str() : "(none)", rssi);
+    Serial.printf("[BLE SCAN] hasName=%d hasServiceUUID=%d hasManufacturerData=%d\n",
+              advertisedDevice->haveName(),
+              advertisedDevice->haveServiceUUID(),
+              advertisedDevice->haveManufacturerData());
 
     if (bleStateMutex != nullptr && xSemaphoreTake(bleStateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
       int slot = -1;
@@ -122,36 +126,39 @@ class VarioAdvertisedDeviceCallbacks : public BLEAdvertisedDeviceCallbacks {
       if (slot >= 0) {
         strncpy(scanResults[slot].address, addr.c_str(), sizeof(scanResults[slot].address) - 1);
         scanResults[slot].address[sizeof(scanResults[slot].address) - 1] = '\0';
-        // Only replace the stored name if this advertisement actually contains one.
-        // A BLE peripheral may send its name in a scan-response packet after the
-        // initial advertisement, so don't erase a previously discovered name.
+        scanResults[slot].addressType = addrType;
+        // Only replace the stored name if this result actually contains one --
+        // kept as a defensive no-op belt-and-braces even though NimBLE's
+        // onResult() should already have the merged/complete name whenever
+        // the device sent one at all.
         if (name.length() > 0) {
-        strncpy(scanResults[slot].name,
-            name.c_str(),
-            BLE_DEVICE_NAME_MAX_LEN - 1);
-    scanResults[slot].name[BLE_DEVICE_NAME_MAX_LEN - 1] = '\0';
-}
+          strncpy(scanResults[slot].name, name.c_str(), BLE_DEVICE_NAME_MAX_LEN - 1);
+          scanResults[slot].name[BLE_DEVICE_NAME_MAX_LEN - 1] = '\0';
+        }
         scanResults[slot].rssi = rssi;
       }
       xSemaphoreGive(bleStateMutex);
     }
 
     // Auto-reconnect match -- only while not already connected/mid-attempt.
+    // Copy everything we need out to plain fields now: the scan's own
+    // device cache doesn't survive past onScanComplete()'s clearResults().
     if (!bleConnected && !connectPending && bleRememberedAddress[0] != '\0') {
       bool addressMatch = addr.equalsIgnoreCase(bleRememberedAddress);
       bool nameMatch = !addressMatch && bleRememberedName[0] != '\0' && name.equals(bleRememberedName);
       if (addressMatch || nameMatch) {
+        strncpy(pendingConnectAddress, addr.c_str(), sizeof(pendingConnectAddress) - 1);
+        pendingConnectAddress[sizeof(pendingConnectAddress) - 1] = '\0';
+        pendingConnectAddressType = addrType;
+        strncpy(pendingConnectName, name.c_str(), BLE_DEVICE_NAME_MAX_LEN - 1);
+        pendingConnectName[BLE_DEVICE_NAME_MAX_LEN - 1] = '\0';
         connectPending = true;
-        if (pPendingConnectDevice != nullptr) {
-          delete pPendingConnectDevice;
-        }
-        pPendingConnectDevice = new BLEAdvertisedDevice(advertisedDevice);
-        BLEDevice::getScan()->stop();  // onScanComplete() does the actual connect once this settles
+        NimBLEDevice::getScan()->stop();  // onScanComplete() does the actual connect once this settles
       }
     }
   }
 };
-static VarioAdvertisedDeviceCallbacks advertisedDeviceCallbacks;
+static VarioScanCallbacks scanCallbacks;
 
 // =====================================================
 // NOTIFY CALLBACK: fires on the BLE stack's task whenever the engine
@@ -159,7 +166,7 @@ static VarioAdvertisedDeviceCallbacks advertisedDeviceCallbacks;
 // decoding them into actual RPM/EGT/etc. fields is a job for whichever
 // page ends up displaying them, once the data format is settled.
 // =====================================================
-static void engineNotifyCallback(BLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
+static void engineNotifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
   if (engineDataMutex == nullptr || xSemaphoreTake(engineDataMutex, pdMS_TO_TICKS(20)) != pdTRUE) return;
 
   size_t n = length < sizeof(engineDataBuf) ? length : sizeof(engineDataBuf);
@@ -175,11 +182,12 @@ static void engineNotifyCallback(BLERemoteCharacteristic* pChar, uint8_t* pData,
 // by bleManagerLoop()'s reconnect timer instead of the menu silently
 // still claiming to be connected.
 // =====================================================
-class VarioClientCallbacks : public BLEClientCallbacks {
-  void onConnect(BLEClient* client) override {
+class VarioClientCallbacks : public NimBLEClientCallbacks {
+  void onConnect(NimBLEClient* client) override {
     bleConnected = true;
   }
-  void onDisconnect(BLEClient* client) override {
+  void onDisconnect(NimBLEClient* client, int reason) override {
+    Serial.printf("[BLE] Disconnected, reason=%d\n", reason);
     bleConnected = false;
   }
 };
@@ -203,7 +211,7 @@ void loadBleSettings() {
   strncpy(bleRememberedName, name.c_str(), BLE_DEVICE_NAME_MAX_LEN - 1);
   bleRememberedName[BLE_DEVICE_NAME_MAX_LEN - 1] = '\0';
 
-  BLEDevice::init("ParaVario");
+  NimBLEDevice::init("ParaVario");
 
   if (bleRememberedAddress[0] != '\0' || bleRememberedName[0] != '\0') {
     Serial.println("[BLE] Remembered device found in flash -- turning Bluetooth on to look for it");
@@ -217,25 +225,21 @@ void loadBleSettings() {
 static void startScanBurst() {
   if (!bleEnabled) return;
 
-  BLEScan* pScan = BLEDevice::getScan();
-  pScan->setAdvertisedDeviceCallbacks(&advertisedDeviceCallbacks, /*wantDuplicates=*/true);
+  NimBLEScan* pScan = NimBLEDevice::getScan();
+  pScan->setScanCallbacks(&scanCallbacks, /*wantDuplicates=*/true);
   pScan->setActiveScan(true);
   pScan->setInterval(100);
   pScan->setWindow(99);
-  pScan->start(BLE_SCAN_WINDOW_S, onScanComplete, false);
+  pScan->start(BLE_SCAN_WINDOW_S * 1000, onScanComplete, false);  // NimBLEScan::start() takes ms, not seconds
 }
 
-static void onScanComplete(BLEScanResults results) {
-  BLEDevice::getScan()->clearResults();  // free the stack's own cache -- we keep our own list in scanResults[]
+static void onScanComplete(const NimBLEScanResults& results, int reason) {
+  NimBLEDevice::getScan()->clearResults();  // free the stack's own cache -- we keep our own list in scanResults[]
 
-  if (connectPending && pPendingConnectDevice != nullptr) {
-    BLEAdvertisedDevice* dev = pPendingConnectDevice;
-    pPendingConnectDevice = nullptr;
-
-    tryConnect(dev->getAddress(), dev->haveName() ? dev->getName().c_str() : "");
-
-    delete dev;
+  if (connectPending) {
     connectPending = false;
+    NimBLEAddress addr(std::string(pendingConnectAddress), pendingConnectAddressType);
+    tryConnect(addr, pendingConnectName);
     return;  // don't immediately restart scanning right after a connect attempt
   }
 
@@ -258,7 +262,7 @@ void bleStartScan() {
 
 void bleStopScan() {
   scanWanted = false;
-  BLEDevice::getScan()->stop();
+  NimBLEDevice::getScan()->stop();
 }
 
 uint8_t bleScanResultCount() {
@@ -295,47 +299,55 @@ static void rememberDevice(const char* address, const char* name) {
   prefs.end();
 }
 
-static void tryConnect(BLEAddress address, const char* name) {
+// Returns true if the connection AND the NUS TX subscription both succeeded.
+static bool tryConnect(NimBLEAddress address, const char* name) {
   if (pClient == nullptr) {
-    pClient = BLEDevice::createClient();
-    pClient->setClientCallbacks(&clientCallbacks);
+    pClient = NimBLEDevice::createClient();
+    pClient->setClientCallbacks(&clientCallbacks, /*deleteOnDisconnect=*/false);
   }
   if (pClient->isConnected()) {
     pClient->disconnect();
   }
 
-  Serial.printf("[BLE] Connecting to %s (%s)...\n", name, address.toString().c_str());
+  Serial.printf("[BLE] Connecting to %s (%s, type=%d)...\n", name, address.toString().c_str(), address.getType());
 
+  // This is the fix for the "click and hold does nothing" problem: NimBLEAddress
+  // carries the public/random type discovered during scanning, so this connect
+  // call uses the correct type instead of silently assuming public like the
+  // classic library's BLEAddress did.
   if (!pClient->connect(address)) {
     Serial.println("[BLE] Connect failed");
-    return;
+    return false;
   }
 
-  BLERemoteService* pService = pClient->getService(NUS_SERVICE_UUID);
+  NimBLERemoteService* pService = pClient->getService(NUS_SERVICE_UUID);
   if (pService == nullptr) {
     Serial.println("[BLE] Connected, but the NUS service wasn't found -- check "
                     "NUS_SERVICE_UUID in ble_manager.cpp against your nRF52840 firmware");
-    return;
+    pClient->disconnect();
+    return false;
   }
 
-  BLERemoteCharacteristic* pChar = pService->getCharacteristic(NUS_CHAR_TX_UUID);
+  NimBLERemoteCharacteristic* pChar = pService->getCharacteristic(NUS_CHAR_TX_UUID);
   if (pChar == nullptr || !pChar->canNotify()) {
     Serial.println("[BLE] NUS TX characteristic missing or doesn't support notify -- "
                     "check NUS_CHAR_TX_UUID in ble_manager.cpp");
-    return;
+    pClient->disconnect();
+    return false;
   }
-  pChar->registerForNotify(engineNotifyCallback);
+  pChar->subscribe(true, engineNotifyCallback);
 
   rememberDevice(address.toString().c_str(), name);
   Serial.println("[BLE] Connected and subscribed to engine data");
+  return true;
 }
 
-void bleConnectToScanResult(uint8_t index) {
+bool bleConnectToScanResult(uint8_t index) {
   BleScanResult r = bleScanResultAt(index);
-  if (r.address[0] == '\0') return;
+  if (r.address[0] == '\0') return false;
 
   bleStopScan();
-  tryConnect(BLEAddress(String(r.address)), r.name);
+  return tryConnect(NimBLEAddress(std::string(r.address), r.addressType), r.name);
 }
 
 void bleForgetDevice() {
@@ -393,7 +405,7 @@ void bleManagerLoop() {
   if (now - lastReconnectAttempt < BLE_RECONNECT_RETRY_MS) return;
 
   lastReconnectAttempt = now;
-  startScanBurst();  // VarioAdvertisedDeviceCallbacks::onResult() triggers the actual connect on a match
+  startScanBurst();  // VarioScanCallbacks::onResult() triggers the actual connect on a match
 }
 
 // =====================================================

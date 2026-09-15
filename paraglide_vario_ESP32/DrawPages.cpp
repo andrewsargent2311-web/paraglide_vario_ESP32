@@ -407,6 +407,19 @@ void drawParagliderPage() {
       altitudeUnitLabel());
   }
 
+  // ALT AGL -- moved here from the AGL/AIR SPC box, bottom-centre of
+  // this box (6px up from the box's bottom edge, same margin used
+  // elsewhere on this page for a bottom-anchored line).
+  char aglLineBuf[24];
+  if (bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid) {
+    float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
+    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: %d%s", (int)roundf(altitudeToDisplay(aglM)), altitudeUnitLabel());
+  } else {
+    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: --%s", altitudeUnitLabel());
+  }
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  u8g2.drawStr((colW - u8g2.getStrWidth(aglLineBuf)) / 2, top + rowH - 6, aglLineBuf);
+
 
   // =========================================================
   // BOX (0,1): GROUND SPEED + HEADING
@@ -511,32 +524,21 @@ void drawParagliderPage() {
 
 
   // =========================================================
-  // BOX (1,1): ALT AGL / AIR SPC -- height above ground (live DEM
-  // lookup, see groundElevationFt / groundElevationValid) plus the
-  // nearest controlled airspace vertically and horizontally (see
-  // getAirspaceSnapshot(), same background-task scan used elsewhere).
-  // Each line falls back to "--" independently if its data isn't
-  // available yet (outside DEM tile, no airspace fix, baro not
-  // calibrated, etc.) rather than blanking the whole box.
+  // BOX (1,1): AIR SPACE -- ALT AGL moved out to the ALTITUDE box above,
+  // so this now just shows nearest-airspace vertical/horizontal
+  // distance (see getAirspaceSnapshot(), same background-task scan used
+  // elsewhere), recentred as a 2-line block around the box's vertical
+  // middle instead of the old 3-line block that started at the middle
+  // and ran downward. Each line falls back to "--" independently if its
+  // data isn't available yet.
   // =========================================================
-
-  u8g2.setFont(u8g2_font_helvB10_tf);  // smaller font: title is longer than (old value; u8g2_font_6x10_tf)
-                                       // the other box headers (helvB10 would
-                                       // run off the edge of the box)
-  u8g2.drawStr(
-    colW + 5,
-    top + rowH + 14,
-    "AGL/AIR SPC");
 
   u8g2.setFont(u8g2_font_helvB10_tf);
 
-  char aglLineBuf[24];
-  if (bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid) {
-    float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
-    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: %d%s", (int)roundf(altitudeToDisplay(aglM)), altitudeUnitLabel());
-  } else {
-    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: --%s", altitudeUnitLabel());
-  }
+  u8g2.drawStr(
+    colW + 5,
+    top + rowH + 14,
+    "AIR SPACE");
 
   AirspaceResult boxAirspace;
   bool boxAirspaceValid = getAirspaceSnapshot(boxAirspace);
@@ -551,9 +553,8 @@ void drawParagliderPage() {
     snprintf(horiBuf, sizeof(horiBuf), "NR HORI: --km");
   }
 
-  u8g2.drawStr(colW + 5, top + rowH + rowH / 2, aglLineBuf);
-  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 20, vertBuf);
-  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 40, horiBuf);
+  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 - 10, vertBuf);
+  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 10, horiBuf);
 
 
   // =========================================================
@@ -778,6 +779,11 @@ void drawWeatherPage() {
   if (u8g2.getFontAscent() - u8g2.getFontDescent() > lineHeight) {
     regularFont = u8g2_font_helvR10_tf;
   }
+
+  // Bold counterpart of regularFont, same size -- used for the wind
+  // direction (N/S/NE/etc) so it stands out from the plain labels/units.
+  const uint8_t* regularBoldFont =
+    (regularFont == u8g2_font_helvR12_tf) ? u8g2_font_helvB12_tf : u8g2_font_helvB10_tf;
 
   // ---------------------------------------------------------
   // 4. Determine the REAL horizontal space available for
@@ -1144,6 +1150,16 @@ void drawWeatherPage() {
       line2Y,
       aveNumberBuf);
 
+    // Measured HERE, while boldNumberFont is still the active font --
+    // measuring after switching to regularFont (as this used to do)
+    // reports the number's width as if it were drawn in the small font,
+    // which undershoots the real (wider, bold) width and pushes the
+    // unit left into the last digit. The gap grows with font size, which
+    // is why this only became visible at fewer stations (bigger row =
+    // bigger boldNumberFont = bigger error).
+    const int aveNumberWidth =
+      u8g2.getStrWidth(aveNumberBuf);
+
     // -------------------------------------------------------
     // Unit - small normal font
     // -------------------------------------------------------
@@ -1151,9 +1167,6 @@ void drawWeatherPage() {
 
     const char* unit =
       speedUnitLabel();
-
-    const int aveNumberWidth =
-      u8g2.getStrWidth(aveNumberBuf);
 
     const int unitX =
       aveNumberX +
@@ -1166,7 +1179,8 @@ void drawWeatherPage() {
       unit);
 
     // -------------------------------------------------------
-    // Wind direction reported by station
+    // Wind direction reported by station -- bold, to stand out from the
+    // plain unit/label text around it.
     // -------------------------------------------------------
     const char* windCompass =
       getCompassDirection(
@@ -1176,6 +1190,8 @@ void drawWeatherPage() {
       u8g2.getStrWidth(unit);
 
     const int windCompassGap = 8;
+
+    u8g2.setFont(regularBoldFont);
 
     u8g2.drawStr(
       unitX +
@@ -1229,13 +1245,16 @@ void drawWeatherPage() {
       line3Y,
       gustNumberBuf);
 
+    // Measured HERE (still boldNumberFont) -- see the matching comment
+    // in the AVE block above for why this has to happen before the font
+    // switches to regularFont.
+    const int gustNumberWidth =
+      u8g2.getStrWidth(gustNumberBuf);
+
     // -------------------------------------------------------
     // Unit - small normal font
     // -------------------------------------------------------
     u8g2.setFont(regularFont);
-
-    const int gustNumberWidth =
-      u8g2.getStrWidth(gustNumberBuf);
 
     const int gustUnitX =
       gustNumberX +
@@ -1620,6 +1639,19 @@ void drawParamotorPage() {
     drawLargeValueWithSmallUnit(colW / 2, top + rowH / 2 + 10, colW - 10, "--", altitudeUnitLabel());
   }
 
+  // ALT AGL -- moved here from the AGL/AIR SPC box, bottom-centre of
+  // this box (6px up from the box's bottom edge, same margin used
+  // elsewhere on this page for a bottom-anchored line).
+  char aglLineBuf[24];
+  if (bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid) {
+    float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
+    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: %d%s", (int)roundf(altitudeToDisplay(aglM)), altitudeUnitLabel());
+  } else {
+    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: --%s", altitudeUnitLabel());
+  }
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  u8g2.drawStr((colW - u8g2.getStrWidth(aglLineBuf)) / 2, top + rowH - 6, aglLineBuf);
+
   // =========================================================
   // BOX (0,1): V GROUND + HDG -- identical to drawParagliderPage()
   // =========================================================
@@ -1665,21 +1697,17 @@ void drawParamotorPage() {
   u8g2.setFont(u8g2_font_helvB14_tf);
   u8g2.drawStr((colW - u8g2.getStrWidth(windBuf)) / 2, top + rowH + 40, windBuf);
   u8g2.drawStr((colW - u8g2.getStrWidth(windBuf)) / 2, top + rowH + 60, windDirBuf);
-  u8g2.drawStr((colW - u8g2.getStrWidth(airBuf)) / 2, top + rowH + 100, airBuf);
+  u8g2.drawStr((colW - u8g2.getStrWidth(windBuf)) / 2, top + rowH + 100, airBuf);
 
   // =========================================================
-  // BOX (1,1): ALT AGL / AIR SPC -- identical to drawParagliderPage()
+  // BOX (1,1): AIR SPACE -- ALT AGL moved out to the ALTITUDE box above,
+  // so this now just shows nearest-airspace vertical/horizontal
+  // distance, recentred as a 2-line block around the box's vertical
+  // middle instead of the old 3-line block that started at the middle
+  // and ran downward.
   // =========================================================
   u8g2.setFont(u8g2_font_helvB10_tf);
-  u8g2.drawStr(colW + 5, top + rowH + 14, "AGL/AIR SPC");
-
-  char aglLineBuf[24];
-  if (bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid) {
-    float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
-    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: %d%s", (int)roundf(altitudeToDisplay(aglM)), altitudeUnitLabel());
-  } else {
-    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: --%s", altitudeUnitLabel());
-  }
+  u8g2.drawStr(colW + 5, top + rowH + 14, "AIR SPACE");
 
   AirspaceResult boxAirspace;
   bool boxAirspaceValid = getAirspaceSnapshot(boxAirspace);
@@ -1694,9 +1722,8 @@ void drawParamotorPage() {
     snprintf(horiBuf, sizeof(horiBuf), "NR HORI: --km");
   }
 
-  u8g2.drawStr(colW + 5, top + rowH + rowH / 2, aglLineBuf);
-  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 20, vertBuf);
-  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 40, horiBuf);
+  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 - 10, vertBuf);
+  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 10, horiBuf);
 
   // =========================================================
   // BOX (2,0): RPM -- from the nRF52840 engine meter over BLE, see

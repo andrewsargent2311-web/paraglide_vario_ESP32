@@ -27,7 +27,6 @@
 #include "Sx126xLink.h"
 #include "Fanet.h"
 #include "wifi_manager.h"
-#include "ble_manager.h"
 #include "DrawPages.h"
 // =====================================================
 // WIFI (feeds Weather + ADS-B pages) + BLUETOOTH (engine meter)
@@ -443,8 +442,8 @@ bool buzzerMuted = false;
 // =====================================================
 #define MUTE_TONE_FREQ_HIGH_HZ 650.0f
 #define MUTE_TONE_FREQ_LOW_HZ 500.0f
-#define MUTE_TONE_HIGH_MS 1000UL
-#define MUTE_TONE_LOW_MS 500UL
+#define MUTE_TONE_HIGH_MS 500UL
+#define MUTE_TONE_LOW_MS 200UL
 #define MUTE_TONE_GAP_MS 10UL
 
 bool muteToneActive = false;

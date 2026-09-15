@@ -4,7 +4,7 @@
 #include <Arduino.h>
 
 // =====================================================
-// BLUETOOTH (BLE CENTRAL) MANAGER
+// BLUETOOTH (BLE CENTRAL) MANAGER -- NimBLE-Arduino port
 //
 // This board (ESP32-S3) only has a Bluetooth LOW ENERGY radio -- there is
 // no Classic Bluetooth (BR/EDR) on the S3. That means this can scan for
@@ -24,6 +24,14 @@
 // bleReadLatestEngineData()'s output wherever you want to display it
 // (e.g. the Paramotor page) rather than reaching into the raw bytes from
 // multiple places.
+//
+// This file requires the "NimBLE-Arduino" library (h2zero) instead of the
+// arduino-esp32 core's bundled classic BLE library -- install it via
+// Library Manager. NimBLE fixes two problems the classic library has:
+// it reliably merges scan-response data (device names) into the scan
+// result, and its NimBLEAddress type carries the public/random address
+// type discovered during scanning through to connect(), instead of
+// silently assuming "public" the way the classic BLEAddress does.
 // =====================================================
 
 #define BLE_MAX_SCAN_RESULTS 12
@@ -32,6 +40,7 @@
 struct BleScanResult {
   char name[BLE_DEVICE_NAME_MAX_LEN];  // "" if the device didn't advertise a name
   char address[18];                    // "AA:BB:CC:DD:EE:FF\0"
+  uint8_t addressType;                 // 0 = public, 1 = random (NimBLEAddress::getType())
   int rssi;
 };
 
@@ -83,8 +92,9 @@ BleScanResult bleScanResultAt(uint8_t index);
 // Connects to whichever device is at `index` in the current scan
 // results, and remembers it (persisted to flash) so future boots
 // auto-reconnect to it. Called when the pilot selects a device from the
-// Bluetooth Scan menu screen.
-void bleConnectToScanResult(uint8_t index);
+// Bluetooth Scan menu screen. Returns true if the connection (and NUS
+// characteristic subscription) actually succeeded.
+bool bleConnectToScanResult(uint8_t index);
 
 // Disconnects (if connected) and forgets the remembered device -- future
 // boots won't try to auto-reconnect until a new one is picked.
