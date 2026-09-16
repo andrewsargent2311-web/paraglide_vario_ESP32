@@ -274,8 +274,8 @@ bool conflictDetectedThisFrame = false;
 bool interceptAlarmActive = false;
 unsigned long interceptAlarmStart = 0;
 volatile bool hasAdsbData = false;
-float MY_LAT = -41.3268;   // Replace with your target latitude
-float MY_LON = 174.8069;   // Replace with your target longitude
+float MY_LAT = gps.location.lat();   // Replace with your target latitude
+float MY_LON = gps.location.lng();   // Replace with your target longitude
 
 float deg2rad(float deg) {
   return deg * PI / 180.0f;
