@@ -1,4 +1,7 @@
 #include "settings.h"
+#include <Preferences.h>
+
+static Preferences prefs;
 
 // Defaults match the values the display code used to have hard-coded:
 // altitude in feet, ground speed in km/h, climb tone 500-1200Hz.
@@ -86,3 +89,89 @@ float adsbRingInnerKm = 15.0f;
 
 unsigned long weatherPollIntervalMs = 5UL * 60UL * 1000UL;
 uint8_t weatherStationsShown = 4;
+
+bool buzzerMuted = false;
+
+// Default matches the renamed tile now shipped on the SD card.
+char selectedDemFile[DEM_FILENAME_MAX_LEN] = "/Lower_North_Island.ADEM";
+
+// Default matches the app's original behaviour: boots on the Paraglider page.
+uint8_t mainPageSelection = 0;  // 0 = Paraglider, 1 = Paramotor
+
+// =====================================================
+// PERSISTENCE
+// =====================================================
+void loadSettings() {
+  prefs.begin("vario", false);
+
+  altitudeUnit = (AltitudeUnit)prefs.getUChar("altUnit", (uint8_t)altitudeUnit);
+  speedUnit = (SpeedUnit)prefs.getUChar("spdUnit", (uint8_t)speedUnit);
+
+  timeZoneMode = (TimeZoneMode)prefs.getUChar("tzMode", (uint8_t)timeZoneMode);
+  utcOffsetHours = (int8_t)prefs.getChar("utcOff", utcOffsetHours);
+
+  // Goes through the setter so climbToneMaxHz stays in sync, same as a
+  // normal menu change would.
+  setClimbToneMinHz(prefs.getInt("toneMinHz", climbToneMinHz));
+
+  climbGapMinMs = prefs.getUInt("gapMin", climbGapMinMs);
+  climbGapMaxMs = prefs.getUInt("gapMax", climbGapMaxMs);
+  climbPulseMinMs = prefs.getUInt("pulseMin", climbPulseMinMs);
+  climbPulseMaxMs = prefs.getUInt("pulseMax", climbPulseMaxMs);
+
+  buzzerVolumePercent = prefs.getUChar("volPct", buzzerVolumePercent);
+
+  adsbAlertRadiusKm = prefs.getFloat("adsbRadius", adsbAlertRadiusKm);
+  adsbAlertVerticalFt = prefs.getFloat("adsbVert", adsbAlertVerticalFt);
+  adsbAutoJumpEnabled = prefs.getBool("adsbJump", adsbAutoJumpEnabled);
+  adsbAlarmMuted = prefs.getBool("adsbMute", adsbAlarmMuted);
+
+  // Inner ring is always half of outer (see menu.cpp) -- only the outer
+  // value is persisted, inner is re-derived here the same way.
+  adsbRingOuterKm = prefs.getFloat("ringOuter", adsbRingOuterKm);
+  adsbRingInnerKm = adsbRingOuterKm / 2.0f;
+
+  weatherPollIntervalMs = prefs.getUInt("wxPoll", weatherPollIntervalMs);
+  weatherStationsShown = prefs.getUChar("wxStations", weatherStationsShown);
+
+  String dem = prefs.getString("demFile", selectedDemFile);
+  strncpy(selectedDemFile, dem.c_str(), DEM_FILENAME_MAX_LEN - 1);
+  selectedDemFile[DEM_FILENAME_MAX_LEN - 1] = '\0';
+
+  mainPageSelection = prefs.getUChar("mainPage", mainPageSelection);
+
+  buzzerMuted = prefs.getBool("muted", buzzerMuted);
+}
+
+void saveSettings() {
+  prefs.putUChar("altUnit", (uint8_t)altitudeUnit);
+  prefs.putUChar("spdUnit", (uint8_t)speedUnit);
+
+  prefs.putUChar("tzMode", (uint8_t)timeZoneMode);
+  prefs.putChar("utcOff", utcOffsetHours);
+
+  prefs.putInt("toneMinHz", climbToneMinHz);
+
+  prefs.putUInt("gapMin", climbGapMinMs);
+  prefs.putUInt("gapMax", climbGapMaxMs);
+  prefs.putUInt("pulseMin", climbPulseMinMs);
+  prefs.putUInt("pulseMax", climbPulseMaxMs);
+
+  prefs.putUChar("volPct", buzzerVolumePercent);
+
+  prefs.putFloat("adsbRadius", adsbAlertRadiusKm);
+  prefs.putFloat("adsbVert", adsbAlertVerticalFt);
+  prefs.putBool("adsbJump", adsbAutoJumpEnabled);
+  prefs.putBool("adsbMute", adsbAlarmMuted);
+
+  prefs.putFloat("ringOuter", adsbRingOuterKm);
+
+  prefs.putUInt("wxPoll", weatherPollIntervalMs);
+  prefs.putUChar("wxStations", weatherStationsShown);
+
+  prefs.putString("demFile", selectedDemFile);
+
+  prefs.putUChar("mainPage", mainPageSelection);
+
+  prefs.putBool("muted", buzzerMuted);
+}

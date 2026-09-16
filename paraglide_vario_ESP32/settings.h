@@ -164,4 +164,53 @@ extern uint8_t weatherStationsShown;
 // speedKphToDisplay()/speedUnitLabel() used for GPS ground speed above,
 // so all speed readouts in the app always agree on units.
 
+// =====================================================
+// VARIO MUTE
+// Toggled by a long-press of the page button (see updatePageButton() in
+// the main .ino). Lives here (rather than the .ino) so it persists the
+// same way as every other setting on this page -- see loadSettings()/
+// saveSettings() below.
+// =====================================================
+extern bool buzzerMuted;
+
+// =====================================================
+// TERRAIN DEM FILE SELECTION
+// The *.ADEM tile getGroundElevationM() (TerrainDem.h) reads from. Chosen
+// from the Map menu screen (menu.cpp's scanMapFiles()/setSelectedDemFile())
+// -- always go through setSelectedDemFile() to change it, never assign it
+// directly, since a scan running on the other core could otherwise read a
+// half-written filename. DEM_FILENAME_MAX_LEN also bounds mapFileNames[]
+// in menu.cpp and is shared (via this header) with TerrainDem.h.
+// =====================================================
+#define DEM_FILENAME_MAX_LEN 32
+extern char selectedDemFile[DEM_FILENAME_MAX_LEN];
+
+// =====================================================
+// MAIN PAGE SELECTION
+// Mirrors activePages[0] (menu.h/.ino) as a plain value rather than the
+// Page enum itself, since Page is defined in menu.h and menu.h already
+// includes this header -- storing the enum here would be circular.
+// 0 = PAGE_PARAGLIDER, 1 = PAGE_PARAMOTOR. setup() (main .ino) and the
+// Main Page Select handler (menu.cpp) are responsible for keeping
+// activePages[0]/currentPage in sync with this value.
+// =====================================================
+extern uint8_t mainPageSelection;
+
+// =====================================================
+// PERSISTENCE (NVS, via the Preferences library, namespace "vario")
+// loadSettings() reads every value on this page from flash, falling back
+// to that value's compiled-in default (above) for any key that's never
+// been written -- e.g. first boot after a fresh flash. Call once, early
+// in the main .ino's setup(), before anything (buzzer volume, climb
+// tone, etc.) reads these values.
+//
+// saveSettings() writes every value on this page to flash in one go.
+// Call it after any single value changes (see the menu.cpp selection
+// handlers and the mute toggle in the main .ino) -- simpler than a
+// bespoke save function per setting, and NVS write endurance is a
+// complete non-issue at menu-interaction frequency.
+// =====================================================
+void loadSettings();
+void saveSettings();
+
 #endif  // SETTINGS_H

@@ -11,8 +11,6 @@
 bool menuActive = false;
 uint8_t menuSelectedIndex = 0;
 
-char selectedDemFile[DEM_FILENAME_MAX_LEN] = "/DEM.ADEM";
-
 // =====================================================
 // MAP FILE LIST
 // Populated by scanMapFiles() whenever the Map screen is opened.
@@ -138,6 +136,7 @@ void setSelectedDemFile(const char* filename) {
     selectedDemFile[DEM_FILENAME_MAX_LEN - 1] = '\0';
     xSemaphoreGive(sdMutex);
   }
+  saveSettings();
 }
 
 // Strips the path and extension for a cleaner on-screen label, e.g.
@@ -494,6 +493,8 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
       activePages[0] = (index == 0) ? PAGE_PARAGLIDER : PAGE_PARAMOTOR;
       activePageIndex = 0;
       currentPage = activePages[0];
+      mainPageSelection = (index == 0) ? 0 : 1;
+      saveSettings();
       playFeedbackTone(1100.0f, 120);
       closeMenu();  // matches the original single-level behaviour: pick a
                     // main page and go straight back to flying
@@ -517,6 +518,7 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
         timeZoneMode = TZ_MODE_MANUAL;
         utcOffsetHours = (int8_t)(TIMEZONE_MANUAL_MIN_HOURS + (index - 1));
       }
+      saveSettings();
       displayDirty = true;
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to Config
@@ -530,12 +532,14 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
       } else {
         speedUnit = (SpeedUnit)((speedUnit + 1) % 3);
       }
+      saveSettings();
       displayDirty = true;
       playFeedbackTone(600.0f, 50);
       return;
 
     case MENU_SCREEN_VARIO_FREQ:
       setClimbToneMinHz(VARIO_FREQ_CHOICES[index]);
+      saveSettings();
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to Config
       return;
@@ -543,6 +547,7 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
     case MENU_SCREEN_CONFIG_VOLUME:
       buzzerVolumePercent = VOLUME_CHOICES_PERCENT[index];
       applyBuzzerVolume();  // takes effect immediately, not just on next boot
+      saveSettings();
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to Config
       return;
@@ -559,24 +564,28 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
 
     case MENU_SCREEN_VARIO_BEEP_GAP_MIN:
       climbGapMinMs = VARIO_BEEP_CHOICE_MS(index);
+      saveSettings();
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to Vario Beep
       return;
 
     case MENU_SCREEN_VARIO_BEEP_GAP_MAX:
       climbGapMaxMs = VARIO_BEEP_CHOICE_MS(index);
+      saveSettings();
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to Vario Beep
       return;
 
     case MENU_SCREEN_VARIO_BEEP_PULSE_MIN:
       climbPulseMinMs = VARIO_BEEP_CHOICE_MS(index);
+      saveSettings();
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to Vario Beep
       return;
 
     case MENU_SCREEN_VARIO_BEEP_PULSE_MAX:
       climbPulseMaxMs = VARIO_BEEP_CHOICE_MS(index);
+      saveSettings();
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to Vario Beep
       return;
@@ -664,11 +673,13 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           // Cycles in place -- stays on this screen so both toggles can
           // be flipped in one visit.
           adsbAutoJumpEnabled = !adsbAutoJumpEnabled;
+          saveSettings();
           displayDirty = true;
           playFeedbackTone(600.0f, 50);
           return;
         case 3:
           adsbAlarmMuted = !adsbAlarmMuted;
+          saveSettings();
           displayDirty = true;
           playFeedbackTone(600.0f, 50);
           return;
@@ -681,12 +692,14 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
 
     case MENU_SCREEN_ADSB_RADIUS:
       adsbAlertRadiusKm = ADSB_RADIUS_CHOICES_KM[index];
+      saveSettings();
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to ADS-B Settings
       return;
 
     case MENU_SCREEN_ADSB_VERTICAL:
       adsbAlertVerticalFt = ADSB_VERTICAL_CHOICES_FT[index];
+      saveSettings();
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to ADS-B Settings
       return;
@@ -694,6 +707,7 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
     case MENU_SCREEN_ADSB_RANGE_RINGS:
       adsbRingOuterKm = ADSB_RING_OUTER_CHOICES_KM[index];
       adsbRingInnerKm = adsbRingOuterKm / 2.0f;
+      saveSettings();
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to ADS-B Settings
       return;
@@ -708,12 +722,14 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
 
     case MENU_SCREEN_WEATHER_POLL_INTERVAL:
       weatherPollIntervalMs = WEATHER_POLL_CHOICES_MS[index];
+      saveSettings();
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to Weather Settings
       return;
 
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN:
       weatherStationsShown = WEATHER_STATIONS_CHOICES[index];
+      saveSettings();
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to Weather Settings
       return;

@@ -274,8 +274,6 @@ bool conflictDetectedThisFrame = false;
 bool interceptAlarmActive = false;
 unsigned long interceptAlarmStart = 0;
 volatile bool hasAdsbData = false;
-float MY_LAT = gps.location.lat();   // Replace with your target latitude
-float MY_LON = gps.location.lng();   // Replace with your target longitude
 
 float deg2rad(float deg) {
   return deg * PI / 180.0f;
@@ -428,8 +426,6 @@ bool es8311OK = false;  // ES8311 chip found and initialized over I2C
 
 volatile float toneFrequency = 0.0f;  // 0 = silent
 float tonePhase = 0.0f;
-
-bool buzzerMuted = false;
 
 // =====================================================
 // MUTE / UNMUTE CONFIRMATION TONE
@@ -622,6 +618,13 @@ void setup() {
   delay(1000);  // give the USB CDC host a moment to attach before the first print, or it's often lost
   Serial.println("BOOTING FLIGHT COMPUTER...");
   Serial.printf("[BOOT] Free heap: %u | Min heap: %u\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
+
+  // Pull every persisted setting out of NVS before anything below reads
+  // one of them (buzzer volume, climb tone, selected DEM file, etc.).
+  loadSettings();
+  activePages[0] = (mainPageSelection == 1) ? PAGE_PARAMOTOR : PAGE_PARAGLIDER;
+  currentPage = activePages[0];
+  Serial.println("[BOOT] Settings loaded from flash");
 
   // Heavy objects allocated here instead of as globals, so their
   // construction happens after the boot prints above are already
@@ -1187,6 +1190,7 @@ void updatePageButton() {
       longPressHandled = true;
       awaitingSecondPress = false;
       buzzerMuted = !buzzerMuted;
+      saveSettings();
       pageBeepUntil = 0;
       setToneFrequency(0);
       beepOn = false;
@@ -1225,6 +1229,20 @@ void performADSBUpdate() {
     return;
   }
 
+  // Snapshot the live GPS fix -- same mutex pattern used for the DEM/
+  // airspace scans further down loop(). Without a valid fix there's no
+  // sensible position to query adsb.fi around, so skip this poll cycle
+  // rather than falling back to a stale or default position.
+  PositionSnapshot myPos;
+  if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    myPos = sharedPosition;
+    xSemaphoreGive(backgroundDataMutex);
+  }
+  if (!myPos.valid) {
+    Serial.println("[ADS-B] No GPS fix yet -- skipping this poll");
+    return;
+  }
+
   HTTPClient http;
   WiFiClientSecure client;
 
@@ -1243,7 +1261,7 @@ void performADSBUpdate() {
   int queryRadiusKm = (int)adsbRingOuterKm;
 
   String url =
-    domain + apiPath + String(MY_LAT, 4) + "/lon/" + String(MY_LON, 4) + "/dist/" + String(queryRadiusKm);
+    domain + apiPath + String(myPos.lat, 4) + "/lon/" + String(myPos.lon, 4) + "/dist/" + String(queryRadiusKm);
 
   Serial.print("[ADS-B] Connecting to: ");
   Serial.println(url);
@@ -1383,8 +1401,8 @@ void performADSBUpdate() {
 
     float distanceKM =
       getDistanceKM(
-        MY_LAT,
-        MY_LON,
+        myPos.lat,
+        myPos.lon,
         acLat,
         acLon);
 
@@ -1660,6 +1678,22 @@ void updateWeather() {
   // ---------------------------------------------------------
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[Zephyr] WiFi not connected");
+    hasWeatherData = false;
+    return;
+  }
+
+  // ---------------------------------------------------------
+  // GPS check -- station distance/bearing below need a real position to
+  // measure from. Same sharedPosition snapshot pattern used by the
+  // DEM/airspace scans and performADSBUpdate().
+  // ---------------------------------------------------------
+  PositionSnapshot myPos;
+  if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    myPos = sharedPosition;
+    xSemaphoreGive(backgroundDataMutex);
+  }
+  if (!myPos.valid) {
+    Serial.println("[Zephyr] No GPS fix yet -- skipping this poll");
     hasWeatherData = false;
     return;
   }
@@ -2061,8 +2095,8 @@ void updateWeather() {
       // -----------------------------------------------------
       float distanceKm =
         getDistanceKM(
-          MY_LAT,
-          MY_LON,
+          myPos.lat,
+          myPos.lon,
           stLat,
           stLon);
 
@@ -2071,8 +2105,8 @@ void updateWeather() {
       // -----------------------------------------------------
       float geoBearing =
         getBearing(
-          MY_LAT,
-          MY_LON,
+          myPos.lat,
+          myPos.lon,
           stLat,
           stLon);
 

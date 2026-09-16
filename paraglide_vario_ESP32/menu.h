@@ -119,14 +119,14 @@ extern uint8_t menuSelectedIndex;
 // MAP FILE SELECTION
 // The Map screen scans the SD card root for *.ADEM tiles when opened (see
 // scanMapFiles() in menu.cpp) and lets the pilot choose which one
-// getGroundElevationM() should read from. selectedDemFile is read by the
-// DEM lookup in the main .ino's background task, guarded by sdMutex --
-// always go through setSelectedDemFile() to change it, never assign it
-// directly, or a scan running on the other core could read a half-written
-// filename.
+// getGroundElevationM() should read from. selectedDemFile (DEM_FILENAME_MAX_LEN
+// too) now lives in settings.h alongside every other persisted setting --
+// this header pulls both in via the settings.h include above. It's read
+// by the DEM lookup in the main .ino's background task, guarded by
+// sdMutex -- always go through setSelectedDemFile() to change it, never
+// assign it directly, or a scan running on the other core could read a
+// half-written filename.
 // =====================================================
-#define DEM_FILENAME_MAX_LEN 32
-extern char selectedDemFile[DEM_FILENAME_MAX_LEN];
 void setSelectedDemFile(const char* filename);
 
 // =====================================================

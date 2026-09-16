@@ -1312,6 +1312,13 @@ void drawADSBPage() {
   // 1. Gather your heading and altitude telemetry from the TinyGPS++ stream
   float gliderHeading = 0.0f;
   bool isMoving = false;
+  float MY_LAT = 0.0f;
+  float MY_LON = 0.0f;
+
+  if (gps.location.isValid()) {
+    MY_LAT = gps.location.lat();
+    MY_LON = gps.location.lng();
+}
 
   if (gps.course.isValid() && gps.course.age() < 4000 && gps.speed.knots() > 2.0f) {
     gliderHeading = (float)gps.course.deg();
