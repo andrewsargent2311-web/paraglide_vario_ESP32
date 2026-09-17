@@ -545,11 +545,14 @@ void drawParagliderPage() {
 
   char vertBuf[24];
   char horiBuf[24];
-  if (boxAirspaceValid) {
+  if (boxAirspaceValid && boxAirspace.vertKnown) {
     snprintf(vertBuf, sizeof(vertBuf), "NR VERT: %dft", (int)roundf(boxAirspace.vertDistance_ft));
-    snprintf(horiBuf, sizeof(horiBuf), "NR HORI: %.1fkm", boxAirspace.horizDistance_km);
   } else {
     snprintf(vertBuf, sizeof(vertBuf), "NR VERT: --ft");
+  }
+  if (boxAirspaceValid) {
+    snprintf(horiBuf, sizeof(horiBuf), "NR HORI: %.1fkm", boxAirspace.horizDistance_km);
+  } else {
     snprintf(horiBuf, sizeof(horiBuf), "NR HORI: --km");
   }
 
@@ -1721,11 +1724,14 @@ void drawParamotorPage() {
 
   char vertBuf[24];
   char horiBuf[24];
-  if (boxAirspaceValid) {
+  if (boxAirspaceValid && boxAirspace.vertKnown) {
     snprintf(vertBuf, sizeof(vertBuf), "NR VERT: %dft", (int)roundf(boxAirspace.vertDistance_ft));
-    snprintf(horiBuf, sizeof(horiBuf), "NR HORI: %.1fkm", boxAirspace.horizDistance_km);
   } else {
     snprintf(vertBuf, sizeof(vertBuf), "NR VERT: --ft");
+  }
+  if (boxAirspaceValid) {
+    snprintf(horiBuf, sizeof(horiBuf), "NR HORI: %.1fkm", boxAirspace.horizDistance_km);
+  } else {
     snprintf(horiBuf, sizeof(horiBuf), "NR HORI: --km");
   }
 
@@ -1741,9 +1747,9 @@ void drawParamotorPage() {
   if (engineDataValid) {
     snprintf(buffer, sizeof(buffer), "%.0f", engineRpm);
   } else {
-    snprintf(buffer, sizeof(buffer), "----");
+    snprintf(buffer, sizeof(buffer), "--");
   }
-  drawLargestBoldCentered(colW / 2, top + 2 * rowH + rowH / 2 + 10, colW - 10, buffer);
+  drawLargeValueWithSmallUnit(colW / 2, top + 2 * rowH + rowH / 2 + 10, colW - 10, buffer, "");
 
   // =========================================================
   // BOX (2,1): CHT -- EGT intentionally omitted for now (see function
@@ -1753,11 +1759,11 @@ void drawParamotorPage() {
   u8g2.setFont(u8g2_font_helvB10_tf);
   u8g2.drawStr(colW + 5, top + 2 * rowH + 14, "CHT");
   if (engineDataValid && !engineChtFault) {
-    snprintf(buffer, sizeof(buffer), "%.0f C", engineChtC);
+    snprintf(buffer, sizeof(buffer), "%.0f", engineChtC);
   } else {
-    snprintf(buffer, sizeof(buffer), "-- C");
+    snprintf(buffer, sizeof(buffer), "--");
   }
-  drawLargestBoldCentered(colW + colW / 2, top + 2 * rowH + rowH / 2 + 10, colW - 10, buffer);
+  drawLargeValueWithSmallUnit(colW + colW / 2, top + 2 * rowH + rowH / 2 + 10, colW - 10, buffer, "\xb0" "C");
 }
 
 void drawDashboard() {
@@ -1810,8 +1816,18 @@ void drawAirspaceWarning() {
 
   if (!valid) return;
 
-  bool insideNow = result.insideHoriz && result.insideVert;
-  bool nearby = !insideNow && result.horizDistance_km <= AIRSPACE_WARN_HORIZ_KM && result.vertDistance_ft <= AIRSPACE_WARN_VERT_FT;
+  // insideVert / vertDistance_ft are meaningless when result.vertKnown is
+  // false (floor or ceiling is AGL/SFC-referenced and there's currently no
+  // valid ground elevation to resolve it against -- see
+  // AirspaceResult::vertKnown). Don't claim a confident "inside" in that
+  // case -- and don't use an untrustworthy vertDistance_ft to decide
+  // "nearby" either; treat vertical range as unknown-but-possible instead,
+  // so a real infringement can't go silently unwarned just because the
+  // ground elevation lookup is temporarily unresolved.
+  bool insideNow = result.vertKnown && result.insideHoriz && result.insideVert;
+  bool nearby = !insideNow &&
+                result.horizDistance_km <= AIRSPACE_WARN_HORIZ_KM &&
+                (!result.vertKnown || result.vertDistance_ft <= AIRSPACE_WARN_VERT_FT);
 
   // One-shot alert on entering controlled airspace, not on every redraw.
   static bool wasInside = false;
@@ -1830,7 +1846,11 @@ void drawAirspaceWarning() {
     snprintf(line2, sizeof(line2), "Class %s", result.classId);
   } else {
     snprintf(line1, sizeof(line1), "%s", result.name);
-    snprintf(line2, sizeof(line2), "%.1fkm  %.0fft", result.horizDistance_km, result.vertDistance_ft);
+    if (result.vertKnown) {
+      snprintf(line2, sizeof(line2), "%.1fkm  %.0fft", result.horizDistance_km, result.vertDistance_ft);
+    } else {
+      snprintf(line2, sizeof(line2), "%.1fkm  VERT: --", result.horizDistance_km);
+    }
   }
 
   const int bannerY = TOP_BAR_HEIGHT_PX;

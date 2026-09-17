@@ -1,7 +1,7 @@
 // Sx126xLink.cpp
 
 #include "Sx126xLink.h"
-
+static void probeSX1262Raw();
 // ============================================================================
 // Constructor
 // ============================================================================
@@ -23,7 +23,72 @@ Sx126xLink::Sx126xLink()
     , _lastStatus(RADIOLIB_ERR_NONE)
 {
 }
+// ============================================================================
+// Raw SPI SX1262 probe — bypasses RadioLib entirely.
+//
+// Call this BEFORE Sx126xLink::begin() / _radio->begin().
+//
+// Sends GetStatus (0xC0) and prints:
+//   - BUSY pin behavior around the transaction
+//   - the raw status byte returned
+//
+// A responsive chip returns a status byte where bits 1-3 encode chip mode
+// and bits 4-6 encode command status. A value of 0x00 or 0xFF (stuck high/low
+// on MISO, i.e. no real reply) means the chip isn't answering over SPI at all.
+// ============================================================================
 
+void probeSX1262Raw() {
+
+    pinMode(PIN_LORA_BUSY, INPUT);
+    pinMode(PIN_LORA_CS, OUTPUT);
+    digitalWrite(PIN_LORA_CS, HIGH);
+
+    SPIClass probeSpi(HSPI);
+    probeSpi.begin(PIN_LORA_SCK, PIN_LORA_MISO, PIN_LORA_MOSI, PIN_LORA_CS);
+
+    Serial.println("[PROBE] --- Raw SX1262 SPI probe ---");
+    Serial.printf("[PROBE] BUSY before probe: %d\n", digitalRead(PIN_LORA_BUSY));
+
+    // Wait for BUSY to go low (chip ready to accept a command).
+    // Bounded so we never hang forever if BUSY is stuck.
+    uint32_t waitStart = millis();
+    while (digitalRead(PIN_LORA_BUSY) == HIGH) {
+        if (millis() - waitStart > 100) {
+            Serial.println("[PROBE] BUSY never went LOW before command -- chip may be unreset/stuck");
+            break;
+        }
+    }
+    Serial.printf("[PROBE] BUSY immediately before CS low: %d (waited %lums)\n",
+                  digitalRead(PIN_LORA_BUSY), millis() - waitStart);
+
+    // --- Send GetStatus (0xC0) ---
+    probeSpi.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
+    digitalWrite(PIN_LORA_CS, LOW);
+
+    uint8_t rx0 = probeSpi.transfer(0xC0);  // opcode
+    uint8_t rx1 = probeSpi.transfer(0x00);  // NOP, status returned here
+
+    digitalWrite(PIN_LORA_CS, HIGH);
+    probeSpi.endTransaction();
+
+    Serial.printf("[PROBE] byte0 (during opcode): 0x%02X\n", rx0);
+    Serial.printf("[PROBE] byte1 (status):        0x%02X\n", rx1);
+
+    // Watch BUSY after the transaction too -- should pulse then settle low.
+    Serial.printf("[PROBE] BUSY right after CS high: %d\n", digitalRead(PIN_LORA_BUSY));
+    delay(1);
+    Serial.printf("[PROBE] BUSY +1ms after CS high:  %d\n", digitalRead(PIN_LORA_BUSY));
+
+    if (rx1 == 0x00 || rx1 == 0xFF) {
+        Serial.println("[PROBE] Status byte looks invalid (0x00/0xFF) -- MISO likely not toggling, chip not responding");
+    } else {
+        uint8_t chipMode = (rx1 >> 4) & 0x07;
+        uint8_t cmdStatus = (rx1 >> 1) & 0x07;
+        Serial.printf("[PROBE] Chip appears responsive. chipMode=%d cmdStatus=%d\n", chipMode, cmdStatus);
+    }
+
+    Serial.println("[PROBE] --- End probe ---");
+}
 // ============================================================================
 // Begin radio
 // ============================================================================
@@ -37,6 +102,8 @@ bool Sx126xLink::begin(
     int8_t powerDbm,
     uint16_t preambleLen
 ) {
+    // >>> INSERT probeSX1262Raw() CALL HERE <
+    probeSX1262Raw();
 
     // ------------------------------------------------------------------------
     // Start the dedicated FANET SPI bus.
@@ -100,7 +167,16 @@ bool Sx126xLink::begin(
     //
     // The calling sketch supplies these values.
     // ------------------------------------------------------------------------
+    Serial.println("[FANET] Starting SX1262 initialization...");
+    Serial.printf("[FANET] SPI pins: SCK=%d MISO=%d MOSI=%d CS=%d BUSY=%d\n",
+              PIN_LORA_SCK,
+              PIN_LORA_MISO,
+              PIN_LORA_MOSI,
+              PIN_LORA_CS,
+              PIN_LORA_BUSY);
 
+    Serial.printf("[FANET] BUSY pin state before begin: %d\n",
+              digitalRead(PIN_LORA_BUSY));
     _lastStatus =
         _radio->begin(
             freqMHz,
@@ -111,7 +187,8 @@ bool Sx126xLink::begin(
             powerDbm,
             preambleLen
         );
-
+    Serial.printf("[FANET] SX1262 begin() returned: %d\n",
+              _lastStatus);
     if (_lastStatus != RADIOLIB_ERR_NONE) {
 
         return false;

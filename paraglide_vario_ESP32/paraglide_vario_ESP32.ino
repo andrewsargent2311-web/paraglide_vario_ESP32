@@ -712,7 +712,32 @@ void setup() {
   } else {
     Serial.println("[BOOT] SD card not mounted -- using text splash");
   }
+  const char* CONTROLLED_CLASSES[] = {
+      "A",
+      "B",
+      "C",
+      "D",
+      "CTR"
+  };
 
+  const uint8_t NUM_CONTROLLED_CLASSES =
+      sizeof(CONTROLLED_CLASSES) /
+      sizeof(CONTROLLED_CLASSES[0]);
+
+  if (loadAirspaceDatabase(
+          "/AIRSPACE.txt",
+          CONTROLLED_CLASSES,
+          NUM_CONTROLLED_CLASSES)) {
+
+      Serial.print("Airspace database ready: ");
+      Serial.print(getAirspaceCount());
+      Serial.println(" airspaces");
+
+  } else {
+
+      Serial.println(
+          "ERROR: Airspace database failed to load");
+  }
   u8g2.firstPage();
   do {
     if (splashImageLoaded) {
@@ -1542,6 +1567,13 @@ void backgroundTask(void* parameter) {
       if (demPos.valid) {
         if (sdMutex != nullptr && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
           float elevM;
+          // getGroundElevationM() (TerrainDem.h) yields periodically via
+          // vTaskDelay() while seeking into the DEM file now, so a deep
+          // first-time seek into a large tile can't starve IDLE0 on core 0
+          // long enough to trip the task watchdog. See seekWithYield() in
+          // that file for why esp_task_wdt_reset() couldn't fix this
+          // (BackgroundTask was never watchdog-registered in the first
+          // place -- the trip was always about IDLE0, not this task).
           bool found = getGroundElevationM(selectedDemFile, demPos.lat, demPos.lon, elevM);
           xSemaphoreGive(sdMutex);
 
@@ -1558,8 +1590,13 @@ void backgroundTask(void* parameter) {
     }
 
     // ---------------------------------------------------------
-    // Airspace proximity: local SD file only, no WiFi needed, so this
-    // runs regardless of wifiConnected state.
+    // Airspace proximity: findNearestControlledAirspace() searches the
+    // in-RAM cache only (see OpenAirScanner.h -- no SD access, no
+    // parsing), so unlike the DEM lookup above this does NOT need
+    // sdMutex. It previously took sdMutex here anyway, which meant it
+    // competed with the IGC logger for the same lock every 10s for no
+    // reason -- that contention (not actual SD I/O) was why scans were
+    // being skipped.
     // ---------------------------------------------------------
     if (sdCardOK && now - airspaceScanAnchor >= AIRSPACE_SCAN_INTERVAL_MS) {
       airspaceScanAnchor = now;
@@ -1571,24 +1608,32 @@ void backgroundTask(void* parameter) {
       }
 
       if (pos.valid) {
-        if (sdMutex != nullptr && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
-          AirspaceResult scanResult;
-          bool found = findNearestControlledAirspace(
-            AIRSPACE_FILE, pos.lat, pos.lon, pos.altFt, groundElevationFt,
-            scanResult, AIRSPACE_CONTROLLED_CLASSES, AIRSPACE_NUM_CONTROLLED_CLASSES);
-          xSemaphoreGive(sdMutex);
+        AirspaceResult nearest;
 
-          if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-            if (found) {
-              nearestAirspace = scanResult;
-              airspaceResultValid = true;
-            } else {
-              airspaceResultValid = false;
-            }
-            xSemaphoreGive(backgroundDataMutex);
+        // groundElevationValid is read here, not just groundElevationFt --
+        // this is what stops an AGL/SFC-referenced floor being resolved
+        // against a stale ground elevation once the aircraft has flown
+        // outside the loaded DEM tile. See AirspaceResult::vertKnown.
+        bool found = findNearestControlledAirspace(
+          pos.lat,
+          pos.lon,
+          pos.altFt,
+          groundElevationFt,
+          groundElevationValid,
+          nearest
+        );
+
+        if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+          if (found) {
+            nearestAirspace = nearest;
+            airspaceResultValid = true;
+          } else {
+            // No controlled airspace nearby right now -- clear any stale
+            // result so the UI doesn't keep showing the last hit after
+            // the pilot has flown clear of it.
+            airspaceResultValid = false;
           }
-        } else {
-          Serial.println("[Airspace] SD busy -- scan skipped this cycle");
+          xSemaphoreGive(backgroundDataMutex);
         }
       }
     }
