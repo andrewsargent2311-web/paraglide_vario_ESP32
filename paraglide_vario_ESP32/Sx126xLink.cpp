@@ -38,7 +38,7 @@ Sx126xLink::Sx126xLink()
 // ============================================================================
 
 void probeSX1262Raw() {
-
+    delay(200);
     pinMode(PIN_LORA_BUSY, INPUT);
     pinMode(PIN_LORA_CS, OUTPUT);
     digitalWrite(PIN_LORA_CS, HIGH);
