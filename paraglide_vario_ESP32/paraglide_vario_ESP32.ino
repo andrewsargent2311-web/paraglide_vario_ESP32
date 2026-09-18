@@ -2568,7 +2568,41 @@ void updateVario() {
     Serial.println("GPS unavailable -- defaulting QNH to 1013.25, running altitude/vario off BMP580 only");
   }
 
-  currentAltitudeM = bmp.readAltitude(currentQNH);
+  float newAltitudeM = bmp.readAltitude(currentQNH);
+
+  // ------------------------------------------------------------------
+  // Outlier rejection -- guards against a single corrupted I2C read
+  // (suspected cause: RF coupling into the SDA/SCL wiring from the
+  // FANET radio during a TX burst) poisoning the climb-rate window.
+  // A paraglider physically can't jump more than a few m/s between two
+  // consecutive ~BARO_SAMPLE_MS-apart samples, so anything wildly
+  // outside that is treated as a bad sample and dropped rather than
+  // fed into the regression. Tune REJECT_RATE_MS if this ever proves
+  // too tight/loose in practice.
+  // ------------------------------------------------------------------
+  static constexpr float REJECT_RATE_MS = 15.0f;  // m/s
+
+  if (windowCount > 0) {
+    int lastIdx = (windowIndex + CLIMB_WINDOW_N - 1) % CLIMB_WINDOW_N;
+    float dt = (millis() - timeWindow[lastIdx]) / 1000.0f;
+
+    if (dt > 0.001f) {
+      float impliedRateMS = (newAltitudeM - altWindow[lastIdx]) / dt;
+
+      if (fabsf(impliedRateMS) > REJECT_RATE_MS) {
+        if (debugNow) {
+          Serial.printf(
+            "[VARIO DEBUG] Rejected outlier sample: alt=%.1f m implied=%.1f m/s "
+            "(last alt=%.1f m, dt=%.3f s) -- keeping previous window\n",
+            newAltitudeM, impliedRateMS, altWindow[lastIdx], dt);
+          lastVarioDebug = millis();
+        }
+        return;
+      }
+    }
+  }
+
+  currentAltitudeM = newAltitudeM;
 
   altWindow[windowIndex] = currentAltitudeM;
   timeWindow[windowIndex] = millis();
