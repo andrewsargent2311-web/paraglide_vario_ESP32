@@ -1,6 +1,10 @@
 // Sx126xLink.cpp
 
 #include "Sx126xLink.h"
+
+
+
+
 static void probeSX1262Raw();
 // ============================================================================
 // Constructor
@@ -8,7 +12,7 @@ static void probeSX1262Raw();
 
 Sx126xLink::Sx126xLink()
 
-    : _spi(HSPI)
+    : _spi(FSPI)
 
     , _module(nullptr)
     , _radio(nullptr)
@@ -38,57 +42,279 @@ Sx126xLink::Sx126xLink()
 // ============================================================================
 
 void probeSX1262Raw() {
-    delay(200);
+
+    Serial.println();
+    Serial.println("[PROBE] ========================================");
+    Serial.println("[PROBE] MANUAL SPI PIN TEST");
+    Serial.println("[PROBE] ========================================");
+
+    // ------------------------------------------------------------
+    // Configure pins manually
+    // ------------------------------------------------------------
+
+    pinMode(PIN_LORA_CS, OUTPUT);
+    pinMode(PIN_LORA_SCK, OUTPUT);
+    pinMode(PIN_LORA_MOSI, OUTPUT);
+    pinMode(PIN_LORA_MISO, INPUT);
     pinMode(PIN_LORA_BUSY, INPUT);
+
+    digitalWrite(PIN_LORA_CS, HIGH);
+    digitalWrite(PIN_LORA_SCK, LOW);
+    digitalWrite(PIN_LORA_MOSI, LOW);
+
+    delay(100);
+
+    Serial.printf(
+        "[PROBE] CS   = GPIO%d = %d\n",
+        PIN_LORA_CS,
+        digitalRead(PIN_LORA_CS)
+    );
+
+    Serial.printf(
+        "[PROBE] SCK  = GPIO%d = %d\n",
+        PIN_LORA_SCK,
+        digitalRead(PIN_LORA_SCK)
+    );
+
+    Serial.printf(
+        "[PROBE] MOSI = GPIO%d = %d\n",
+        PIN_LORA_MOSI,
+        digitalRead(PIN_LORA_MOSI)
+    );
+
+    Serial.printf(
+        "[PROBE] MISO = GPIO%d = %d\n",
+        PIN_LORA_MISO,
+        digitalRead(PIN_LORA_MISO)
+    );
+
+    Serial.printf(
+        "[PROBE] BUSY = GPIO%d = %d\n",
+        PIN_LORA_BUSY,
+        digitalRead(PIN_LORA_BUSY)
+    );
+
+    // ------------------------------------------------------------
+    // Manually reset the SX1262
+    // ------------------------------------------------------------
+
+    Serial.println();
+    Serial.println("[PROBE] MANUAL RESET");
+    Serial.println("[PROBE] Pull HT-RA62 RST pin 4 to GND");
+    Serial.println("[PROBE] for approximately 100 ms.");
+    Serial.println("[PROBE] Then release it.");
+    Serial.println("[PROBE] Waiting 5 seconds...");
+
+    delay(5000);
+
+    delay(100);
+
+    Serial.printf(
+        "[PROBE] BUSY after reset = %d\n",
+        digitalRead(PIN_LORA_BUSY)
+    );
+
+    // ------------------------------------------------------------
+    // Helper to send one byte manually.
+    //
+    // SPI mode 0:
+    //   clock idle LOW
+    //   sample MISO on rising edge
+    // ------------------------------------------------------------
+
+    auto transferByte = [] (uint8_t tx) -> uint8_t {
+
+        uint8_t rx = 0;
+
+        for (int8_t bit = 7; bit >= 0; bit--) {
+
+            // Set MOSI before rising edge
+            digitalWrite(
+                PIN_LORA_MOSI,
+                (tx >> bit) & 0x01
+            );
+
+            // Rising edge
+            digitalWrite(PIN_LORA_SCK, HIGH);
+
+            delayMicroseconds(2);
+
+            // Sample MISO
+            rx <<= 1;
+
+            if (digitalRead(PIN_LORA_MISO)) {
+                rx |= 1;
+            }
+
+            // Falling edge
+            digitalWrite(PIN_LORA_SCK, LOW);
+
+            delayMicroseconds(2);
+        }
+
+        return rx;
+    };
+
+    // ------------------------------------------------------------
+    // GET_STATUS = 0xC0
+    //
+    // Byte 0:
+    //     send 0xC0
+    //
+    // Byte 1:
+    //     send dummy 0x00
+    //     receive status
+    // ------------------------------------------------------------
+
+    Serial.println();
+    Serial.println("[PROBE] Sending manual GET_STATUS 0xC0...");
+
+    digitalWrite(PIN_LORA_CS, LOW);
+
+    delayMicroseconds(10);
+
+    uint8_t rx0 = transferByte(0xC0);
+    uint8_t rx1 = transferByte(0x00);
+
+    delayMicroseconds(10);
+
+    digitalWrite(PIN_LORA_CS, HIGH);
+
+    digitalWrite(PIN_LORA_MOSI, LOW);
+
+    Serial.printf(
+        "[PROBE] Manual SPI response0 = 0x%02X\n",
+        rx0
+    );
+
+    Serial.printf(
+        "[PROBE] Manual SPI status    = 0x%02X\n",
+        rx1
+    );
+
+    Serial.printf(
+        "[PROBE] BUSY after command  = %d\n",
+        digitalRead(PIN_LORA_BUSY)
+    );
+
+    // ------------------------------------------------------------
+    // Interpret result
+    // ------------------------------------------------------------
+
+    if (rx1 != 0x00 && rx1 != 0xFF) {
+
+        uint8_t chipMode =
+            (rx1 >> 4) & 0x07;
+
+        uint8_t cmdStatus =
+            (rx1 >> 1) & 0x07;
+
+        Serial.println();
+        Serial.println(
+            "[PROBE] *** SX1262 RESPONDED ***"
+        );
+
+        Serial.printf(
+            "[PROBE] chipMode  = %d\n",
+            chipMode
+        );
+
+        Serial.printf(
+            "[PROBE] cmdStatus = %d\n",
+            cmdStatus
+        );
+
+    } else {
+
+        Serial.println();
+        Serial.println(
+            "[PROBE] *** NO VALID SX1262 RESPONSE ***"
+        );
+
+        Serial.println(
+            "[PROBE] Manual GPIO SPI also returned 0x00/0xFF."
+        );
+    }
+
+    Serial.println();
+    Serial.println("[PROBE] ========================================");
+    Serial.println("[PROBE] End manual SPI test");
+    Serial.println("[PROBE] ========================================");
+}
+void probeSX1262HardwareSPI(SPIClass& spi) {
+
+    Serial.println();
+    Serial.println("[PROBE] ========================================");
+    Serial.println("[PROBE] SPIClass HARDWARE SPI TEST");
+    Serial.println("[PROBE] ========================================");
+
+    spi.begin(
+        PIN_LORA_SCK,
+        PIN_LORA_MISO,
+        PIN_LORA_MOSI,
+        PIN_LORA_CS
+    );
+
     pinMode(PIN_LORA_CS, OUTPUT);
     digitalWrite(PIN_LORA_CS, HIGH);
 
-    SPIClass probeSpi(HSPI);
-    probeSpi.begin(PIN_LORA_SCK, PIN_LORA_MISO, PIN_LORA_MOSI, PIN_LORA_CS);
+    delay(100);
 
-    Serial.println("[PROBE] --- Raw SX1262 SPI probe ---");
-    Serial.printf("[PROBE] BUSY before probe: %d\n", digitalRead(PIN_LORA_BUSY));
+    Serial.printf(
+        "[PROBE] BUSY before command = %d\n",
+        digitalRead(PIN_LORA_BUSY)
+    );
 
-    // Wait for BUSY to go low (chip ready to accept a command).
-    // Bounded so we never hang forever if BUSY is stuck.
-    uint32_t waitStart = millis();
-    while (digitalRead(PIN_LORA_BUSY) == HIGH) {
-        if (millis() - waitStart > 100) {
-            Serial.println("[PROBE] BUSY never went LOW before command -- chip may be unreset/stuck");
-            break;
-        }
-    }
-    Serial.printf("[PROBE] BUSY immediately before CS low: %d (waited %lums)\n",
-                  digitalRead(PIN_LORA_BUSY), millis() - waitStart);
+    spi.beginTransaction(
+        SPISettings(
+            100000,
+            MSBFIRST,
+            SPI_MODE0
+        )
+    );
 
-    // --- Send GetStatus (0xC0) ---
-    probeSpi.beginTransaction(SPISettings(2000000, MSBFIRST, SPI_MODE0));
     digitalWrite(PIN_LORA_CS, LOW);
 
-    uint8_t rx0 = probeSpi.transfer(0xC0);  // opcode
-    uint8_t rx1 = probeSpi.transfer(0x00);  // NOP, status returned here
+    uint8_t rx0 = spi.transfer(0xC0);
+    uint8_t rx1 = spi.transfer(0x00);
 
     digitalWrite(PIN_LORA_CS, HIGH);
-    probeSpi.endTransaction();
 
-    Serial.printf("[PROBE] byte0 (during opcode): 0x%02X\n", rx0);
-    Serial.printf("[PROBE] byte1 (status):        0x%02X\n", rx1);
+    spi.endTransaction();
 
-    // Watch BUSY after the transaction too -- should pulse then settle low.
-    Serial.printf("[PROBE] BUSY right after CS high: %d\n", digitalRead(PIN_LORA_BUSY));
-    delay(1);
-    Serial.printf("[PROBE] BUSY +1ms after CS high:  %d\n", digitalRead(PIN_LORA_BUSY));
+    Serial.printf(
+        "[PROBE] SPIClass response0 = 0x%02X\n",
+        rx0
+    );
 
-    if (rx1 == 0x00 || rx1 == 0xFF) {
-        Serial.println("[PROBE] Status byte looks invalid (0x00/0xFF) -- MISO likely not toggling, chip not responding");
+    Serial.printf(
+        "[PROBE] SPIClass status    = 0x%02X\n",
+        rx1
+    );
+
+    Serial.printf(
+        "[PROBE] BUSY after command = %d\n",
+        digitalRead(PIN_LORA_BUSY)
+    );
+
+    if (rx1 != 0x00 && rx1 != 0xFF) {
+
+        Serial.println(
+            "[PROBE] *** SPIClass CAN COMMUNICATE WITH SX1262 ***"
+        );
+
     } else {
-        uint8_t chipMode = (rx1 >> 4) & 0x07;
-        uint8_t cmdStatus = (rx1 >> 1) & 0x07;
-        Serial.printf("[PROBE] Chip appears responsive. chipMode=%d cmdStatus=%d\n", chipMode, cmdStatus);
+
+        Serial.println(
+            "[PROBE] *** SPIClass CANNOT COMMUNICATE WITH SX1262 ***"
+        );
     }
 
-    Serial.println("[PROBE] --- End probe ---");
+    Serial.println(
+        "[PROBE] ========================================"
+    );
 }
+
 // ============================================================================
 // Begin radio
 // ============================================================================
@@ -102,138 +328,85 @@ bool Sx126xLink::begin(
     int8_t powerDbm,
     uint16_t preambleLen
 ) {
-    // >>> INSERT probeSX1262Raw() CALL HERE <
-    probeSX1262Raw();
 
-    // ------------------------------------------------------------------------
-    // Start the dedicated FANET SPI bus.
-    // ------------------------------------------------------------------------
+    //probeSX1262Raw();
 
-    _spi.begin(
-        PIN_LORA_SCK,
-        PIN_LORA_MISO,
-        PIN_LORA_MOSI,
-        PIN_LORA_CS
-    );
+//probeSX1262HardwareSPI(_spi);
 
-    // ------------------------------------------------------------------------
-    // Construct RadioLib module.
-    //
-    // DIO1 = RADIOLIB_NC
-    // RST  = RADIOLIB_NC
-    //
-    // BUSY remains connected because the SX1262 requires it for SPI
-    // transaction timing.
-    // ------------------------------------------------------------------------
+            SPISettings radioSpiSettings(
+            100000,
+            MSBFIRST,
+            SPI_MODE0
+                     );
 
-    _module =
-        new Module(
-            PIN_LORA_CS,
-            RADIOLIB_NC,       // DIO1 intentionally not connected
-            RADIOLIB_NC,       // RESET intentionally not connected
-            PIN_LORA_BUSY,
-            _spi
-        );
+       Serial.println("[FANET] About to construct Module...");
 
-    if (_module == nullptr) {
+        _module =
+            new Module(
+                PIN_LORA_CS,
+                RADIOLIB_NC,
+                RADIOLIB_NC,
+                PIN_LORA_BUSY,
+                _spi,
+                radioSpiSettings
+            );
+
+        Serial.println("[FANET] Module constructed.");
+
+        if (_module == nullptr) {
+            Serial.println("[FANET] Module allocation FAILED");
+            _lastStatus = RADIOLIB_ERR_UNKNOWN;
+            return false;
+        }
+
+        Serial.println("[FANET] About to construct SX1262...");
+
+        _radio = new SX1262(_module);
+
+        Serial.println("[FANET] SX1262 constructed.");
+
+        if (_radio == nullptr) {
+            Serial.println("[FANET] SX1262 allocation FAILED");
+            _lastStatus = RADIOLIB_ERR_UNKNOWN;
+            return false;
+        }
+
+        Serial.println("[FANET] About to call RadioLib begin()...");
 
         _lastStatus =
-            RADIOLIB_ERR_UNKNOWN;
+            _radio->begin(
+                freqMHz,
+                bwKHz,
+                sf,
+                cr,
+                syncWord,
+                powerDbm,
+                preambleLen
+            );
 
-        return false;
-    }
+        Serial.printf("[FANET] RadioLib begin status = %d\n", _lastStatus);                                     
 
-    _radio =
-        new SX1262(_module);
-
-    if (_radio == nullptr) {
-
-        _lastStatus =
-            RADIOLIB_ERR_UNKNOWN;
-
-        return false;
-    }
-
-    // ------------------------------------------------------------------------
-    // Initialise LoRa modem.
-    //
-    // For New Zealand FANET:
-    //
-    //   868.2 MHz
-    //   250 kHz
-    //   SF7
-    //   CR 4/5
-    //   Sync 0xF1
-    //
-    // The calling sketch supplies these values.
-    // ------------------------------------------------------------------------
-    Serial.println("[FANET] Starting SX1262 initialization...");
-    Serial.printf("[FANET] SPI pins: SCK=%d MISO=%d MOSI=%d CS=%d BUSY=%d\n",
-              PIN_LORA_SCK,
-              PIN_LORA_MISO,
-              PIN_LORA_MOSI,
-              PIN_LORA_CS,
-              PIN_LORA_BUSY);
-
-    Serial.printf("[FANET] BUSY pin state before begin: %d\n",
-              digitalRead(PIN_LORA_BUSY));
-    _lastStatus =
-        _radio->begin(
-            freqMHz,
-            bwKHz,
-            sf,
-            cr,
-            syncWord,
-            powerDbm,
-            preambleLen
-        );
-    Serial.printf("[FANET] SX1262 begin() returned: %d\n",
-              _lastStatus);
     if (_lastStatus != RADIOLIB_ERR_NONE) {
-
         return false;
     }
-
-    // ------------------------------------------------------------------------
-    // HT-RA62 uses DIO2 for the RF switch.
-    // ------------------------------------------------------------------------
 
     _lastStatus =
         _radio->setDio2AsRfSwitch(true);
 
     if (_lastStatus != RADIOLIB_ERR_NONE) {
-
         return false;
     }
-
-    // ------------------------------------------------------------------------
-    // FANET uses normal explicit LoRa packets with CRC.
-    //
-    // RadioLib's begin() already configures the normal LoRa packet mode,
-    // but explicitly requesting CRC here makes the intended configuration
-    // clear.
-    // ------------------------------------------------------------------------
 
     _lastStatus =
-        _radio->setCRC(
-            2
-        );
+        _radio->setCRC(2);
 
     if (_lastStatus != RADIOLIB_ERR_NONE) {
-
         return false;
     }
-
-    // ------------------------------------------------------------------------
-    // Start listening.
-    // ------------------------------------------------------------------------
 
     restartReceive();
 
-    return (
-        _lastStatus ==
-        RADIOLIB_ERR_NONE
-    );
+    return (_lastStatus == RADIOLIB_ERR_NONE);
 }
 
 // ============================================================================
