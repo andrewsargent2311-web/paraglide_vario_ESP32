@@ -12,7 +12,7 @@ static void probeSX1262Raw();
 
 Sx126xLink::Sx126xLink()
 
-    : _spi(FSPI)
+    : _spi(HSPI)
 
     , _module(nullptr)
     , _radio(nullptr)
@@ -267,7 +267,7 @@ void probeSX1262HardwareSPI(SPIClass& spi) {
 
     spi.beginTransaction(
         SPISettings(
-            100000,
+            1000000,
             MSBFIRST,
             SPI_MODE0
         )
