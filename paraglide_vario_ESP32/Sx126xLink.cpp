@@ -1,5 +1,5 @@
 // Sx126xLink.cpp
-
+#define RADIOLIB_DEBUG
 #include "Sx126xLink.h"
 
 
@@ -329,62 +329,85 @@ bool Sx126xLink::begin(
     uint16_t preambleLen
 ) {
 
-    //probeSX1262Raw();
+    // ------------------------------------------------------------------------
+    // Bring up the SPI bus on the HT-RA62's actual pins.
+    //
+    // ROOT CAUSE (found via probeSX1262Raw()):
+    //
+    //   A manual bit-banged GET_STATUS (0xC0) on these exact pins returned a
+    //   valid SX1262 status byte (0x22 -> STBY_RC / OK), proving the chip and
+    //   wiring are both fine.
+    //
+    //   RadioLib's Module/SPIClass path, however, never had these pins told
+    //   to it. Without an explicit spi.begin(sck, miso, mosi, cs), ESP32's
+    //   SPIClass silently falls back to its default FSPI/HSPI pin mapping,
+    //   which is NOT GPIO0/1/2/3/17. RadioLib's SPI transactions were
+    //   therefore going out on the wrong pins entirely, which is why
+    //   SX1262::begin() reported RADIOLIB_ERR_CHIP_NOT_FOUND (-2) even though
+    //   the chip itself was answering correctly.
+    //
+    // This must happen before Module/SX1262 issue any SPI transactions.
+    // ------------------------------------------------------------------------
 
-//probeSX1262HardwareSPI(_spi);
+    _spi.begin(
+        PIN_LORA_SCK,
+        PIN_LORA_MISO,
+        PIN_LORA_MOSI,
+        PIN_LORA_CS
+    );
 
-            SPISettings radioSpiSettings(
-            100000,
-            MSBFIRST,
-            SPI_MODE0
-                     );
+    SPISettings radioSpiSettings(
+        100000,
+        MSBFIRST,
+        SPI_MODE0
+    );
 
-       Serial.println("[FANET] About to construct Module...");
+    Serial.println("[FANET] About to construct Module...");
 
-        _module =
-            new Module(
-                PIN_LORA_CS,
-                RADIOLIB_NC,
-                RADIOLIB_NC,
-                PIN_LORA_BUSY,
-                _spi,
-                radioSpiSettings
-            );
+    _module =
+        new Module(
+            PIN_LORA_CS,
+            RADIOLIB_NC,
+            RADIOLIB_NC,
+            PIN_LORA_BUSY,
+            _spi,
+            radioSpiSettings
+        );
 
-        Serial.println("[FANET] Module constructed.");
+    Serial.println("[FANET] Module constructed.");
 
-        if (_module == nullptr) {
-            Serial.println("[FANET] Module allocation FAILED");
-            _lastStatus = RADIOLIB_ERR_UNKNOWN;
-            return false;
-        }
+    if (_module == nullptr) {
+        Serial.println("[FANET] Module allocation FAILED");
+        _lastStatus = RADIOLIB_ERR_UNKNOWN;
+        return false;
+    }
 
-        Serial.println("[FANET] About to construct SX1262...");
+    Serial.println("[FANET] About to construct SX1262...");
 
-        _radio = new SX1262(_module);
+    _radio = new SX1262(_module);
 
-        Serial.println("[FANET] SX1262 constructed.");
+    Serial.println("[FANET] SX1262 constructed.");
 
-        if (_radio == nullptr) {
-            Serial.println("[FANET] SX1262 allocation FAILED");
-            _lastStatus = RADIOLIB_ERR_UNKNOWN;
-            return false;
-        }
+    if (_radio == nullptr) {
+        Serial.println("[FANET] SX1262 allocation FAILED");
+        _lastStatus = RADIOLIB_ERR_UNKNOWN;
+        return false;
+    }
 
-        Serial.println("[FANET] About to call RadioLib begin()...");
+    Serial.println("[FANET] About to call RadioLib begin()...");
 
-        _lastStatus =
-            _radio->begin(
-                freqMHz,
-                bwKHz,
-                sf,
-                cr,
-                syncWord,
-                powerDbm,
-                preambleLen
-            );
+    _lastStatus =
+        _radio->begin(
+            freqMHz,
+            bwKHz,
+            sf,
+            cr,
+            syncWord,
+            powerDbm,
+            preambleLen
+        );
 
-        Serial.printf("[FANET] RadioLib begin status = %d\n", _lastStatus);                                     
+    Serial.printf("[FANET] RadioLib begin status = %d\n", _lastStatus);
 
     if (_lastStatus != RADIOLIB_ERR_NONE) {
         return false;
