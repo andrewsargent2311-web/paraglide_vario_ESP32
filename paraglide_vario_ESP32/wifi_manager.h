@@ -47,6 +47,21 @@ void wifiManagerLoop();
 // different saved network. No-ops on an empty slot. Persists the new
 // index to flash, then disconnects and kicks off a fresh (non-blocking)
 // connect attempt -- wifiConnected will reflect the result once it lands.
+// If the radio is currently off (wifiEnabled, settings.h), this also
+// turns it back on -- see setWifiRadioEnabled() below.
 void selectWifiNetwork(uint8_t index);
+
+// Turns the WiFi radio itself fully on or off, keeping wifiConnected and
+// the retry backoff consistent with reality -- this is what
+// Connections > WiFi's On/Off toggle calls (menu.cpp already includes
+// this header directly, no indirection through the main .ino needed).
+// OFF disconnects immediately and puts the radio to sleep;
+// wifiManagerLoop()'s retry logic checks wifiEnabled too, so it won't
+// silently undo an OFF state on the next tick. ON resumes with a fresh
+// (non-blocking) connect attempt via startWifiConnect(). Also called
+// automatically by selectWifiNetwork() if the radio was off when a
+// specific network gets picked, since that's a strong enough signal of
+// intent to turn it back on.
+void setWifiRadioEnabled(bool enabled);
 
 #endif  // WIFI_MANAGER_H

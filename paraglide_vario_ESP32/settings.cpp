@@ -99,6 +99,9 @@ WeatherSource weatherSource = WEATHER_SOURCE_ZEPHYR;
 
 bool buzzerMuted = false;
 
+// Default: WiFi on, matching the app's original always-on behaviour.
+bool wifiEnabled = true;
+
 // Default matches the renamed tile now shipped on the SD card.
 char selectedDemFile[DEM_FILENAME_MAX_LEN] = "/Lower_North_Island.ADEM";
 
@@ -155,6 +158,7 @@ void loadSettings() {
   mainPageSelection = prefs.getUChar("mainPage", mainPageSelection);
 
   buzzerMuted = prefs.getBool("muted", buzzerMuted);
+  wifiEnabled = prefs.getBool("wifiOn", wifiEnabled);
 
   fanetEnabled = prefs.getBool("fanetOn", fanetEnabled);
   screenOrientation = (ScreenOrientation)prefs.getUChar("scrOrient", (uint8_t)screenOrientation);
@@ -196,6 +200,7 @@ void saveSettings() {
   prefs.putUChar("mainPage", mainPageSelection);
 
   prefs.putBool("muted", buzzerMuted);
+  prefs.putBool("wifiOn", wifiEnabled);
 
   prefs.putBool("fanetOn", fanetEnabled);
   prefs.putUChar("scrOrient", (uint8_t)screenOrientation);

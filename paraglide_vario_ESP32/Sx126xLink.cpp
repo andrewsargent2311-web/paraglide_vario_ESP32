@@ -5,7 +5,7 @@
 
 
 
-static void probeSX1262Raw();
+//static void probeSX1262Raw();
 // ============================================================================
 // Constructor
 // ============================================================================
@@ -42,279 +42,265 @@ Sx126xLink::Sx126xLink()
 // on MISO, i.e. no real reply) means the chip isn't answering over SPI at all.
 // ============================================================================
 
-void probeSX1262Raw() {
-
-    Serial.println();
-    Serial.println("[PROBE] ========================================");
-    Serial.println("[PROBE] MANUAL SPI PIN TEST");
-    Serial.println("[PROBE] ========================================");
-
-    // ------------------------------------------------------------
-    // Configure pins manually
-    // ------------------------------------------------------------
-
-    pinMode(PIN_LORA_CS, OUTPUT);
-    pinMode(PIN_LORA_SCK, OUTPUT);
-    pinMode(PIN_LORA_MOSI, OUTPUT);
-    pinMode(PIN_LORA_MISO, INPUT);
-    pinMode(PIN_LORA_BUSY, INPUT);
-
-    digitalWrite(PIN_LORA_CS, HIGH);
-    digitalWrite(PIN_LORA_SCK, LOW);
-    digitalWrite(PIN_LORA_MOSI, LOW);
-
-    delay(100);
-
-    Serial.printf(
-        "[PROBE] CS   = GPIO%d = %d\n",
-        PIN_LORA_CS,
-        digitalRead(PIN_LORA_CS)
-    );
-
-    Serial.printf(
-        "[PROBE] SCK  = GPIO%d = %d\n",
-        PIN_LORA_SCK,
-        digitalRead(PIN_LORA_SCK)
-    );
-
-    Serial.printf(
-        "[PROBE] MOSI = GPIO%d = %d\n",
-        PIN_LORA_MOSI,
-        digitalRead(PIN_LORA_MOSI)
-    );
+// void probeSX1262Raw() {
+
+//     Serial.println();
+//     Serial.println("[PROBE] ========================================");
+//     Serial.println("[PROBE] MANUAL SPI PIN TEST");
+//     Serial.println("[PROBE] ========================================");
+
+//     // ------------------------------------------------------------
+//     // Configure pins manually
+//     // ------------------------------------------------------------
+
+//     pinMode(PIN_LORA_CS, OUTPUT);
+//     pinMode(PIN_LORA_SCK, OUTPUT);
+//     pinMode(PIN_LORA_MOSI, OUTPUT);
+//     pinMode(PIN_LORA_MISO, INPUT);
+//     pinMode(PIN_LORA_BUSY, INPUT);
+
+//     digitalWrite(PIN_LORA_CS, HIGH);
+//     digitalWrite(PIN_LORA_SCK, LOW);
+//     digitalWrite(PIN_LORA_MOSI, LOW);
+
+//     delay(100);
+
+//     Serial.printf(
+//         "[PROBE] CS   = GPIO%d = %d\n",
+//         PIN_LORA_CS,
+//         digitalRead(PIN_LORA_CS)
+//     );
 
-    Serial.printf(
-        "[PROBE] MISO = GPIO%d = %d\n",
-        PIN_LORA_MISO,
-        digitalRead(PIN_LORA_MISO)
-    );
+//     Serial.printf(
+//         "[PROBE] SCK  = GPIO%d = %d\n",
+//         PIN_LORA_SCK,
+//         digitalRead(PIN_LORA_SCK)
+//     );
 
-    Serial.printf(
-        "[PROBE] BUSY = GPIO%d = %d\n",
-        PIN_LORA_BUSY,
-        digitalRead(PIN_LORA_BUSY)
-    );
+//     Serial.printf(
+//         "[PROBE] MOSI = GPIO%d = %d\n",
+//         PIN_LORA_MOSI,
+//         digitalRead(PIN_LORA_MOSI)
+//     );
 
-    // ------------------------------------------------------------
-    // Manually reset the SX1262
-    // ------------------------------------------------------------
+//     Serial.printf(
+//         "[PROBE] MISO = GPIO%d = %d\n",
+//         PIN_LORA_MISO,
+//         digitalRead(PIN_LORA_MISO)
+//     );
 
-    Serial.println();
-    Serial.println("[PROBE] MANUAL RESET");
-    Serial.println("[PROBE] Pull HT-RA62 RST pin 4 to GND");
-    Serial.println("[PROBE] for approximately 100 ms.");
-    Serial.println("[PROBE] Then release it.");
-    Serial.println("[PROBE] Waiting 5 seconds...");
+//     Serial.printf(
+//         "[PROBE] BUSY = GPIO%d = %d\n",
+//         PIN_LORA_BUSY,
+//         digitalRead(PIN_LORA_BUSY)
+//     );
 
-    delay(5000);
+//     // ------------------------------------------------------------
+//     // Manually reset the SX1262
+//     // ------------------------------------------------------------
 
-    delay(100);
+ 
 
-    Serial.printf(
-        "[PROBE] BUSY after reset = %d\n",
-        digitalRead(PIN_LORA_BUSY)
-    );
+//     // ------------------------------------------------------------
+//     // Helper to send one byte manually.
+//     //
+//     // SPI mode 0:
+//     //   clock idle LOW
+//     //   sample MISO on rising edge
+//     // ------------------------------------------------------------
 
-    // ------------------------------------------------------------
-    // Helper to send one byte manually.
-    //
-    // SPI mode 0:
-    //   clock idle LOW
-    //   sample MISO on rising edge
-    // ------------------------------------------------------------
+//     auto transferByte = [] (uint8_t tx) -> uint8_t {
 
-    auto transferByte = [] (uint8_t tx) -> uint8_t {
-
-        uint8_t rx = 0;
+//         uint8_t rx = 0;
 
-        for (int8_t bit = 7; bit >= 0; bit--) {
+//         for (int8_t bit = 7; bit >= 0; bit--) {
 
-            // Set MOSI before rising edge
-            digitalWrite(
-                PIN_LORA_MOSI,
-                (tx >> bit) & 0x01
-            );
+//             // Set MOSI before rising edge
+//             digitalWrite(
+//                 PIN_LORA_MOSI,
+//                 (tx >> bit) & 0x01
+//             );
 
-            // Rising edge
-            digitalWrite(PIN_LORA_SCK, HIGH);
+//             // Rising edge
+//             digitalWrite(PIN_LORA_SCK, HIGH);
 
-            delayMicroseconds(2);
-
-            // Sample MISO
-            rx <<= 1;
-
-            if (digitalRead(PIN_LORA_MISO)) {
-                rx |= 1;
-            }
+//             delayMicroseconds(2);
 
-            // Falling edge
-            digitalWrite(PIN_LORA_SCK, LOW);
+//             // Sample MISO
+//             rx <<= 1;
+
+//             if (digitalRead(PIN_LORA_MISO)) {
+//                 rx |= 1;
+//             }
+
+//             // Falling edge
+//             digitalWrite(PIN_LORA_SCK, LOW);
+
+//             delayMicroseconds(2);
+//         }
+
+//         return rx;
+//     };
+
+//     // ------------------------------------------------------------
+//     // GET_STATUS = 0xC0
+//     //
+//     // Byte 0:
+//     //     send 0xC0
+//     //
+//     // Byte 1:
+//     //     send dummy 0x00
+//     //     receive status
+//     // ------------------------------------------------------------
+
+//     Serial.println();
+//     Serial.println("[PROBE] Sending manual GET_STATUS 0xC0...");
+
+//     digitalWrite(PIN_LORA_CS, LOW);
+
+//     delayMicroseconds(10);
+
+//     uint8_t rx0 = transferByte(0xC0);
+//     uint8_t rx1 = transferByte(0x00);
+
+//     delayMicroseconds(10);
+
+//     digitalWrite(PIN_LORA_CS, HIGH);
+
+//     digitalWrite(PIN_LORA_MOSI, LOW);
+
+//     Serial.printf(
+//         "[PROBE] Manual SPI response0 = 0x%02X\n",
+//         rx0
+//     );
+
+//     Serial.printf(
+//         "[PROBE] Manual SPI status    = 0x%02X\n",
+//         rx1
+//     );
+
+//     Serial.printf(
+//         "[PROBE] BUSY after command  = %d\n",
+//         digitalRead(PIN_LORA_BUSY)
+//     );
+
+//     // ------------------------------------------------------------
+//     // Interpret result
+//     // ------------------------------------------------------------
+
+//     if (rx1 != 0x00 && rx1 != 0xFF) {
+
+//         uint8_t chipMode =
+//             (rx1 >> 4) & 0x07;
 
-            delayMicroseconds(2);
-        }
-
-        return rx;
-    };
-
-    // ------------------------------------------------------------
-    // GET_STATUS = 0xC0
-    //
-    // Byte 0:
-    //     send 0xC0
-    //
-    // Byte 1:
-    //     send dummy 0x00
-    //     receive status
-    // ------------------------------------------------------------
-
-    Serial.println();
-    Serial.println("[PROBE] Sending manual GET_STATUS 0xC0...");
-
-    digitalWrite(PIN_LORA_CS, LOW);
-
-    delayMicroseconds(10);
-
-    uint8_t rx0 = transferByte(0xC0);
-    uint8_t rx1 = transferByte(0x00);
-
-    delayMicroseconds(10);
-
-    digitalWrite(PIN_LORA_CS, HIGH);
-
-    digitalWrite(PIN_LORA_MOSI, LOW);
-
-    Serial.printf(
-        "[PROBE] Manual SPI response0 = 0x%02X\n",
-        rx0
-    );
-
-    Serial.printf(
-        "[PROBE] Manual SPI status    = 0x%02X\n",
-        rx1
-    );
-
-    Serial.printf(
-        "[PROBE] BUSY after command  = %d\n",
-        digitalRead(PIN_LORA_BUSY)
-    );
-
-    // ------------------------------------------------------------
-    // Interpret result
-    // ------------------------------------------------------------
-
-    if (rx1 != 0x00 && rx1 != 0xFF) {
-
-        uint8_t chipMode =
-            (rx1 >> 4) & 0x07;
-
-        uint8_t cmdStatus =
-            (rx1 >> 1) & 0x07;
-
-        Serial.println();
-        Serial.println(
-            "[PROBE] *** SX1262 RESPONDED ***"
-        );
-
-        Serial.printf(
-            "[PROBE] chipMode  = %d\n",
-            chipMode
-        );
-
-        Serial.printf(
-            "[PROBE] cmdStatus = %d\n",
-            cmdStatus
-        );
-
-    } else {
-
-        Serial.println();
-        Serial.println(
-            "[PROBE] *** NO VALID SX1262 RESPONSE ***"
-        );
-
-        Serial.println(
-            "[PROBE] Manual GPIO SPI also returned 0x00/0xFF."
-        );
-    }
-
-    Serial.println();
-    Serial.println("[PROBE] ========================================");
-    Serial.println("[PROBE] End manual SPI test");
-    Serial.println("[PROBE] ========================================");
-}
-void probeSX1262HardwareSPI(SPIClass& spi) {
-
-    Serial.println();
-    Serial.println("[PROBE] ========================================");
-    Serial.println("[PROBE] SPIClass HARDWARE SPI TEST");
-    Serial.println("[PROBE] ========================================");
-
-    spi.begin(
-        PIN_LORA_SCK,
-        PIN_LORA_MISO,
-        PIN_LORA_MOSI,
-        PIN_LORA_CS
-    );
-
-    pinMode(PIN_LORA_CS, OUTPUT);
-    digitalWrite(PIN_LORA_CS, HIGH);
-
-    delay(100);
-
-    Serial.printf(
-        "[PROBE] BUSY before command = %d\n",
-        digitalRead(PIN_LORA_BUSY)
-    );
-
-    spi.beginTransaction(
-        SPISettings(
-            100000,
-            MSBFIRST,
-            SPI_MODE0
-        )
-    );
-
-    digitalWrite(PIN_LORA_CS, LOW);
-
-    uint8_t rx0 = spi.transfer(0xC0);
-    uint8_t rx1 = spi.transfer(0x00);
-
-    digitalWrite(PIN_LORA_CS, HIGH);
-
-    spi.endTransaction();
-
-    Serial.printf(
-        "[PROBE] SPIClass response0 = 0x%02X\n",
-        rx0
-    );
-
-    Serial.printf(
-        "[PROBE] SPIClass status    = 0x%02X\n",
-        rx1
-    );
-
-    Serial.printf(
-        "[PROBE] BUSY after command = %d\n",
-        digitalRead(PIN_LORA_BUSY)
-    );
-
-    if (rx1 != 0x00 && rx1 != 0xFF) {
-
-        Serial.println(
-            "[PROBE] *** SPIClass CAN COMMUNICATE WITH SX1262 ***"
-        );
-
-    } else {
-
-        Serial.println(
-            "[PROBE] *** SPIClass CANNOT COMMUNICATE WITH SX1262 ***"
-        );
-    }
-
-    Serial.println(
-        "[PROBE] ========================================"
-    );
-}
+//         uint8_t cmdStatus =
+//             (rx1 >> 1) & 0x07;
+
+//         Serial.println();
+//         Serial.println(
+//             "[PROBE] *** SX1262 RESPONDED ***"
+//         );
+
+//         Serial.printf(
+//             "[PROBE] chipMode  = %d\n",
+//             chipMode
+//         );
+
+//         Serial.printf(
+//             "[PROBE] cmdStatus = %d\n",
+//             cmdStatus
+//         );
+
+//     } else {
+
+//         Serial.println();
+//         Serial.println(
+//             "[PROBE] *** NO VALID SX1262 RESPONSE ***"
+//         );
+
+//         Serial.println(
+//             "[PROBE] Manual GPIO SPI also returned 0x00/0xFF."
+//         );
+//     }
+
+//     Serial.println();
+//     Serial.println("[PROBE] ========================================");
+//     Serial.println("[PROBE] End manual SPI test");
+//     Serial.println("[PROBE] ========================================");
+// }
+// void probeSX1262HardwareSPI(SPIClass& spi) {
+
+//     Serial.println();
+//     Serial.println("[PROBE] ========================================");
+//     Serial.println("[PROBE] SPIClass HARDWARE SPI TEST");
+//     Serial.println("[PROBE] ========================================");
+
+//     spi.begin(
+//         PIN_LORA_SCK,
+//         PIN_LORA_MISO,
+//         PIN_LORA_MOSI,
+//         PIN_LORA_CS
+//     );
+
+//     pinMode(PIN_LORA_CS, OUTPUT);
+//     digitalWrite(PIN_LORA_CS, HIGH);
+
+//     delay(100);
+
+//     Serial.printf(
+//         "[PROBE] BUSY before command = %d\n",
+//         digitalRead(PIN_LORA_BUSY)
+//     );
+
+//     spi.beginTransaction(
+//         SPISettings(
+//             500000,
+//             MSBFIRST,
+//             SPI_MODE0
+//         )
+//     );
+
+//     digitalWrite(PIN_LORA_CS, LOW);
+
+//     uint8_t rx0 = spi.transfer(0xC0);
+//     uint8_t rx1 = spi.transfer(0x00);
+
+//     digitalWrite(PIN_LORA_CS, HIGH);
+
+//     spi.endTransaction();
+
+//     Serial.printf(
+//         "[PROBE] SPIClass response0 = 0x%02X\n",
+//         rx0
+//     );
+
+//     Serial.printf(
+//         "[PROBE] SPIClass status    = 0x%02X\n",
+//         rx1
+//     );
+
+//     Serial.printf(
+//         "[PROBE] BUSY after command = %d\n",
+//         digitalRead(PIN_LORA_BUSY)
+//     );
+
+//     if (rx1 != 0x00 && rx1 != 0xFF) {
+
+//         Serial.println(
+//             "[PROBE] *** SPIClass CAN COMMUNICATE WITH SX1262 ***"
+//         );
+
+//     } else {
+
+//         Serial.println(
+//             "[PROBE] *** SPIClass CANNOT COMMUNICATE WITH SX1262 ***"
+//         );
+//     }
+
+//     Serial.println(
+//         "[PROBE] ========================================"
+//     );
+// }
 
 // ============================================================================
 // Begin radio
@@ -328,7 +314,7 @@ bool Sx126xLink::begin(
     uint8_t syncWord,
     int8_t powerDbm,
     uint16_t preambleLen
-) {
+    ) {
 
     // ------------------------------------------------------------------------
     // Bring up the SPI bus on the HT-RA62's actual pins.
@@ -432,10 +418,6 @@ bool Sx126xLink::begin(
 
     return (_lastStatus == RADIOLIB_ERR_NONE);
 }
-
-// ============================================================================
-// Restart RX
-// ============================================================================
 
 void Sx126xLink::restartReceive() {
 

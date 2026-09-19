@@ -1,5 +1,6 @@
 #include "wifi_manager.h"
 #include "secrets.h"
+#include "settings.h"  // wifiEnabled, saveSettings()
 #include <WiFi.h>
 #include <Preferences.h>
 
@@ -47,6 +48,11 @@ void loadWifiSettings() {
 }
 
 void startWifiConnect() {
+  if (!wifiEnabled) {
+    Serial.println("[WIFI] Radio disabled (Connections > WiFi) -- skipping connect");
+    return;
+  }
+
   if (!networkSlotValid(selectedWifiIndex)) {
     Serial.println("[WIFI] Selected network slot is empty -- skipping connect");
     return;
@@ -65,7 +71,7 @@ void startWifiConnect() {
 // old code's up-to-50-second detection lag -- only the actual
 // re-associate attempt (WiFi.begin()) is throttled to WIFI_RETRY_MS.
 void wifiManagerLoop() {
-  if (wifiDisabledUntilReboot) return;
+  if (!wifiEnabled || wifiDisabledUntilReboot) return;
 
   bool nowConnected = (WiFi.status() == WL_CONNECTED);
 
@@ -114,6 +120,33 @@ void selectWifiNetwork(uint8_t index) {
   wifiDisabledUntilReboot = false;
   lastWifiRetry = millis();
 
+  if (!wifiEnabled) {
+    // Picking a specific network is a strong enough signal of intent
+    // that we turn the radio back on for them here, rather than
+    // silently doing nothing -- setWifiRadioEnabled() also keeps
+    // Connections > WiFi's On/Off toggle in sync, since it's the same
+    // wifiEnabled flag the toggle reads/writes (settings.h).
+    setWifiRadioEnabled(true);
+    return;  // setWifiRadioEnabled(true) already calls startWifiConnect()
+  }
+
   WiFi.disconnect();
   beginConnect(index);
+}
+
+void setWifiRadioEnabled(bool enabled) {
+  wifiEnabled = enabled;
+  saveSettings();
+
+  if (enabled) {
+    // A fresh explicit enable overrides a prior retry-exhaustion
+    // lockout too -- the pilot turning it back on is a clean slate.
+    wifiDisabledUntilReboot = false;
+    wifiRetryCount = 0;
+    startWifiConnect();
+  } else {
+    WiFi.disconnect(true);
+    WiFi.mode(WIFI_OFF);
+    wifiConnected = false;
+  }
 }

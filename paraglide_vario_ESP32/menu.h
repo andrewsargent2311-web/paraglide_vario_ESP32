@@ -51,20 +51,23 @@ extern uint8_t activePageIndex;
 //   |     |     |-- VARIO_BEEP_GAP_MAX     (longest gap between beeps)
 //   |     |     |-- VARIO_BEEP_PULSE_MIN   (shortest beep length)
 //   |     |     `-- VARIO_BEEP_PULSE_MAX   (longest beep length)
-//   |     |-- FANET           (On/Off, cycled in place -- actually
-//   |     |                    sleeps/wakes the SX1262, not just the
-//   |     |                    software stack; see setFanetEnabled())
 //   |     `-- SCREEN          ("GPS Top" / "GPS Bottom" -- 180-degree
 //   |                          display flip; see applyScreenOrientation())
 //   |-- CONNECTIONS
-//   |     |-- WIFI              (pick a saved network -- see secrets.h;
-//   |     |                      choice is remembered across reboots)
-//   |     `-- BLUETOOTH
-//   |           |-- (On/Off toggle, cycled in place)
-//   |           |-- SCAN        (live-updating list of nearby BLE
-//   |           |                devices -- select one to connect; this
-//   |           |                board is BLE-only, no Classic BT)
-//   |           `-- (Forget Device -- only actionable once one's saved)
+//   |     |-- WIFI              (On/Off toggle, cycled in place --
+//   |     |                      persisted; see setWifiRadioEnabled()
+//   |     |                      (wifi_manager.h) -- then pick a saved
+//   |     |                      network -- see secrets.h; choice is
+//   |     |                      remembered across reboots)
+//   |     |-- BLUETOOTH
+//   |     |     |-- (On/Off toggle, cycled in place)
+//   |     |     |-- SCAN        (live-updating list of nearby BLE
+//   |     |     |                devices -- select one to connect; this
+//   |     |     |                board is BLE-only, no Classic BT)
+//   |     |     `-- (Forget Device -- only actionable once one's saved)
+//   |     `-- FANET            (On/Off, cycled in place -- actually
+//   |                            sleeps/wakes the SX1262, not just the
+//   |                            software stack; see setFanetEnabled())
 //   |-- MAP                (list of *.ADEM files found on the SD card)
 //   |-- ADSB_SETTINGS
 //   |     |-- ADSB_RADIUS       (horizontal alert trigger distance)

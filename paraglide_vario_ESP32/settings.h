@@ -194,6 +194,17 @@ extern WeatherSource weatherSource;
 extern bool buzzerMuted;
 
 // =====================================================
+// WIFI ENABLE
+// Turns the ESP32's WiFi radio fully on or off -- see setWifiEnabled()
+// (main .ino), applied at boot and immediately on change via
+// Connections > WiFi in menu.cpp. Off stops the radio itself (and with
+// it, the Zephyr weather fetch and ADS-B fetch, both of which need WiFi
+// -- see weatherSource above for the FANET-based fallback that keeps the
+// Weather page useful without it). Persisted.
+// =====================================================
+extern bool wifiEnabled;
+
+// =====================================================
 // TERRAIN DEM FILE SELECTION
 // The *.ADEM tile getGroundElevationM() (TerrainDem.h) reads from. Chosen
 // from the Map menu screen (menu.cpp's scanMapFiles()/setSelectedDemFile())
