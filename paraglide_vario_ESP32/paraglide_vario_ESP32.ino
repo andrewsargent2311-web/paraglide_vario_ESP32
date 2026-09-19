@@ -668,6 +668,7 @@ void setup() {
   // ---------------------------------------------------------
   SPI.begin(RLCD_SCK, -1 /*MISO unused*/, RLCD_MOSI, RLCD_CS);
   u8g2.begin();
+  applyScreenOrientation();  // screenOrientation was already loaded above by loadSettings()
   Serial.println("DISPLAY INITIALIZED");
   Serial.printf("[BOOT] After display - Free heap: %u | Min heap: %u\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
 
@@ -855,21 +856,31 @@ void setup() {
   }
 
   // ---------------------------------------------------------
-  // FANET radio (HT-RA62 / SX1262). Own SPI bus (see pin comment at the
-  // fanetRadio declaration) -- independent of the display's SPI.begin()
+  // FANET radio (HT-RA62 / SX1262). Own SPI bus (HSPI -- see the
+  // Sx126xLink constructor) -- independent of the display's SPI.begin()
   // above, so order relative to that doesn't matter.
+  //
+  // Only actually brought up if fanetEnabled (settings.h, loaded above
+  // via loadSettings()) is true -- Config > FANET lets the pilot turn
+  // the chip off entirely for bench testing. If it's off at boot,
+  // fanetRadioOK stays false and setFanetEnabled() below runs this same
+  // init the first time it's switched on from the menu.
   // ---------------------------------------------------------
-  fanetRadioOK = fanetRadio.begin(/*freqMHz=*/868.2f, /*bwKHz=*/250.0f,
-                                   /*sf=*/7, /*cr=*/5, /*syncWord=*/0xF1,
-                                   /*powerDbm=*/14, /*preambleLen=*/8);
-  if (fanetRadioOK) {
-    fanet.begin();
-    fanet.onTracking(onFanetTracking);
-    fanet.setBeaconIntervalMs(FANET_BEACON_INTERVAL_MS);
-    Serial.println("FANET RADIO INITIALIZED");
+  if (fanetEnabled) {
+    fanetRadioOK = fanetRadio.begin(/*freqMHz=*/868.2f, /*bwKHz=*/250.0f,
+                                     /*sf=*/7, /*cr=*/5, /*syncWord=*/0xF1,
+                                     /*powerDbm=*/14, /*preambleLen=*/8);
+    if (fanetRadioOK) {
+      fanet.begin();
+      fanet.onTracking(onFanetTracking);
+      fanet.setBeaconIntervalMs(FANET_BEACON_INTERVAL_MS);
+      Serial.println("FANET RADIO INITIALIZED");
+    } else {
+      Serial.printf("FANET RADIO INIT FAILED -- status=%d (FANET disabled)\n",
+                    fanetRadio.lastStatus());
+    }
   } else {
-    Serial.printf("FANET RADIO INIT FAILED -- status=%d (FANET disabled)\n",
-                  fanetRadio.lastStatus());
+    Serial.println("FANET disabled (Config > FANET) -- skipping radio init");
   }
 
   // ---------------------------------------------------------
@@ -1033,7 +1044,7 @@ void loop() {
   //     SPI status read plus a millis() check) so it's fine to call every
   //     pass rather than duty-cycling it separately.
   // ---------------------------------------------------------
-  if (fanetRadioOK && gps.location.isValid() && gps.location.age() < 2000) {
+  if (fanetRadioOK && fanetEnabled && gps.location.isValid() && gps.location.age() < 2000) {
     // Prefer the QNH-calibrated baro altitude once available, same
     // preference order already used for sharedPosition above.
     int32_t altM = qnhCalibrated ? (int32_t)lroundf(currentAltitudeM)
@@ -1047,7 +1058,7 @@ void loop() {
     // spec's aircraft-type table before relying on this for real traffic.
     fanet.setAircraftType(currentPage == PAGE_PARAMOTOR ? 1 : 1);
   }
-  if (fanetRadioOK) {
+  if (fanetRadioOK && fanetEnabled) {
     fanet.update();
   }
   // ---------------------------------------------------------
@@ -3333,6 +3344,66 @@ void applyBuzzerVolume() {
   if (!es8311OK) return;
   uint8_t reg = (uint8_t)((buzzerVolumePercent / 100.0f) * 255.0f + 0.5f);
   es8311WriteReg(0x32, reg);
+}
+
+// =====================================================
+// FANET ENABLE/DISABLE (Config > FANET)
+// Called once from setup() (only if fanetEnabled was already true at
+// boot -- see the FANET init block above, which handles that first-time
+// case directly) and again immediately from menu.cpp any time the pilot
+// flips the toggle.
+//
+// Two distinct cases:
+//   - Radio was never successfully brought up (fanetRadioOK == false,
+//     e.g. it was off at boot) -- run the exact same init sequence
+//     setup() would have run, so switching it on later actually starts
+//     it for the first time.
+//   - Radio is already up -- just sleep/wake the chip itself via
+//     Sx126xLink::setEnabled(), which is far cheaper than a full begin()
+//     and preserves its current config.
+// =====================================================
+void setFanetEnabled(bool enabled) {
+  if (!fanetRadioOK) {
+    if (!enabled) {
+      // Nothing to turn off -- it was never brought up.
+      return;
+    }
+
+    fanetRadioOK = fanetRadio.begin(/*freqMHz=*/868.2f, /*bwKHz=*/250.0f,
+                                     /*sf=*/7, /*cr=*/5, /*syncWord=*/0xF1,
+                                     /*powerDbm=*/14, /*preambleLen=*/8);
+    if (fanetRadioOK) {
+      fanet.begin();
+      fanet.onTracking(onFanetTracking);
+      fanet.setBeaconIntervalMs(FANET_BEACON_INTERVAL_MS);
+      Serial.println("FANET RADIO INITIALIZED (enabled from menu)");
+    } else {
+      Serial.printf("FANET RADIO INIT FAILED -- status=%d\n", fanetRadio.lastStatus());
+    }
+    return;
+  }
+
+  if (!fanetRadio.setEnabled(enabled)) {
+    Serial.printf("[FANET] setEnabled(%d) FAILED -- status=%d\n",
+                  enabled, fanetRadio.lastStatus());
+    return;
+  }
+
+  Serial.printf("[FANET] Radio %s\n", enabled ? "enabled" : "disabled (sleep)");
+}
+
+// =====================================================
+// SCREEN ORIENTATION (Config > Screen)
+// Called once from setup() right after u8g2.begin(), and again
+// immediately from menu.cpp any time the pilot changes it. U8G2_R0 is
+// the app's original (GPS Bottom) orientation; U8G2_R2 is the same
+// panel rotated 180 degrees (GPS Top).
+// =====================================================
+void applyScreenOrientation() {
+  u8g2.setDisplayRotation(screenOrientation == SCREEN_ORIENTATION_GPS_TOP
+                             ? U8G2_R2
+                             : U8G2_R0);
+  displayDirty = true;
 }
 // =====================================================
 // TONE GENERATION: non-blocking. Unlike a single long i2s_write() call

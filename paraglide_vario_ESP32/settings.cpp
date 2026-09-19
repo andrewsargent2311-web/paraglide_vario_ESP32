@@ -82,6 +82,10 @@ float adsbAlertVerticalFt = 2000.0f;
 bool adsbAutoJumpEnabled = true;
 bool adsbAlarmMuted = false;
 
+// Deliberately NOT persisted -- see the comment in settings.h. Always
+// starts true at boot.
+bool airspaceAlertBarEnabled = true;
+
 // Default matches the original hardcoded far/default rings (30km outer,
 // 15km inner).
 float adsbRingOuterKm = 30.0f;
@@ -97,6 +101,12 @@ char selectedDemFile[DEM_FILENAME_MAX_LEN] = "/Lower_North_Island.ADEM";
 
 // Default matches the app's original behaviour: boots on the Paraglider page.
 uint8_t mainPageSelection = 0;  // 0 = Paraglider, 1 = Paramotor
+
+// Default: radio on, matching the app's original always-on behaviour.
+bool fanetEnabled = true;
+
+// Default matches the app's original (and only, until now) orientation.
+ScreenOrientation screenOrientation = SCREEN_ORIENTATION_GPS_BOTTOM;
 
 // =====================================================
 // PERSISTENCE
@@ -141,6 +151,13 @@ void loadSettings() {
   mainPageSelection = prefs.getUChar("mainPage", mainPageSelection);
 
   buzzerMuted = prefs.getBool("muted", buzzerMuted);
+
+  fanetEnabled = prefs.getBool("fanetOn", fanetEnabled);
+  screenOrientation = (ScreenOrientation)prefs.getUChar("scrOrient", (uint8_t)screenOrientation);
+
+  // airspaceAlertBarEnabled is intentionally never read here -- see its
+  // comment in settings.h. It keeps its compiled-in default (true) every
+  // boot.
 }
 
 void saveSettings() {
@@ -174,4 +191,10 @@ void saveSettings() {
   prefs.putUChar("mainPage", mainPageSelection);
 
   prefs.putBool("muted", buzzerMuted);
+
+  prefs.putBool("fanetOn", fanetEnabled);
+  prefs.putUChar("scrOrient", (uint8_t)screenOrientation);
+
+  // airspaceAlertBarEnabled is intentionally never written here -- see
+  // its comment in settings.h.
 }

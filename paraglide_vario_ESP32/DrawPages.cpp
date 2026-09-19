@@ -1830,11 +1830,20 @@ void drawAirspaceWarning() {
                 (!result.vertKnown || result.vertDistance_ft <= AIRSPACE_WARN_VERT_FT);
 
   // One-shot alert on entering controlled airspace, not on every redraw.
+  // Deliberately NOT gated on airspaceAlertBarEnabled -- that setting
+  // only hides the visual banner below, same as adsbAlarmMuted is kept
+  // independent of ADS-B's Auto-Jump (settings.h). A pilot who's hidden
+  // the banner still gets the one-time tone telling them they've
+  // actually entered controlled airspace.
   static bool wasInside = false;
   if (insideNow && !wasInside) {
     playFeedbackTone(900.0f, 600);
   }
   wasInside = insideNow;
+
+  // Visual banner only -- see the comment above for why the tone above
+  // this point is unaffected by the setting.
+  if (!airspaceAlertBarEnabled) return;
 
   if (!insideNow && !nearby) return;
 

@@ -220,7 +220,7 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
   switch (screen) {
     case MENU_SCREEN_MAIN: return 6;
     case MENU_SCREEN_MAIN_PAGE_SELECT: return 2;
-    case MENU_SCREEN_CONFIG: return 5;
+    case MENU_SCREEN_CONFIG: return 7;
     case MENU_SCREEN_CONFIG_TIME: return TIMEZONE_CHOICE_COUNT;
     case MENU_SCREEN_UNITS: return 2;
     case MENU_SCREEN_VARIO_FREQ: return VARIO_FREQ_CHOICE_COUNT;
@@ -230,12 +230,13 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_VARIO_BEEP_GAP_MAX: return VARIO_BEEP_CHOICE_COUNT;
     case MENU_SCREEN_VARIO_BEEP_PULSE_MIN: return VARIO_BEEP_CHOICE_COUNT;
     case MENU_SCREEN_VARIO_BEEP_PULSE_MAX: return VARIO_BEEP_CHOICE_COUNT;
+    case MENU_SCREEN_SCREEN: return 2;
     case MENU_SCREEN_CONNECTIONS: return 2;
     case MENU_SCREEN_WIFI_LIST: return WIFI_NETWORK_COUNT;
     case MENU_SCREEN_BLUETOOTH: return 3;
     case MENU_SCREEN_BLUETOOTH_SCAN: return bleScanResultCount() > 0 ? bleScanResultCount() : 1;
     case MENU_SCREEN_MAP: return mapFileCount > 0 ? mapFileCount : 1;
-    case MENU_SCREEN_ADSB_SETTINGS: return 5;
+    case MENU_SCREEN_ADSB_SETTINGS: return 6;
     case MENU_SCREEN_ADSB_RADIUS: return ADSB_RADIUS_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_VERTICAL: return ADSB_VERTICAL_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_RANGE_RINGS: return ADSB_RING_CHOICE_COUNT;
@@ -260,6 +261,7 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_VARIO_BEEP_GAP_MAX: return "MAX GAP";
     case MENU_SCREEN_VARIO_BEEP_PULSE_MIN: return "MIN PULSE";
     case MENU_SCREEN_VARIO_BEEP_PULSE_MAX: return "MAX PULSE";
+    case MENU_SCREEN_SCREEN: return "SCREEN";
     case MENU_SCREEN_CONNECTIONS: return "CONNECTIONS";
     case MENU_SCREEN_WIFI_LIST: return "WIFI";
     case MENU_SCREEN_BLUETOOTH: return "BLUETOOTH";
@@ -289,11 +291,17 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       snprintf(buf, buflen, "%s%s", name, isActive ? " *" : "");
       break;
     }
-    case MENU_SCREEN_CONFIG: {
-      static const char* items[] = { "Time", "Units", "Vario Freq", "Volume", "Vario Beep" };
-      snprintf(buf, buflen, "%s", items[index]);
+    case MENU_SCREEN_CONFIG:
+      switch (index) {
+        case 0: snprintf(buf, buflen, "Time"); break;
+        case 1: snprintf(buf, buflen, "Units"); break;
+        case 2: snprintf(buf, buflen, "Vario Freq"); break;
+        case 3: snprintf(buf, buflen, "Volume"); break;
+        case 4: snprintf(buf, buflen, "Vario Beep"); break;
+        case 5: snprintf(buf, buflen, "FANET: %s", fanetEnabled ? "On" : "Off"); break;
+        case 6: snprintf(buf, buflen, "Screen"); break;
+      }
       break;
-    }
     case MENU_SCREEN_CONFIG_TIME:
       if (index == 0) {
         bool isActive = (timeZoneMode == TZ_MODE_AUTO_NZ);
@@ -350,6 +358,13 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       unsigned long ms = VARIO_BEEP_CHOICE_MS(index);
       bool isActive = (climbPulseMaxMs == ms);
       snprintf(buf, buflen, "%lu ms%s", ms, isActive ? " *" : "");
+      break;
+    }
+    case MENU_SCREEN_SCREEN: {
+      const char* name = (index == 0) ? "GPS Top" : "GPS Bottom";
+      bool isActive = (index == 0 && screenOrientation == SCREEN_ORIENTATION_GPS_TOP) ||
+                       (index == 1 && screenOrientation == SCREEN_ORIENTATION_GPS_BOTTOM);
+      snprintf(buf, buflen, "%s%s", name, isActive ? " *" : "");
       break;
     }
     case MENU_SCREEN_CONNECTIONS: {
@@ -421,6 +436,8 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         snprintf(buf, buflen, "Alarm Sound: %s", adsbAlarmMuted ? "Off" : "On");
       } else if (index == 4) {
         snprintf(buf, buflen, "Range Rings");
+      } else if (index == 5) {
+        snprintf(buf, buflen, "Airspace Alert Bar: %s", airspaceAlertBarEnabled ? "On" : "Off");
       } else {
         static const char* items[] = { "Alert Radius", "Vertical Threshold" };
         snprintf(buf, buflen, "%s", items[index]);
@@ -507,6 +524,17 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
         case 2: pushMenuScreen(MENU_SCREEN_VARIO_FREQ); break;
         case 3: pushMenuScreen(MENU_SCREEN_CONFIG_VOLUME); break;
         case 4: pushMenuScreen(MENU_SCREEN_VARIO_BEEP); break;
+        case 5:
+          // Cycles in place, like Bluetooth's On/Off -- actually
+          // sleeps/wakes the SX1262 (see setFanetEnabled()), not just
+          // the software FANET stack.
+          fanetEnabled = !fanetEnabled;
+          setFanetEnabled(fanetEnabled);
+          saveSettings();
+          displayDirty = true;
+          playFeedbackTone(600.0f, 50);
+          return;
+        case 6: pushMenuScreen(MENU_SCREEN_SCREEN); break;
       }
       playFeedbackTone(900.0f, 80);
       return;
@@ -588,6 +616,14 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
       saveSettings();
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to Vario Beep
+      return;
+
+    case MENU_SCREEN_SCREEN:
+      screenOrientation = (index == 0) ? SCREEN_ORIENTATION_GPS_TOP : SCREEN_ORIENTATION_GPS_BOTTOM;
+      applyScreenOrientation();  // takes effect immediately, not just on next boot
+      saveSettings();
+      playFeedbackTone(1100.0f, 120);
+      menuGoBack();  // back to Config
       return;
 
     case MENU_SCREEN_CONNECTIONS:
@@ -686,6 +722,13 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
         case 4:
           pushMenuScreen(MENU_SCREEN_ADSB_RANGE_RINGS);
           playFeedbackTone(900.0f, 80);
+          return;
+        case 5:
+          // Deliberately NOT saved -- see airspaceAlertBarEnabled's
+          // comment in settings.h; always back on at next boot.
+          airspaceAlertBarEnabled = !airspaceAlertBarEnabled;
+          displayDirty = true;
+          playFeedbackTone(600.0f, 50);
           return;
       }
       return;

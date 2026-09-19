@@ -18,6 +18,7 @@ Sx126xLink::Sx126xLink()
     , _radio(nullptr)
 
     , _txInFlight(false)
+    , _enabled(true)
 
     , _rxLen(0)
 
@@ -267,7 +268,7 @@ void probeSX1262HardwareSPI(SPIClass& spi) {
 
     spi.beginTransaction(
         SPISettings(
-            1000000,
+            100000,
             MSBFIRST,
             SPI_MODE0
         )
@@ -468,6 +469,13 @@ void Sx126xLink::restartReceive() {
 RadioEvent Sx126xLink::poll() {
 
     if (_radio == nullptr) {
+        return RadioEvent::NONE;
+    }
+
+    // Deliberately no SPI traffic at all while disabled -- any
+    // transaction (including a register read) wakes the chip back up
+    // per the datasheet, which would defeat setEnabled(false).
+    if (!_enabled) {
         return RadioEvent::NONE;
     }
 
@@ -733,6 +741,10 @@ bool Sx126xLink::send(
         return false;
     }
 
+    if (!_enabled) {
+        return false;
+    }
+
     if (data == nullptr ||
         len == 0) {
 
@@ -779,6 +791,58 @@ bool Sx126xLink::send(
     }
 
     _txInFlight = true;
+
+    // ------------------------------------------------------------------------
+    // TX-start timestamp log.
+    //
+    // Diagnostic only: lets a bad vario/altitude sample be correlated
+    // against real TX activity (suspected RF coupling into nearby I2C
+    // wiring). Compare this timestamp against [VARIO DEBUG] output in
+    // the .ino. Safe to remove once the correlation is confirmed or
+    // ruled out.
+    // ------------------------------------------------------------------------
+
+    Serial.printf(
+        "[FANET TX_DEBUG] TX started at t=%lu ms, len=%u\n",
+        millis(),
+        (unsigned)len
+    );
+
+    return true;
+}
+
+// ============================================================================
+// Enable / disable
+// ============================================================================
+
+bool Sx126xLink::setEnabled(bool enabled) {
+
+    if (_radio == nullptr) {
+        return false;
+    }
+
+    if (enabled == _enabled) {
+        return true;
+    }
+
+    if (!enabled) {
+
+        // Drop anything in flight rather than leaving it stranded --
+        // there is no DIO1 to tell us it finished after this point.
+        _txInFlight = false;
+
+        _lastStatus = _radio->sleep();
+
+        _enabled = false;
+
+        return (_lastStatus == RADIOLIB_ERR_NONE);
+    }
+
+    // Waking is just resuming normal operation -- the chip already came
+    // back to STDBY_RC on its own the moment we next talk to it over SPI.
+    restartReceive();
+
+    _enabled = true;
 
     return true;
 }

@@ -46,11 +46,16 @@ extern uint8_t activePageIndex;
 //   |     |-- UNITS           (Altitude / Speed, cycled in place)
 //   |     |-- VARIO_FREQ      (climb-tone min Hz)
 //   |     |-- CONFIG_VOLUME   (buzzer volume, 20-100% in 20% steps)
-//   |     `-- VARIO_BEEP
-//   |           |-- VARIO_BEEP_GAP_MIN     (shortest gap between beeps)
-//   |           |-- VARIO_BEEP_GAP_MAX     (longest gap between beeps)
-//   |           |-- VARIO_BEEP_PULSE_MIN   (shortest beep length)
-//   |           `-- VARIO_BEEP_PULSE_MAX   (longest beep length)
+//   |     |-- VARIO_BEEP
+//   |     |     |-- VARIO_BEEP_GAP_MIN     (shortest gap between beeps)
+//   |     |     |-- VARIO_BEEP_GAP_MAX     (longest gap between beeps)
+//   |     |     |-- VARIO_BEEP_PULSE_MIN   (shortest beep length)
+//   |     |     `-- VARIO_BEEP_PULSE_MAX   (longest beep length)
+//   |     |-- FANET           (On/Off, cycled in place -- actually
+//   |     |                    sleeps/wakes the SX1262, not just the
+//   |     |                    software stack; see setFanetEnabled())
+//   |     `-- SCREEN          ("GPS Top" / "GPS Bottom" -- 180-degree
+//   |                          display flip; see applyScreenOrientation())
 //   |-- CONNECTIONS
 //   |     |-- WIFI              (pick a saved network -- see secrets.h;
 //   |     |                      choice is remembered across reboots)
@@ -66,8 +71,11 @@ extern uint8_t activePageIndex;
 //   |     |-- ADSB_VERTICAL     (vertical alert trigger distance)
 //   |     |-- (Auto-Jump toggle, cycled in place)
 //   |     |-- (Alarm Sound toggle, cycled in place)
-//   |     `-- ADSB_RANGE_RINGS  (far/default range ring pair -- 15/30km,
-//   |                            10/20km, 20/40km, or 30/60km)
+//   |     |-- ADSB_RANGE_RINGS  (far/default range ring pair -- 15/30km,
+//   |     |                      10/20km, 20/40km, or 30/60km)
+//   |     `-- (Airspace Alert Bar toggle, cycled in place -- NOT
+//   |          persisted, always back on at reboot; see
+//   |          airspaceAlertBarEnabled in settings.h)
 //   `-- WEATHER_SETTINGS
 //         |-- WEATHER_POLL_INTERVAL   (Zephyr station poll cadence)
 //         `-- WEATHER_STATIONS_SHOWN  (how many stations to display)
@@ -91,6 +99,7 @@ enum MenuScreen {
   MENU_SCREEN_VARIO_BEEP_GAP_MAX,
   MENU_SCREEN_VARIO_BEEP_PULSE_MIN,
   MENU_SCREEN_VARIO_BEEP_PULSE_MAX,
+  MENU_SCREEN_SCREEN,
   MENU_SCREEN_CONNECTIONS,
   MENU_SCREEN_WIFI_LIST,
   MENU_SCREEN_BLUETOOTH,
@@ -147,6 +156,19 @@ void playFeedbackTone(float freq, unsigned long durationMs);
 // volume register -- call after changing it so the new level takes
 // effect immediately (defined in the main .ino).
 void applyBuzzerVolume();
+
+// Actually enables/disables the SX1262 radio to match fanetEnabled
+// (settings.h) -- sleeps/wakes the chip itself, not just the software
+// FANET stack. If the radio was never successfully initialised (e.g. it
+// was off at boot), enabling runs the full init sequence for the first
+// time. Call after changing fanetEnabled so it takes effect immediately
+// (defined in the main .ino).
+void setFanetEnabled(bool enabled);
+
+// Re-applies screenOrientation (settings.h) to the physical display via
+// u8g2.setDisplayRotation() -- call after changing it so the flip takes
+// effect immediately (defined in the main .ino).
+void applyScreenOrientation();
 
 // =====================================================
 // Menu functions

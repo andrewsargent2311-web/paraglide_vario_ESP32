@@ -151,6 +151,23 @@ public:
         return _txInFlight;
     }
 
+    // Enable/disable the radio at runtime without a full begin() cycle.
+    //
+    // Disabling puts the SX1262 into its low-power sleep mode (RF
+    // section off -- no RX, no TX possible) rather than powering it down
+    // via RST, since RST is not wired to an ESP32 GPIO (see the header
+    // comment above). Any SPI transaction (NSS going low) wakes the
+    // chip back to STDBY_RC on its own per the datasheet, so re-enabling
+    // just needs to resume normal operation on this side.
+    //
+    // Returns false if begin() was never called successfully (nothing
+    // to enable/disable), or if the underlying SPI command failed.
+    bool setEnabled(bool enabled);
+
+    bool isEnabled() const {
+        return _enabled;
+    }
+
 private:
 
     static constexpr size_t RX_BUF_SIZE = 256;
@@ -166,6 +183,11 @@ private:
     SX1262* _radio;
 
     bool _txInFlight;
+
+    // Tracks setEnabled()'s sleep/wake state. Starts true (begin() leaves
+    // the chip awake in continuous receive); irrelevant until begin() has
+    // succeeded at least once.
+    bool _enabled;
 
     uint8_t _rxBuf[RX_BUF_SIZE];
 

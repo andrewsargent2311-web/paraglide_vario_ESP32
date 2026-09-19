@@ -128,6 +128,13 @@ extern bool adsbAutoJumpEnabled;
 // vario mute (buzzerMuted in the main .ino).
 extern bool adsbAlarmMuted;
 
+// Shows/hides the airspace-intrusion banner (drawn whenever the pilot is
+// inside tracked airspace -- see OpenAirScanner.h/.cpp). Deliberately
+// NOT persisted -- no loadSettings()/saveSettings() entry below -- so it
+// always starts back on at boot regardless of how it was last left, and
+// can never accidentally stay silenced into a flight where it matters.
+extern bool airspaceAlertBarEnabled;
+
 // =====================================================
 // ADS-B RANGE RINGS
 // The "far" (default) range rings drawn by drawADSBPage() -- outer and
@@ -184,6 +191,32 @@ extern bool buzzerMuted;
 // =====================================================
 #define DEM_FILENAME_MAX_LEN 32
 extern char selectedDemFile[DEM_FILENAME_MAX_LEN];
+
+// =====================================================
+// FANET RADIO ENABLE
+// Turns the FANET radio (SX1262/HT-RA62, see Sx126xLink.h) fully on or
+// off. OFF puts the chip itself into low-power sleep over SPI (no RX, no
+// TX, no beacons) via Sx126xLink::setEnabled(), rather than just muting
+// the software stack -- useful for RF-quiet bench testing. Applied at
+// boot (setup(), main .ino) and immediately on change via
+// setFanetEnabled() (main .ino) -- see Config > FANET in menu.cpp.
+// Persisted, so it survives a reboot.
+// =====================================================
+extern bool fanetEnabled;
+
+// =====================================================
+// SCREEN ORIENTATION
+// The case can be mounted either way up; this flips the display 180
+// degrees to match, via u8g2.setDisplayRotation() (see
+// applyScreenOrientation(), main .ino). "GPS Bottom" is the default and
+// matches how the app has always shipped; "GPS Top" is for the case
+// mounted the other way up. Applied at boot and immediately on change --
+// see Config > Screen in menu.cpp. Persisted.
+// =====================================================
+enum ScreenOrientation { SCREEN_ORIENTATION_GPS_BOTTOM = 0,
+                          SCREEN_ORIENTATION_GPS_TOP };
+
+extern ScreenOrientation screenOrientation;
 
 // =====================================================
 // MAIN PAGE SELECTION
