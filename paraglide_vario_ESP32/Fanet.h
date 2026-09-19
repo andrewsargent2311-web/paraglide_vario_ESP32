@@ -97,12 +97,50 @@ struct FanetTracking {
 };
 
 // -----------------------------------------------------------------------------
+// Decoded FANET Service (type 4) weather-station payload.
+//
+// Only the fields this flight computer currently has a use for are
+// decoded: wind (heading/speed/gust), position, and temperature -- that's
+// what drives the Weather page. Humidity, barometric pressure,
+// state-of-charge, and the internet-gateway/remote-config-advertisement
+// flags are all part of the Service packet format but are NOT decoded
+// into this struct (see FanetStack::decodeServiceAndDispatch() if a
+// future feature needs them -- their bytes are still correctly skipped
+// so later fields decode right, just not surfaced here). onRawPacket()
+// still sees every Service packet regardless, decoded or not.
+//
+// A Service packet without the wind bit set (e.g. a temperature-only or
+// gateway-only station) is NOT dispatched to onWeather() at all -- see
+// decodeServiceAndDispatch().
+// -----------------------------------------------------------------------------
+
+struct FanetWeather {
+
+    double latitude;
+    double longitude;
+
+    float windHeadingDeg;
+    float windSpeedKmh;
+    float windGustKmh;
+
+    bool  hasTemperature;
+    float temperatureC;
+};
+
+// -----------------------------------------------------------------------------
 // Callback types
 // -----------------------------------------------------------------------------
 
 typedef void (*FanetTrackingCallback)(
     const FanetAddress& src,
     const FanetTracking& pkt,
+    float rssi,
+    float snr
+);
+
+typedef void (*FanetWeatherCallback)(
+    const FanetAddress& src,
+    const FanetWeather& pkt,
     float rssi,
     float snr
 );
@@ -172,6 +210,10 @@ public:
         _trackingCb = cb;
     }
 
+    void onWeather(FanetWeatherCallback cb) {
+        _weatherCb = cb;
+    }
+
     void onRawPacket(FanetRawCallback cb) {
         _rawCb = cb;
     }
@@ -207,6 +249,7 @@ private:
     uint32_t _nextSendAttemptMs;
 
     FanetTrackingCallback _trackingCb;
+    FanetWeatherCallback _weatherCb;
     FanetRawCallback _rawCb;
 
     void handleReceived();
@@ -214,6 +257,16 @@ private:
     void decodeAndDispatch(
         const uint8_t* buf,
         size_t len,
+        float rssi,
+        float snr
+    );
+
+    // Service (type 4) payload decode -- called from decodeAndDispatch()
+    // once the MAC header/source address have already been stripped off.
+    void decodeServiceAndDispatch(
+        const uint8_t* payload,
+        size_t payloadLen,
+        const FanetAddress& src,
         float rssi,
         float snr
     );

@@ -78,7 +78,11 @@ extern uint8_t activePageIndex;
 //   |          airspaceAlertBarEnabled in settings.h)
 //   `-- WEATHER_SETTINGS
 //         |-- WEATHER_POLL_INTERVAL   (Zephyr station poll cadence)
-//         `-- WEATHER_STATIONS_SHOWN  (how many stations to display)
+//         |-- WEATHER_STATIONS_SHOWN  (how many stations to display)
+//         `-- WEATHER_SOURCE          ("FANET" / "Zephyr" -- preferred
+//                                      Weather-page data source; falls
+//                                      back to FANET regardless if the
+//                                      preferred source has no data)
 //
 // Gestures (see updatePageButton() in the main .ino):
 //   short press  -- move the highlight down (wraps within the current screen)
@@ -111,7 +115,8 @@ enum MenuScreen {
   MENU_SCREEN_ADSB_RANGE_RINGS,
   MENU_SCREEN_WEATHER_SETTINGS,
   MENU_SCREEN_WEATHER_POLL_INTERVAL,
-  MENU_SCREEN_WEATHER_STATIONS_SHOWN
+  MENU_SCREEN_WEATHER_STATIONS_SHOWN,
+  MENU_SCREEN_WEATHER_SOURCE
 };
 
 extern bool menuActive;

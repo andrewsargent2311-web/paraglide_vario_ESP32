@@ -240,9 +240,10 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_ADSB_RADIUS: return ADSB_RADIUS_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_VERTICAL: return ADSB_VERTICAL_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_RANGE_RINGS: return ADSB_RING_CHOICE_COUNT;
-    case MENU_SCREEN_WEATHER_SETTINGS: return 2;
+    case MENU_SCREEN_WEATHER_SETTINGS: return 3;
     case MENU_SCREEN_WEATHER_POLL_INTERVAL: return WEATHER_POLL_CHOICE_COUNT;
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN: return WEATHER_STATIONS_CHOICE_COUNT;
+    case MENU_SCREEN_WEATHER_SOURCE: return 2;
     default: return 1;
   }
 }
@@ -274,6 +275,7 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_WEATHER_SETTINGS: return "WEATHER SETTINGS";
     case MENU_SCREEN_WEATHER_POLL_INTERVAL: return "POLL INTERVAL";
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN: return "STATIONS SHOWN";
+    case MENU_SCREEN_WEATHER_SOURCE: return "SOURCE";
     default: return "MENU";
   }
 }
@@ -468,7 +470,7 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       break;
     }
     case MENU_SCREEN_WEATHER_SETTINGS: {
-      static const char* items[] = { "Poll Interval", "Stations Shown" };
+      static const char* items[] = { "Poll Interval", "Stations Shown", "Source" };
       snprintf(buf, buflen, "%s", items[index]);
       break;
     }
@@ -481,6 +483,13 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       uint8_t n = WEATHER_STATIONS_CHOICES[index];
       bool isActive = (weatherStationsShown == n);
       snprintf(buf, buflen, "%d Stations%s", n, isActive ? " *" : "");
+      break;
+    }
+    case MENU_SCREEN_WEATHER_SOURCE: {
+      const char* name = (index == 0) ? "FANET" : "Zephyr";
+      bool isActive = (index == 0 && weatherSource == WEATHER_SOURCE_FANET) ||
+                       (index == 1 && weatherSource == WEATHER_SOURCE_ZEPHYR);
+      snprintf(buf, buflen, "%s%s", name, isActive ? " *" : "");
       break;
     }
     default:
@@ -759,6 +768,7 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
       switch (index) {
         case 0: pushMenuScreen(MENU_SCREEN_WEATHER_POLL_INTERVAL); break;
         case 1: pushMenuScreen(MENU_SCREEN_WEATHER_STATIONS_SHOWN); break;
+        case 2: pushMenuScreen(MENU_SCREEN_WEATHER_SOURCE); break;
       }
       playFeedbackTone(900.0f, 80);
       return;
@@ -772,6 +782,13 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
 
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN:
       weatherStationsShown = WEATHER_STATIONS_CHOICES[index];
+      saveSettings();
+      playFeedbackTone(1100.0f, 120);
+      menuGoBack();  // back to Weather Settings
+      return;
+
+    case MENU_SCREEN_WEATHER_SOURCE:
+      weatherSource = (index == 0) ? WEATHER_SOURCE_FANET : WEATHER_SOURCE_ZEPHYR;
       saveSettings();
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to Weather Settings

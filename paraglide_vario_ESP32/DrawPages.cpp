@@ -14,6 +14,11 @@
 #define MAX_DISPLAYED_AIRCRAFT 24
 struct AircraftSnapshot {
   float lat, lon, altFeet, speedKt, headingDeg;
+
+  // FANET-only fields, ignored for ADS-B entries (isFanet == false).
+  bool isFanet;
+  float climbMs;
+  char label[12];  // e.g. "FC:0001" -- FanetAddress manufacturer:id
 };
 
 // =====================================================
@@ -684,30 +689,145 @@ void drawParagliderPage() {
 // =====================================================
 void drawWeatherPage() {
   // ---------------------------------------------------------
-  // 0. Snapshot localMeters under the mutex, then release it
+  // 0. Pick a data source and build localMetersSnapshot[] from it.
+  //
+  // weatherSource (Config > Weather Settings > Source) picks the
+  // preferred source, but if that source currently has nothing to show,
+  // this falls back to whichever source DOES -- most usefully Zephyr
+  // (needs WiFi/internet) falling back to FANET (needs neither) when
+  // out of WiFi range mid-flight, which is the direction explicitly
+  // asked for; the reverse (FANET selected but quiet -> Zephyr) is
+  // included too since it's a natural, harmless extension of the same
+  // idea -- flag it if you'd rather Weather stay strictly FANET-only
+  // when that's the selected source.
   // ---------------------------------------------------------
   WindMeter localMetersSnapshot[TRACKED_METERS];
-  bool snapshotHasWeatherData = hasWeatherData;
+  bool snapshotHasWeatherData;
+  bool usingFanetFallback = false;
 
-  if (snapshotHasWeatherData &&
-      backgroundDataMutex != nullptr &&
-      xSemaphoreTake(
-        backgroundDataMutex,
-        pdMS_TO_TICKS(20)) == pdTRUE) {
+  bool zephyrAvailable = hasWeatherData;
 
-    memcpy(
-      localMetersSnapshot,
-      localMeters,
-      sizeof(localMeters));
+  unsigned long wxNowMs = millis();
+  int fanetStationCount = 0;
+  for (int i = 0; i < MAX_FANET_WEATHER_STATIONS; i++) {
+    if (fanetWeatherStations[i].valid &&
+        (wxNowMs - fanetWeatherStations[i].lastSeenMs) <= FANET_WEATHER_TIMEOUT_MS) {
+      fanetStationCount++;
+    }
+  }
+  bool fanetAvailable = (fanetStationCount > 0);
 
-    xSemaphoreGive(backgroundDataMutex);
+  bool useZephyr;
+  bool useFanet;
+
+  if (weatherSource == WEATHER_SOURCE_ZEPHYR) {
+    useZephyr = zephyrAvailable;
+    useFanet = !zephyrAvailable && fanetAvailable;
+  } else {
+    useFanet = fanetAvailable;
+    useZephyr = !fanetAvailable && zephyrAvailable;
+  }
+
+  if (useZephyr) {
+
+    snapshotHasWeatherData = true;
+
+    if (backgroundDataMutex != nullptr &&
+        xSemaphoreTake(
+          backgroundDataMutex,
+          pdMS_TO_TICKS(20)) == pdTRUE) {
+
+      memcpy(
+        localMetersSnapshot,
+        localMeters,
+        sizeof(localMeters));
+
+      xSemaphoreGive(backgroundDataMutex);
+
+    } else {
+
+      for (int i = 0; i < TRACKED_METERS; i++) {
+        localMetersSnapshot[i].valid = false;
+      }
+    }
+
+  } else if (useFanet) {
+
+    snapshotHasWeatherData = true;
+    usingFanetFallback = true;
+
+    // No mutex needed for fanetWeatherStations[] here -- see the
+    // FanetWeatherStation comment in DrawPages.h.
+    bool haveFix = gps.location.isValid();
+    float myLat = haveFix ? (float)gps.location.lat() : 0.0f;
+    float myLon = haveFix ? (float)gps.location.lng() : 0.0f;
+
+    int slot = 0;
+
+    for (int i = 0;
+         i < MAX_FANET_WEATHER_STATIONS && slot < TRACKED_METERS;
+         i++) {
+
+      if (!fanetWeatherStations[i].valid) continue;
+      if (wxNowMs - fanetWeatherStations[i].lastSeenMs > FANET_WEATHER_TIMEOUT_MS) continue;
+
+      WindMeter& m = localMetersSnapshot[slot];
+
+      snprintf(m.name, sizeof(m.name), "FANET %02X:%04X",
+               fanetWeatherStations[i].addr.manufacturer,
+               fanetWeatherStations[i].addr.id);
+
+      m.speedKph = fanetWeatherStations[i].windSpeedKmh;
+      m.gustKph = fanetWeatherStations[i].windGustKmh;
+      m.bearingDeg = fanetWeatherStations[i].windHeadingDeg;
+
+      if (haveFix) {
+        m.distanceKm = getDistanceKM(myLat, myLon,
+                                      fanetWeatherStations[i].lat,
+                                      fanetWeatherStations[i].lon);
+        m.geoBearingDeg = getBearing(myLat, myLon,
+                                      fanetWeatherStations[i].lat,
+                                      fanetWeatherStations[i].lon);
+      } else {
+        // No GPS fix yet -- can't compute distance/bearing to the
+        // station, so show it but with those two fields zeroed rather
+        // than a misleading number.
+        m.distanceKm = 0.0f;
+        m.geoBearingDeg = 0.0f;
+      }
+
+      m.valid = true;
+      slot++;
+    }
+
+    for (int i = slot; i < TRACKED_METERS; i++) {
+      localMetersSnapshot[i].valid = false;
+    }
+
+    // Sort by distance, closest first -- matches how Zephyr's
+    // localMeters[] already arrives (see updateWeather(), main .ino).
+    if (haveFix) {
+      for (int a = 0; a < slot - 1; a++) {
+        for (int b = a + 1; b < slot; b++) {
+          if (localMetersSnapshot[b].distanceKm < localMetersSnapshot[a].distanceKm) {
+            WindMeter tmp = localMetersSnapshot[a];
+            localMetersSnapshot[a] = localMetersSnapshot[b];
+            localMetersSnapshot[b] = tmp;
+          }
+        }
+      }
+    }
 
   } else {
+
+    snapshotHasWeatherData = false;
 
     for (int i = 0; i < TRACKED_METERS; i++) {
       localMetersSnapshot[i].valid = false;
     }
   }
+
+  (void)usingFanetFallback;  // not currently drawn -- see reply for why
 
   // ---------------------------------------------------------
   // 1. Row layout
@@ -1356,10 +1476,42 @@ void drawADSBPage() {
       snapshotAircraft[snapshotCount].altFeet = ac["alt_baro"];
       snapshotAircraft[snapshotCount].speedKt = ac["gs"];
       snapshotAircraft[snapshotCount].headingDeg = ac["track"];
+      snapshotAircraft[snapshotCount].isFanet = false;
+      snapshotAircraft[snapshotCount].climbMs = 0.0f;
       snapshotCount++;
     }
 
     xSemaphoreGive(backgroundDataMutex);
+  }
+
+  // ---------------------------------------------------------
+  // Merge in live FANET contacts (paragliders/paramotors broadcasting
+  // Type-1 tracking beacons, decoded by FanetStack -- see
+  // onFanetTracking() in the main .ino). No mutex needed here -- see the
+  // FanetContact comment in DrawPages.h for why.
+  // ---------------------------------------------------------
+  unsigned long fanetNowMs = millis();
+  for (int i = 0; i < MAX_FANET_CONTACTS && snapshotCount < MAX_DISPLAYED_AIRCRAFT; i++) {
+    if (!fanetContacts[i].valid) continue;
+
+    if (fanetNowMs - fanetContacts[i].lastSeenMs > FANET_CONTACT_TIMEOUT_MS) {
+      // Gone quiet long enough to treat as stale -- clearing valid here
+      // (rather than only skipping it) also frees the slot for reuse
+      // instead of it only ever getting reclaimed via eviction.
+      fanetContacts[i].valid = false;
+      continue;
+    }
+
+    snapshotAircraft[snapshotCount].lat = fanetContacts[i].lat;
+    snapshotAircraft[snapshotCount].lon = fanetContacts[i].lon;
+    snapshotAircraft[snapshotCount].altFeet = fanetContacts[i].altitudeM * 3.28084f;
+    snapshotAircraft[snapshotCount].speedKt = fanetContacts[i].speedKmh * 0.539957f;  // km/h -> kt
+    snapshotAircraft[snapshotCount].headingDeg = fanetContacts[i].headingDeg;
+    snapshotAircraft[snapshotCount].isFanet = true;
+    snapshotAircraft[snapshotCount].climbMs = fanetContacts[i].climbMs;
+    snprintf(snapshotAircraft[snapshotCount].label, sizeof(snapshotAircraft[snapshotCount].label),
+             "%02X:%04X", fanetContacts[i].addr.manufacturer, fanetContacts[i].addr.id);
+    snapshotCount++;
   }
 
   // 3. Auto-zoom: switch the rings (and the aircraft plot scale) to
@@ -1522,15 +1674,19 @@ void drawADSBPage() {
   u8g2.drawStr(varioX + 5, varioY + 23, varioText);
 
 
-  if (!snapshotHasData) {
-    u8g2.setFont(u8g2_font_6x10_tf);
-    u8g2.drawStr(cx - 50, cy + 30, "No data fetched");
-    return;
-  }
-
+  // Combined check -- snapshotCount now reflects ADS-B AND FANET
+  // contacts together, so this only reports "nothing at all" once both
+  // sources have had their say. snapshotHasData still distinguishes the
+  // two empty cases: the ADS-B feed itself never having been fetched
+  // (independent of whether any FANET contact is around) vs. a feed that
+  // was fetched but is genuinely empty right now.
   if (snapshotCount == 0) {
     u8g2.setFont(u8g2_font_6x10_tf);
-    u8g2.drawStr(cx - 55, cy + 30, "No local traffic");
+    if (!snapshotHasData) {
+      u8g2.drawStr(cx - 50, cy + 30, "No data fetched");
+    } else {
+      u8g2.drawStr(cx - 55, cy + 30, "No local traffic");
+    }
     return;
   }
 
@@ -1573,18 +1729,32 @@ void drawADSBPage() {
     // Same 5km / 2000ft bubble used for the one-time "new intruder" chirp
     // in performADSBUpdate(), re-evaluated every redraw so the alarm keeps
     // re-triggering every ALARM_SILENCE_MS for as long as a conflicting
-    // aircraft remains on screen.
-    if (distanceKM <= 5.0f && fabsf(altitudeFeet - myAltitudeFeet) <= 2000.0f) {
+    // aircraft remains on screen. Deliberately excludes FANET contacts --
+    // this alarm is tuned for powered ADS-B traffic, and a paraglider/
+    // paramotor pilot thermalling alongside other FANET-equipped pilots
+    // would very often be within 2000ft/5km of one, which would make this
+    // fire constantly and turn it into noise rather than a real alert.
+    if (!snapshotAircraft[i].isFanet &&
+        distanceKM <= 5.0f && fabsf(altitudeFeet - myAltitudeFeet) <= 2000.0f) {
       conflictDetectedThisFrame = true;
     }
 
-    float flightLevelFloat = altitudeFeet / 1000.0f;
-    if (flightLevelFloat < 0.0f) flightLevelFloat = 0.0f;
-
-    const char* compassHdg = getCompassDirection(headingDeg);
-
     char dataTag[24];
-    snprintf(dataTag, sizeof(dataTag), "FL%.1f %s %.0fkt", flightLevelFloat, compassHdg, speedKnots);
+
+    if (snapshotAircraft[i].isFanet) {
+      // Climb rate is far more relevant than flight level for a nearby
+      // paraglider/paramotor -- and the FANET address doubles as a
+      // visual "this is FANET, not ADS-B" cue next to the marker.
+      snprintf(dataTag, sizeof(dataTag), "PG %s %+.1fm/s",
+               snapshotAircraft[i].label, snapshotAircraft[i].climbMs);
+    } else {
+      float flightLevelFloat = altitudeFeet / 1000.0f;
+      if (flightLevelFloat < 0.0f) flightLevelFloat = 0.0f;
+
+      const char* compassHdg = getCompassDirection(headingDeg);
+
+      snprintf(dataTag, sizeof(dataTag), "FL%.1f %s %.0fkt", flightLevelFloat, compassHdg, speedKnots);
+    }
 
     // 8. Render Anti-Clipping Text Box Frame Safely Beside Target Node
     int textX = acX + 8;  // Offset further out to avoid crowding the icon

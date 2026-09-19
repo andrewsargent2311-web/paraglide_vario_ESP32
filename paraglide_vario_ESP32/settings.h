@@ -166,6 +166,19 @@ extern unsigned long weatherPollIntervalMs;
 // sorted by distance -- this must never exceed it.
 extern uint8_t weatherStationsShown;
 
+// Preferred weather data source for the Weather page -- WiFi-fetched
+// Zephyr network stations (localMeters[], main .ino), or locally-received
+// FANET Service (type 4) weather-station beacons (fanetWeatherStations[],
+// DrawPages.h/.cpp). Regardless of which is preferred, drawWeatherPage()
+// falls back to FANET stations if the preferred source currently has no
+// data -- FANET needs no WiFi/internet and is often available when
+// Zephyr isn't (mid-flight, out of WiFi range). Applied at draw time, not
+// cached -- see Config > Weather Settings > Source in menu.cpp. Persisted.
+enum WeatherSource { WEATHER_SOURCE_ZEPHYR = 0,
+                      WEATHER_SOURCE_FANET };
+
+extern WeatherSource weatherSource;
+
 // Wind speed, gust, and estimated airspeed readouts (Weather page and the
 // Paraglider page's WIND/AIRSPEED box) are converted with the same
 // speedKphToDisplay()/speedUnitLabel() used for GPS ground speed above,

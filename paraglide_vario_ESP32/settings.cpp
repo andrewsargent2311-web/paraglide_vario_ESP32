@@ -94,6 +94,9 @@ float adsbRingInnerKm = 15.0f;
 unsigned long weatherPollIntervalMs = 5UL * 60UL * 1000UL;
 uint8_t weatherStationsShown = 4;
 
+// Default matches the app's original (WiFi/Zephyr-only) behaviour.
+WeatherSource weatherSource = WEATHER_SOURCE_ZEPHYR;
+
 bool buzzerMuted = false;
 
 // Default matches the renamed tile now shipped on the SD card.
@@ -143,6 +146,7 @@ void loadSettings() {
 
   weatherPollIntervalMs = prefs.getUInt("wxPoll", weatherPollIntervalMs);
   weatherStationsShown = prefs.getUChar("wxStations", weatherStationsShown);
+  weatherSource = (WeatherSource)prefs.getUChar("wxSource", (uint8_t)weatherSource);
 
   String dem = prefs.getString("demFile", selectedDemFile);
   strncpy(selectedDemFile, dem.c_str(), DEM_FILENAME_MAX_LEN - 1);
@@ -185,6 +189,7 @@ void saveSettings() {
 
   prefs.putUInt("wxPoll", weatherPollIntervalMs);
   prefs.putUChar("wxStations", weatherStationsShown);
+  prefs.putUChar("wxSource", (uint8_t)weatherSource);
 
   prefs.putString("demFile", selectedDemFile);
 

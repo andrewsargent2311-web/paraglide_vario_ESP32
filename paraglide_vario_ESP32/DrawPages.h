@@ -26,6 +26,7 @@
 #include "menu.h"            // Page, PAGE_PARAGLIDER / PAGE_WEATHER / PAGE_ADSB / PAGE_PARAMOTOR, PAGE_COUNT
 #include "settings.h"        // altitudeUnitLabel(), altitudeToDisplay(), speedUnitLabel(), speedKphToDisplay(), etc.
 #include "ble_manager.h"     // engineDataValid/engineRpm/engineEgtC/engineChtC for drawParamotorPage()
+#include "Fanet.h"           // FanetAddress -- FanetContact below
 
 // =====================================================
 // Display-related constants (moved here from the .ino so both the .ino
@@ -40,6 +41,30 @@
 #define TRACKED_METERS 6
 #define CLIMB_DEADBAND_MS 0.15f
 
+// Live FANET traffic table -- see FanetContact below. Sized well above
+// what a single-radio FANET receiver realistically hears at once (FANET
+// is a short-range, low-power protocol); if this ever proves tight in
+// practice, bump it up rather than treating the number as load-bearing.
+#define MAX_FANET_CONTACTS 16
+
+// A contact this quiet is treated as stale and drops off the radar page
+// -- roughly 6 missed beacons at the default 5s interval
+// (FANET_BEACON_INTERVAL_MS, main .ino), enough margin that one or two
+// dropped packets over a marginal RF link don't make a still-present
+// aircraft flicker on and off.
+#define FANET_CONTACT_TIMEOUT_MS 30000UL
+
+// Live FANET weather-station table -- see FanetWeatherStation below.
+// Ground stations are far less numerous than aircraft in range at once,
+// so this is sized smaller than MAX_FANET_CONTACTS.
+#define MAX_FANET_WEATHER_STATIONS 8
+
+// FANET Service (weather) packets recommend a 40s broadcast interval
+// (see the protocol reference in Fanet.h) -- this allows for several
+// missed beacons before a station is treated as stale and dropped from
+// the Weather page.
+#define FANET_WEATHER_TIMEOUT_MS 180000UL
+
 // One collected/sorted weather station reading -- shared between the
 // weather-fetch code in the .ino (which fills localMeters[]) and
 // drawWeatherPage() (which reads it), so the type lives here.
@@ -51,6 +76,47 @@ struct WindMeter {
   float bearingDeg;     // wind direction reported BY the station (e.g. "N" = wind from the north)
   float geoBearingDeg;  // compass bearing FROM the glider TO the station (e.g. "NE")
   bool valid;
+};
+
+// One tracked FANET aircraft, updated in place by onFanetTracking() (main
+// .ino) each time a Type-1 tracking beacon arrives from that address, and
+// read by drawADSBPage() (DrawPages.cpp) to plot it alongside ADS-B
+// traffic. No mutex needed around fanetContacts[] below -- unlike
+// adsbDoc/localMeters[] (written by backgroundTask() on Core 0, read from
+// Core 1), onFanetTracking() runs inside fanet.update() and drawADSBPage()
+// runs inside drawDashboard(), and both are only ever called from loop()
+// on Core 1 -- so the two can never actually run concurrently.
+struct FanetContact {
+  bool valid;
+  FanetAddress addr;
+  float lat;
+  float lon;
+  int32_t altitudeM;
+  float speedKmh;
+  float climbMs;
+  float headingDeg;
+  uint8_t aircraftType;
+  float rssi;
+  float snr;
+  unsigned long lastSeenMs;
+};
+
+// One tracked FANET weather station, updated in place by onFanetWeather()
+// (main .ino) each time a Service (type 4) beacon with wind data arrives
+// from that address. Same no-mutex reasoning as FanetContact above --
+// onFanetWeather() and drawWeatherPage() are both only ever called from
+// loop() on Core 1.
+struct FanetWeatherStation {
+  bool valid;
+  FanetAddress addr;
+  float lat;
+  float lon;
+  float windHeadingDeg;
+  float windSpeedKmh;
+  float windGustKmh;
+  bool hasTemperature;
+  float temperatureC;
+  unsigned long lastSeenMs;
 };
 
 // =====================================================
@@ -83,6 +149,9 @@ extern float MY_LON;
 
 extern WindMeter localMeters[TRACKED_METERS];
 extern volatile bool hasWeatherData;
+
+extern FanetContact fanetContacts[MAX_FANET_CONTACTS];
+extern FanetWeatherStation fanetWeatherStations[MAX_FANET_WEATHER_STATIONS];
 
 extern int windowCount;
 extern float currentAltitudeM;

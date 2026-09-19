@@ -47,6 +47,13 @@ static constexpr float FANET_SPEED_STEP_KMH = 0.5f;
 static constexpr float FANET_CLIMB_STEP_MS = 0.1f;
 static constexpr float FANET_HEADING_STEP_DEG = 360.0f / 256.0f;
 
+// Service (type 4) weather-station payload -- see the "Service" section
+// of the protocol reference linked in Fanet.h. Wind speed/gust share the
+// same bit7-scale/bits0-6-value shape as tracking's speed field, just
+// with a finer 0.2km/h step instead of 0.5km/h.
+static constexpr float FANET_WIND_STEP_KMH = 0.2f;
+static constexpr float FANET_TEMP_STEP_C = 0.5f;
+
 // Maximum values represented by the FANET compact fields.
 static constexpr float FANET_MAX_SPEED_KMH = 317.5f;
 static constexpr float FANET_MAX_CLIMB_MS = 31.5f;
@@ -123,6 +130,7 @@ FanetStack::FanetStack(
     , _nextSendAttemptMs(0)
 
     , _trackingCb(nullptr)
+    , _weatherCb(nullptr)
     , _rawCb(nullptr)
 {
 }
@@ -351,6 +359,29 @@ static float decodeSpeed(
 
     float speed =
         raw * FANET_SPEED_STEP_KMH;
+
+    if (scaled) {
+        speed *= 5.0f;
+    }
+
+    return speed;
+}
+
+// Same bit7-scale/bits0-6-value shape as decodeSpeed() above, but for
+// Service packets' wind speed/gust fields (0.2km/h step instead of
+// tracking's 0.5km/h).
+static float decodeWindComponent(
+    uint8_t value
+) {
+
+    bool scaled =
+        (value & 0x80) != 0;
+
+    uint8_t raw =
+        value & 0x7F;
+
+    float speed =
+        raw * FANET_WIND_STEP_KMH;
 
     if (scaled) {
         speed *= 5.0f;
@@ -782,6 +813,23 @@ void FanetStack::decodeAndDispatch(
     }
 
     // ------------------------------------------------------------------------
+    // Service packet (weather station)
+    // ------------------------------------------------------------------------
+
+    if (type == FANET_TYPE_SERVICE) {
+
+        decodeServiceAndDispatch(
+            payload,
+            payloadLen,
+            src,
+            rssi,
+            snr
+        );
+
+        return;
+    }
+
+    // ------------------------------------------------------------------------
     // Tracking packet
     // ------------------------------------------------------------------------
 
@@ -931,6 +979,204 @@ void FanetStack::decodeAndDispatch(
         _trackingCb(
             src,
             pkt,
+            rssi,
+            snr
+        );
+    }
+}
+
+// ============================================================================
+// Service packet (weather station) decode
+// ============================================================================
+//
+// Header byte bit layout (see the "Service (Type = 4)" section of the
+// protocol reference linked in Fanet.h):
+//
+//   bit 7 = Internet Gateway        (flag only, no payload)
+//   bit 6 = Temperature             (+1 byte, 0.5 deg C, 2's complement)
+//   bit 5 = Wind                    (+3 bytes: heading, speed, gust)
+//   bit 4 = Humidity                (+1 byte -- not decoded here)
+//   bit 3 = Barometric pressure     (+2 bytes -- not decoded here)
+//   bit 2 = Remote Config support   (flag only, no payload)
+//   bit 1 = State of Charge         (+1 byte -- not decoded here)
+//   bit 0 = Extended Header present (+1 byte, consumed but not decoded)
+//
+// Fields present are appended in that bit order (6 down to 1), each
+// right after Position -- which itself is only present when at least one
+// of bits 1/3/4/5/6 is set (a gateway/remote-config-only advertisement
+// can be position-free).
+// ============================================================================
+
+void FanetStack::decodeServiceAndDispatch(
+    const uint8_t* payload,
+    size_t payloadLen,
+    const FanetAddress& src,
+    float rssi,
+    float snr
+) {
+
+    if (payload == nullptr || payloadLen < 1) {
+        return;
+    }
+
+    uint8_t header =
+        payload[0];
+
+    size_t offset = 1;
+
+    bool hasExtHeader = (header & 0x01) != 0;
+    bool hasTemp       = (header & 0x40) != 0;
+    bool hasWind       = (header & 0x20) != 0;
+    bool hasHumidity   = (header & 0x10) != 0;
+    bool hasPressure   = (header & 0x08) != 0;
+    bool hasSoC        = (header & 0x02) != 0;
+    // Gateway (bit 7) and Remote Config (bit 2) are flags with no payload
+    // of their own -- nothing to consume for either.
+
+    if (hasExtHeader) {
+        // Extended-header payload isn't defined/used by this decoder yet
+        // -- skip its one byte so the fields after it still line up.
+        if (payloadLen < offset + 1) {
+            return;
+        }
+        offset += 1;
+    }
+
+    // Position is only guaranteed present when there's actual weather
+    // payload to go with it -- a gateway/remote-config-only
+    // advertisement can omit it entirely. We only care about wind-
+    // bearing stations, so there's nothing useful here either way if
+    // none of the weather bits are set.
+    bool hasAnyWeatherPayload =
+        hasTemp || hasWind || hasHumidity || hasPressure || hasSoC;
+
+    if (!hasAnyWeatherPayload) {
+        return;
+    }
+
+    if (payloadLen < offset + 6) {
+        return;  // truncated -- can't even read position
+    }
+
+    int32_t latRaw =
+        readS24LE(&payload[offset]);
+
+    double latitude =
+        (double)latRaw / FANET_LAT_SCALE;
+
+    offset += 3;
+
+    int32_t lonRaw =
+        readS24LE(&payload[offset]);
+
+    double longitude =
+        (double)lonRaw / FANET_LON_SCALE;
+
+    offset += 3;
+
+    bool windPresent = false;
+    float windHeadingDeg = 0.0f;
+    float windSpeedKmh = 0.0f;
+    float windGustKmh = 0.0f;
+
+    bool hasTemperature = false;
+    float temperatureC = 0.0f;
+
+    // Each field below both decodes (if we care about it) and advances
+    // offset (regardless, so a field we don't decode doesn't throw off
+    // the position of one that comes after it).
+
+    if (hasTemp) {
+
+        if (payloadLen < offset + 1) {
+            return;
+        }
+
+        int8_t raw =
+            (int8_t)payload[offset];
+
+        offset += 1;
+
+        temperatureC =
+            raw * FANET_TEMP_STEP_C;
+
+        hasTemperature = true;
+    }
+
+    if (hasWind) {
+
+        if (payloadLen < offset + 3) {
+            return;
+        }
+
+        uint8_t hdgRaw = payload[offset];
+        uint8_t spdRaw = payload[offset + 1];
+        uint8_t gustRaw = payload[offset + 2];
+
+        offset += 3;
+
+        windHeadingDeg =
+            ((float)hdgRaw) *
+            FANET_HEADING_STEP_DEG;
+
+        windSpeedKmh =
+            decodeWindComponent(spdRaw);
+
+        windGustKmh =
+            decodeWindComponent(gustRaw);
+
+        windPresent = true;
+    }
+
+    if (hasHumidity) {
+        // Not decoded into FanetWeather (see its comment in Fanet.h) --
+        // just consume the byte.
+        if (payloadLen < offset + 1) {
+            return;
+        }
+        offset += 1;
+    }
+
+    if (hasPressure) {
+        // Not decoded -- consume its 2 bytes.
+        if (payloadLen < offset + 2) {
+            return;
+        }
+        offset += 2;
+    }
+
+    if (hasSoC) {
+        // Not decoded -- consume its byte.
+        if (payloadLen < offset + 1) {
+            return;
+        }
+        offset += 1;
+    }
+
+    // Only wind-bearing Service packets are useful for the Weather page
+    // right now -- a temperature/pressure/SoC-only station has nothing
+    // for onWeather() to report.
+    if (!windPresent) {
+        return;
+    }
+
+    if (_weatherCb) {
+
+        FanetWeather w{};
+
+        w.latitude = latitude;
+        w.longitude = longitude;
+
+        w.windHeadingDeg = windHeadingDeg;
+        w.windSpeedKmh = windSpeedKmh;
+        w.windGustKmh = windGustKmh;
+
+        w.hasTemperature = hasTemperature;
+        w.temperatureC = temperatureC;
+
+        _weatherCb(
+            src,
+            w,
             rssi,
             snr
         );
