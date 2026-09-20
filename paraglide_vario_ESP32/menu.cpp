@@ -236,7 +236,7 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_BLUETOOTH: return 3;
     case MENU_SCREEN_BLUETOOTH_SCAN: return bleScanResultCount() > 0 ? bleScanResultCount() : 1;
     case MENU_SCREEN_MAP: return mapFileCount > 0 ? mapFileCount : 1;
-    case MENU_SCREEN_ADSB_SETTINGS: return 6;
+    case MENU_SCREEN_ADSB_SETTINGS: return 7;
     case MENU_SCREEN_ADSB_RADIUS: return ADSB_RADIUS_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_VERTICAL: return ADSB_VERTICAL_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_RANGE_RINGS: return ADSB_RING_CHOICE_COUNT;
@@ -445,6 +445,8 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         snprintf(buf, buflen, "Range Rings");
       } else if (index == 5) {
         snprintf(buf, buflen, "Airspace Alert Bar: %s", airspaceAlertBarEnabled ? "On" : "Off");
+      } else if (index == 6) {
+        snprintf(buf, buflen, "Airspace Info: %s", airspaceInfoBarEnabled ? "On" : "Off");
       } else {
         static const char* items[] = { "Alert Radius", "Vertical Threshold" };
         snprintf(buf, buflen, "%s", items[index]);
@@ -752,6 +754,14 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           // Deliberately NOT saved -- see airspaceAlertBarEnabled's
           // comment in settings.h; always back on at next boot.
           airspaceAlertBarEnabled = !airspaceAlertBarEnabled;
+          displayDirty = true;
+          playFeedbackTone(600.0f, 50);
+          return;
+        case 6:
+          // Unlike airspaceAlertBarEnabled above, this one IS saved --
+          // see its comment in settings.h.
+          airspaceInfoBarEnabled = !airspaceInfoBarEnabled;
+          saveSettings();
           displayDirty = true;
           playFeedbackTone(600.0f, 50);
           return;

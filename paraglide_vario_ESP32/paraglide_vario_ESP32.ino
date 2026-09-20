@@ -136,6 +136,12 @@ unsigned long airspaceScanAnchor = 0;
 AirspaceResult nearestAirspace;
 volatile bool airspaceResultValid = false;
 
+// alertOnly = false counterpart of the above -- includes CFZ entries,
+// feeds only the ADS-B page's "Airspace Info" bar. See the comment at
+// the findNearestControlledAirspace() call site in backgroundTask().
+AirspaceResult nearestAirspaceInfo;
+volatile bool airspaceInfoResultValid = false;
+
 // Cross-core position snapshot for backgroundTask() to read. Grouped into
 // one struct (rather than individual volatiles like sharedGpsAltitudeFeet)
 // because lat+lon+alt need to be read together as one consistent fix --
@@ -569,6 +575,24 @@ bool muteToneIsMuteSequence = false;  // true = muting order (650->gap->500); fa
 // standard atmosphere so altitude/climb-rate keep running off the BMP580
 // alone instead of sitting "not calibrated" for the whole flight.
 #define GPS_QNH_FALLBACK_MS 60000UL
+
+// How long a continuous run of good-quality GPS fixes (see
+// gpsAltitudeGood in updateVario()) is averaged over before calibrating
+// QNH from it. A single instantaneous GPS altitude sample is noisy
+// enough (GPS vertical error is typically 2-3x worse than horizontal,
+// and HDOP doesn't bound it specifically) that calibrating off just one
+// fix can lock in a QNH that's meaningfully wrong for the rest of the
+// flight -- averaging over a real time window smooths that out. If GPS
+// quality drops mid-window (gpsAltitudeGood goes false), the window is
+// abandoned and a fresh one starts from scratch on the next good fix,
+// rather than silently averaging across a gap.
+#define QNH_GPS_AVERAGE_MS 30000UL
+
+// A window that reaches QNH_GPS_AVERAGE_MS with fewer fresh fixes than
+// this is treated as not enough data to trust (e.g. a flaky GPS module
+// only reporting a handful of updates in 30s) -- the window resets and
+// tries again rather than calibrating off too few samples.
+#define QNH_GPS_MIN_SAMPLES 5
 #define CLIMB_WINDOW_N 8
 #define BARO_SAMPLE_MS 100
 // CLIMB_DEADBAND_MS is defined in DrawPages.h (shared with drawParagliderPage()'s sink indicator, and with updateI2sAudioBuzzer() below).
@@ -1735,13 +1759,36 @@ void backgroundTask(void* parameter) {
         // this is what stops an AGL/SFC-referenced floor being resolved
         // against a stale ground elevation once the aircraft has flown
         // outside the loaded DEM tile. See AirspaceResult::vertKnown.
+        //
+        // alertOnly = true -- this feeds the proximity/entry ALERT (top
+        // banner + tone) and the Paraglider/Paramotor pages' AIR SPACE
+        // box, neither of which should ever trigger for a CFZ.
         bool found = findNearestControlledAirspace(
           pos.lat,
           pos.lon,
           pos.altFt,
           groundElevationFt,
           groundElevationValid,
+          /*alertOnly=*/true,
           nearest
+        );
+
+        // A second, independent search -- alertOnly = false, so a CFZ
+        // (or anything else in the cache) can be returned. Feeds ONLY
+        // the ADS-B page's "Airspace Info" bar (Config > ADS-B Settings
+        // > Airspace Info), which exists specifically to surface a
+        // CFZ's name/frequency even though it must never trigger the
+        // alert above.
+        AirspaceResult nearestInfo;
+
+        bool foundInfo = findNearestControlledAirspace(
+          pos.lat,
+          pos.lon,
+          pos.altFt,
+          groundElevationFt,
+          groundElevationValid,
+          /*alertOnly=*/false,
+          nearestInfo
         );
 
         if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
@@ -1754,6 +1801,14 @@ void backgroundTask(void* parameter) {
             // the pilot has flown clear of it.
             airspaceResultValid = false;
           }
+
+          if (foundInfo) {
+            nearestAirspaceInfo = nearestInfo;
+            airspaceInfoResultValid = true;
+          } else {
+            airspaceInfoResultValid = false;
+          }
+
           xSemaphoreGive(backgroundDataMutex);
         }
       }
@@ -2651,7 +2706,7 @@ void updateVario() {
   }
 
   bool gpsAltitudeGood =
-    gps.altitude.isValid() && gps.altitude.age() < 2000 && gps.satellites.isValid() && gps.satellites.value() >= 6 && gps.hdop.isValid() && gps.hdop.hdop() <= 2.5;
+    gps.altitude.isValid() && gps.altitude.age() < 2000 && gps.satellites.isValid() && gps.satellites.value() >= 5 && gps.hdop.isValid() && gps.hdop.hdop() <= 2.5;
 
   // Runs the real GPS-derived calibration the first time a good fix
   // shows up, AND -- if we're currently sitting on the no-GPS fallback
@@ -2659,34 +2714,104 @@ void updateVario() {
   // merely-slow GPS still gets upgraded to a proper calibration instead
   // of being stuck on 1013.25 for the rest of the flight. Once genuinely
   // calibrated (qnhIsFallback == false), this never fires again.
+  //
+  // Averages GPS altitude over QNH_GPS_AVERAGE_MS (30s) of continuous
+  // good-quality fixes rather than calibrating off a single instantaneous
+  // sample -- see QNH_GPS_AVERAGE_MS's comment above for why a one-shot
+  // sample proved unreliable in real-world testing. qnhAvgActive/
+  // qnhAvgStartMs/qnhAvgAltSum/qnhAvgCount persist this averaging window
+  // across calls; static rather than global since nothing outside this
+  // function needs them.
+  static bool qnhAvgActive = false;
+  static unsigned long qnhAvgStartMs = 0;
+  static double qnhAvgAltSum = 0.0;
+  static uint16_t qnhAvgCount = 0;
+
   if (gpsAltitudeGood && (!qnhCalibrated || qnhIsFallback)) {
-    float gpsAltM = gps.altitude.meters();
 
-    float calculatedQNH =
-      bmp.pressure / powf(1.0f - (gpsAltM / 44330.0f), 1.0f / 0.1903f);
-
-    if (calculatedQNH >= 850.0f && calculatedQNH <= 1100.0f) {
-
-      bool wasFallback = qnhIsFallback;
-      currentQNH = calculatedQNH;
-      qnhCalibrated = true;
-      qnhIsFallback = false;
-
-      Serial.print(wasFallback ? "QNH upgraded from GPS altitude (fallback replaced): "
-                               : "QNH calibrated from GPS altitude: ");
-      Serial.println(currentQNH);
+    if (!qnhAvgActive) {
+      // First good fix -- start a fresh 30s averaging window.
+      qnhAvgActive = true;
+      qnhAvgStartMs = millis();
+      qnhAvgAltSum = 0.0;
+      qnhAvgCount = 0;
     }
-  } else if (!qnhCalibrated && millis() >= GPS_QNH_FALLBACK_MS) {
-    // GPS never came good (missing/unwired module, or just no fix after
-    // a full minute) -- stop waiting on it. Default to standard
-    // atmosphere so the BMP580 alone can drive altitude/vario for the
-    // rest of the flight. Flagged as a fallback so a later good fix can
-    // still upgrade it, above.
-    currentQNH = SEA_LEVEL_QNH_DEFAULT;
-    qnhCalibrated = true;
-    qnhIsFallback = true;
 
-    Serial.println("GPS unavailable -- defaulting QNH to 1013.25, running altitude/vario off BMP580 only");
+    // Only bank a sample once per fresh GPS sentence. isUpdated() clears
+    // itself on read, so this can't double-count the same fix just
+    // because updateVario() runs far more often than the GPS module
+    // actually reports a new position (typically 1Hz) -- without this
+    // check, a single fix held between GPS updates would get counted
+    // once per updateVario() call and dominate the average.
+    if (gps.altitude.isUpdated()) {
+      qnhAvgAltSum += gps.altitude.meters();
+      qnhAvgCount++;
+    }
+
+    if (debugNow && qnhAvgActive) {
+      Serial.printf("[VARIO DEBUG] QNH averaging: %u samples over %lus/%lus\n",
+                    qnhAvgCount, (millis() - qnhAvgStartMs) / 1000UL, QNH_GPS_AVERAGE_MS / 1000UL);
+    }
+
+    if (millis() - qnhAvgStartMs >= QNH_GPS_AVERAGE_MS) {
+
+      if (qnhAvgCount >= QNH_GPS_MIN_SAMPLES) {
+
+        float gpsAltM = (float)(qnhAvgAltSum / qnhAvgCount);
+
+        float calculatedQNH =
+          bmp.pressure / powf(1.0f - (gpsAltM / 44330.0f), 1.0f / 0.1903f);
+
+        if (calculatedQNH >= 850.0f && calculatedQNH <= 1100.0f) {
+
+          bool wasFallback = qnhIsFallback;
+          currentQNH = calculatedQNH;
+          qnhCalibrated = true;
+          qnhIsFallback = false;
+
+          Serial.print(wasFallback ? "QNH upgraded from GPS altitude (fallback replaced): "
+                                   : "QNH calibrated from GPS altitude: ");
+          Serial.printf("%.2f (averaged over %u fixes / %lus)\n",
+                        currentQNH, qnhAvgCount, QNH_GPS_AVERAGE_MS / 1000UL);
+
+        } else {
+          Serial.printf("[VARIO] Averaged GPS altitude produced an implausible QNH (%.1f) -- discarding, retrying\n", calculatedQNH);
+        }
+
+      } else {
+        Serial.printf("[VARIO] QNH averaging window elapsed with only %u fresh fixes (need %u) -- retrying\n",
+                      qnhAvgCount, QNH_GPS_MIN_SAMPLES);
+      }
+
+      // Reset either way -- a successful calibration means this whole
+      // block won't run again (the qnhCalibrated && !qnhIsFallback check
+      // above short-circuits it); a failed/underfilled window just
+      // starts a fresh 30s attempt on the next good fix.
+      qnhAvgActive = false;
+    }
+
+  } else {
+
+    // Either GPS quality isn't good enough right now, or we're already
+    // properly calibrated and don't need this at all -- either way,
+    // abandon any in-progress averaging window rather than let a
+    // dropped-out stretch silently count toward it. A later good fix
+    // starts a fresh 30s window from scratch. (No-op once already
+    // calibrated, since qnhAvgActive is already false by then.)
+    qnhAvgActive = false;
+
+    if (!qnhCalibrated && millis() >= GPS_QNH_FALLBACK_MS) {
+      // GPS never came good (missing/unwired module, or just no fix
+      // after a full minute) -- stop waiting on it. Default to standard
+      // atmosphere so the BMP580 alone can drive altitude/vario for the
+      // rest of the flight. Flagged as a fallback so a later good fix
+      // can still upgrade it, above.
+      currentQNH = SEA_LEVEL_QNH_DEFAULT;
+      qnhCalibrated = true;
+      qnhIsFallback = true;
+
+      Serial.println("GPS unavailable -- defaulting QNH to 1013.25, running altitude/vario off BMP580 only");
+    }
   }
 
   float newAltitudeM = bmp.readAltitude(currentQNH);

@@ -1673,6 +1673,15 @@ void drawADSBPage() {
   // Shifted text baseline down to safely center the bold letters vertically inside the box
   u8g2.drawStr(varioX + 5, varioY + 23, varioText);
 
+  // Drawn here (before the no-traffic-data early return below) so it
+  // still renders on a "No data fetched"/"No local traffic" frame --
+  // airspace info is entirely independent of ADS-B/FANET traffic. If
+  // that return does NOT fire, this same call happens again at the very
+  // end of the function instead, on top of the aircraft markers, so the
+  // bar keeps display priority either way; the two calls are mutually
+  // exclusive per frame. See drawAirspaceInfoBar()'s header comment for
+  // why this isn't in drawDashboard() alongside drawAirspaceWarning().
+  drawAirspaceInfoBar();
 
   // Combined check -- snapshotCount now reflects ADS-B AND FANET
   // contacts together, so this only reports "nothing at all" once both
@@ -1780,6 +1789,13 @@ void drawADSBPage() {
     // This keeps the letters sitting exactly where they were before the change
     u8g2.drawStr(textX + 5, textY + 15 + 4, dataTag);
   }
+
+  // Drawn again here, on top of the aircraft markers just plotted above
+  // -- the earlier call (before the no-traffic early return) only
+  // covers the case where that return fires; this call and that one are
+  // mutually exclusive per frame (snapshotCount == 0 takes the early
+  // return and never reaches here), so this never double-draws.
+  drawAirspaceInfoBar();
 }
 
 // =====================================================
@@ -1980,6 +1996,20 @@ bool getAirspaceSnapshot(AirspaceResult& out) {
   return valid;
 }
 
+// alertOnly = false counterpart of the above -- can return a CFZ. See
+// the findNearestControlledAirspace() call site in backgroundTask()
+// (main .ino) for why this is a second, independent result rather than
+// just relaxing getAirspaceSnapshot() itself.
+bool getAirspaceInfoSnapshot(AirspaceResult& out) {
+  bool valid = false;
+  if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    valid = airspaceInfoResultValid;
+    if (valid) out = nearestAirspaceInfo;
+    xSemaphoreGive(backgroundDataMutex);
+  }
+  return valid;
+}
+
 void drawAirspaceWarning() {
   AirspaceResult result;
   bool valid = getAirspaceSnapshot(result);
@@ -2042,6 +2072,66 @@ void drawAirspaceWarning() {
   u8g2.setFont(u8g2_font_helvB10_tf);
   u8g2.drawStr(6, bannerY + 13, line1);
   u8g2.drawStr(6, bannerY + 27, line2);
+
+  u8g2.setDrawColor(1);  // restore default before returning to normal page drawing
+}
+
+// =====================================================
+// AIRSPACE INFO BAR (ADS-B page only)
+//
+// Distinct from drawAirspaceWarning() above in every way that matters:
+//   - Reads getAirspaceInfoSnapshot() (alertOnly = false), so it CAN
+//     show a CFZ -- that's the point of it existing (CFZ names carry
+//     the recommended reporting frequency).
+//   - Never plays a tone -- purely informational, not a safety alert.
+//   - Always shows something when enabled -- whatever charted airspace
+//     the pilot is currently inside, or "Class G" if they're not inside
+//     anything charted right now -- rather than only near/inside
+//     alert-eligible airspace.
+//   - Drawn at the bottom of the screen, and only from drawADSBPage()
+//     (not drawDashboard(), so it never appears on the other three
+//     pages). Pilot has explicitly said it's fine for this to cover the
+//     ADS-B page's own VARIO overlay box.
+// =====================================================
+void drawAirspaceInfoBar() {
+  if (!airspaceInfoBarEnabled) return;
+
+  AirspaceResult result;
+  bool valid = getAirspaceInfoSnapshot(result);
+
+  // Same vertKnown caution as drawAirspaceWarning() -- but this bar is
+  // informational rather than a safety alert, so where that function
+  // treats an unresolved ground elevation as "can't confirm inside,
+  // stay quiet", this one treats horizontal containment alone as enough
+  // to show the name/frequency rather than hide useful info just
+  // because a DEM lookup is temporarily unresolved.
+  bool insideNow = valid && result.insideHoriz && (!result.vertKnown || result.insideVert);
+
+  char line1[40];
+  char line2[40];
+
+  if (insideNow) {
+    snprintf(line1, sizeof(line1), "%s", result.name);
+    snprintf(line2, sizeof(line2), "Class %s", result.classId);
+  } else {
+    // Nothing charted currently contains the pilot's position -- by
+    // elimination, that's Class G (uncontrolled) airspace.
+    snprintf(line1, sizeof(line1), "Class G");
+    line2[0] = '\0';
+  }
+
+  const int bannerH = 30;
+  const int bannerY = SCREEN_H - bannerH;
+
+  u8g2.setDrawColor(1);
+  u8g2.drawBox(0, bannerY, SCREEN_W, bannerH);
+  u8g2.setDrawColor(0);
+
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  u8g2.drawStr(6, bannerY + 13, line1);
+  if (line2[0] != '\0') {
+    u8g2.drawStr(6, bannerY + 27, line2);
+  }
 
   u8g2.setDrawColor(1);  // restore default before returning to normal page drawing
 }

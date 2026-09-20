@@ -860,6 +860,21 @@ static bool storeBlock(
 
     controlledBlocks++;
 
+    // Common Frequency Zones are filed under Class B in this file purely
+    // as a labelling convention -- they are NOT controlled airspace (no
+    // ATC clearance needed) and must never trigger the proximity/entry
+    // alert (top banner + tone). They're still kept in the cache and
+    // still searchable, though: the "Airspace info" bar deliberately
+    // wants to surface them, since a CFZ's name carries the recommended
+    // reporting frequency, which is exactly what that bar is for. MBZs
+    // are filed under Class A here and are genuinely meant to alert
+    // (mandatory broadcast, not just advisory), so they're deliberately
+    // NOT excluded the same way -- alertEligible stays true for them.
+    bool isCfz =
+        containsIgnoreCase(
+            b.name,
+            "CFZ");
+
     if (!b.isCircle &&
         b.numPoints < 3) {
 
@@ -930,6 +945,8 @@ static bool storeBlock(
     dst.ceiling = b.ceiling;
 
     dst.isCircle = b.isCircle;
+
+    dst.alertEligible = !isCfz;
 
     // -----------------------------------------------------------------------
     // Circle
@@ -1549,6 +1566,7 @@ bool findNearestControlledAirspace(
     float curAlt_ft_msl,
     float groundElev_ft,
     bool groundElevValid,
+    bool alertOnly,
     AirspaceResult& out) {
 
     if (!databaseLoaded ||
@@ -1572,6 +1590,17 @@ bool findNearestControlledAirspace(
 
         const CachedAirspace& a =
             airspaces[i];
+
+        // alertOnly == true is what the proximity/entry ALERT (top
+        // banner + tone) searches with -- it should only ever trigger
+        // for genuinely controlled airspace or an MBZ, never a CFZ
+        // (see storeBlock()'s CFZ detection). alertOnly == false is what
+        // the always-on "Airspace info" bar searches with instead, and
+        // deliberately considers every cached entry -- CFZ included --
+        // since that's the whole point of it existing.
+        if (alertOnly && !a.alertEligible) {
+            continue;
+        }
 
         // -------------------------------------------------------------------
         // Resolve altitude.
@@ -1832,6 +1861,9 @@ bool findNearestControlledAirspace(
 
         out.vertKnown =
             vertKnown;
+
+        out.alertEligible =
+            a.alertEligible;
 
         bestHorizKm =
             (float)horizKm;

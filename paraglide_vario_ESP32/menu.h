@@ -76,9 +76,14 @@ extern uint8_t activePageIndex;
 //   |     |-- (Alarm Sound toggle, cycled in place)
 //   |     |-- ADSB_RANGE_RINGS  (far/default range ring pair -- 15/30km,
 //   |     |                      10/20km, 20/40km, or 30/60km)
-//   |     `-- (Airspace Alert Bar toggle, cycled in place -- NOT
-//   |          persisted, always back on at reboot; see
-//   |          airspaceAlertBarEnabled in settings.h)
+//   |     |-- (Airspace Alert Bar toggle, cycled in place -- NOT
+//   |     |    persisted, always back on at reboot; see
+//   |     |    airspaceAlertBarEnabled in settings.h)
+//   |     `-- (Airspace Info toggle, cycled in place -- persisted; see
+//   |          airspaceInfoBarEnabled in settings.h. Shows/hides
+//   |          drawAirspaceInfoBar() -- ADS-B page only, bottom of
+//   |          screen, current airspace name/frequency including CFZ,
+//   |          or "Class G" if not inside anything charted)
 //   `-- WEATHER_SETTINGS
 //         |-- WEATHER_POLL_INTERVAL   (Zephyr station poll cadence)
 //         |-- WEATHER_STATIONS_SHOWN  (how many stations to display)

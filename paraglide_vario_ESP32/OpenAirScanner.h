@@ -114,6 +114,13 @@ struct AirspaceResult {
     // as unknown ("--") rather than trusted. insideHoriz/horizDistance_km
     // are unaffected either way.
     bool vertKnown;
+
+    // True for genuinely controlled airspace and MBZs; false for a CFZ
+    // (see storeBlock()'s CFZ detection in OpenAirScanner.cpp). Only
+    // meaningful when this result came from a call with alertOnly =
+    // false -- a call with alertOnly = true never returns a CFZ result
+    // in the first place, so this is always true in that case.
+    bool alertEligible;
 };
 
 // ---------------------------------------------------------------------------
@@ -142,6 +149,17 @@ struct CachedAirspace {
     Altitude ceiling;
 
     bool isCircle;
+
+    // True for genuinely controlled airspace and MBZs, false for a CFZ
+    // (Common Frequency Zone -- filed under Class B in NZ's OpenAir file
+    // as a labelling convention, but not actually controlled airspace;
+    // see storeBlock()'s CFZ detection in OpenAirScanner.cpp). Governs
+    // whether this entry can ever be returned by an alertOnly = true
+    // call to findNearestControlledAirspace() -- i.e. whether it can
+    // trigger the proximity/entry alert. It's still kept in the cache
+    // and still returned by an alertOnly = false call either way, since
+    // the "Airspace info" bar wants to surface CFZs too.
+    bool alertEligible;
 
     // Circle geometry
     float centerLat;
@@ -214,6 +232,15 @@ uint16_t getAirspacePointPoolCapacity();
 // AirspaceResult::vertKnown = false rather than silently computed from a
 // stale groundElev_ft.
 //
+// alertOnly = true restricts the search to alertEligible entries only
+// (genuinely controlled airspace + MBZs) -- this is what the proximity/
+// entry ALERT (top banner + tone) should always call with, since it must
+// never trigger for a CFZ. alertOnly = false considers every cached
+// entry, CFZ included -- this is what the always-on "Airspace info" bar
+// should call with instead, since surfacing a CFZ's name/frequency is
+// the whole point of it existing. The two calls are independent; call
+// both once per update if you need both the alert and the info bar fed.
+//
 // ---------------------------------------------------------------------------
 
 bool findNearestControlledAirspace(
@@ -222,6 +249,7 @@ bool findNearestControlledAirspace(
     float curAlt_ft_msl,
     float groundElev_ft,
     bool groundElevValid,
+    bool alertOnly,
     AirspaceResult& out);
 
 // ---------------------------------------------------------------------------

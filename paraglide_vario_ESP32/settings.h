@@ -135,6 +135,15 @@ extern bool adsbAlarmMuted;
 // can never accidentally stay silenced into a flight where it matters.
 extern bool airspaceAlertBarEnabled;
 
+// Shows/hides the "Airspace Info" bar (ADS-B page only, bottom of
+// screen -- see drawAirspaceInfoBar(), DrawPages.cpp). Unlike
+// airspaceAlertBarEnabled above, this one IS persisted -- it's a
+// pilot preference about a purely informational readout (current
+// airspace name + recommended frequency, CFZ included), not a safety
+// alert that should always default back on. See settings.h's
+// PERSISTENCE section below.
+extern bool airspaceInfoBarEnabled;
+
 // =====================================================
 // ADS-B RANGE RINGS
 // The "far" (default) range rings drawn by drawADSBPage() -- outer and

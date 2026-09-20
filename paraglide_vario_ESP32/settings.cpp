@@ -86,6 +86,10 @@ bool adsbAlarmMuted = false;
 // starts true at boot.
 bool airspaceAlertBarEnabled = true;
 
+// Persisted (unlike airspaceAlertBarEnabled above) -- default on to
+// match the app's original always-on airspace display behaviour.
+bool airspaceInfoBarEnabled = true;
+
 // Default matches the original hardcoded far/default rings (30km outer,
 // 15km inner).
 float adsbRingOuterKm = 30.0f;
@@ -163,6 +167,8 @@ void loadSettings() {
   fanetEnabled = prefs.getBool("fanetOn", fanetEnabled);
   screenOrientation = (ScreenOrientation)prefs.getUChar("scrOrient", (uint8_t)screenOrientation);
 
+  airspaceInfoBarEnabled = prefs.getBool("aspInfoBar", airspaceInfoBarEnabled);
+
   // airspaceAlertBarEnabled is intentionally never read here -- see its
   // comment in settings.h. It keeps its compiled-in default (true) every
   // boot.
@@ -204,6 +210,8 @@ void saveSettings() {
 
   prefs.putBool("fanetOn", fanetEnabled);
   prefs.putUChar("scrOrient", (uint8_t)screenOrientation);
+
+  prefs.putBool("aspInfoBar", airspaceInfoBarEnabled);
 
   // airspaceAlertBarEnabled is intentionally never written here -- see
   // its comment in settings.h.

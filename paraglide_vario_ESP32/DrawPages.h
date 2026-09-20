@@ -129,6 +129,9 @@ extern volatile bool groundElevationValid;
 extern AirspaceResult nearestAirspace;
 extern volatile bool airspaceResultValid;
 
+extern AirspaceResult nearestAirspaceInfo;
+extern volatile bool airspaceInfoResultValid;
+
 extern bool bmpOK;
 extern float currentTempC;
 
@@ -193,5 +196,20 @@ void drawGliderHeadingArrow(int cx, int cy, int arrowRadius, float headingDeg);
 // it's the box that consumes it, but is also called from elsewhere (see
 // the original forward-declaration list in the .ino).
 bool getAirspaceSnapshot(AirspaceResult& out);
+
+// alertOnly = false counterpart of the above -- can return a CFZ. Feeds
+// only drawAirspaceInfoBar() below.
+bool getAirspaceInfoSnapshot(AirspaceResult& out);
+
+// "Airspace Info" bar -- ADS-B page only (Config > ADS-B Settings >
+// Airspace Info, settings.h's airspaceInfoBarEnabled). Shows whichever
+// charted airspace (controlled, MBZ, or CFZ) the pilot is currently
+// inside, name and recommended frequency included, or "Class G" if
+// they're not inside anything charted right now. Deliberately separate
+// from drawAirspaceWarning() -- it must never trigger the alert tone,
+// and it's meant to always show something rather than only near/inside
+// alert-eligible airspace. Drawn at the bottom of the screen, called
+// only from drawADSBPage().
+void drawAirspaceInfoBar();
 
 #endif  // DRAWPAGES_H
