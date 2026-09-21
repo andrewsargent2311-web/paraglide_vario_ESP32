@@ -1,5 +1,6 @@
 #include "menu.h"
 #include "wifi_manager.h"
+#include "FileServer.h"
 #include "ble_manager.h"
 #include "secrets.h"
 #include <FS.h>
@@ -218,7 +219,7 @@ static const uint8_t WEATHER_STATIONS_CHOICE_COUNT = 3;
 // =====================================================
 static uint8_t getMenuItemCount(MenuScreen screen) {
   switch (screen) {
-    case MENU_SCREEN_MAIN: return 6;
+    case MENU_SCREEN_MAIN: return 7;
     case MENU_SCREEN_MAIN_PAGE_SELECT: return 2;
     case MENU_SCREEN_CONFIG: return 6;
     case MENU_SCREEN_CONFIG_TIME: return TIMEZONE_CHOICE_COUNT;
@@ -244,6 +245,8 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_WEATHER_POLL_INTERVAL: return WEATHER_POLL_CHOICE_COUNT;
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN: return WEATHER_STATIONS_CHOICE_COUNT;
     case MENU_SCREEN_WEATHER_SOURCE: return 2;
+    case MENU_SCREEN_FLIGHT_RECORDINGS: return 2;
+    case MENU_SCREEN_EXPORT_FILES: return isFileServerRunning() ? 2 : 1;
     default: return 1;
   }
 }
@@ -276,6 +279,8 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_WEATHER_POLL_INTERVAL: return "POLL INTERVAL";
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN: return "STATIONS SHOWN";
     case MENU_SCREEN_WEATHER_SOURCE: return "SOURCE";
+    case MENU_SCREEN_FLIGHT_RECORDINGS: return "FLIGHT RECORDINGS";
+    case MENU_SCREEN_EXPORT_FILES: return "EXPORT FILES";
     default: return "MENU";
   }
 }
@@ -283,7 +288,7 @@ static const char* getMenuTitle(MenuScreen screen) {
 static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t buflen) {
   switch (screen) {
     case MENU_SCREEN_MAIN: {
-      static const char* items[] = { "Main Page", "Config", "Connections", "Map", "ADSB Settings", "Weather Settings" };
+      static const char* items[] = { "Main Page", "Config", "Connections", "Map", "ADSB Settings", "Weather Settings", "Flight Recordings" };
       snprintf(buf, buflen, "%s", items[index]);
       break;
     }
@@ -499,6 +504,23 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       snprintf(buf, buflen, "%s%s", name, isActive ? " *" : "");
       break;
     }
+    case MENU_SCREEN_FLIGHT_RECORDINGS:
+      switch (index) {
+        case 0: snprintf(buf, buflen, "Recording: %s", flightRecorderEnabled ? "On" : "Off"); break;
+        case 1: snprintf(buf, buflen, "Export Files"); break;
+      }
+      break;
+    case MENU_SCREEN_EXPORT_FILES: {
+      if (index == 0) {
+        snprintf(buf, buflen, "%s", isFileServerRunning() ? "Stop Server" : "Start Server");
+      } else {
+        // index == 1 -- only present while running (see the dynamic
+        // count above); informational, not actionable.
+        String url = getFileServerURL();
+        snprintf(buf, buflen, "%s", url.c_str());
+      }
+      break;
+    }
     default:
       snprintf(buf, buflen, "?");
       break;
@@ -518,6 +540,7 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
         case 3: pushMenuScreen(MENU_SCREEN_MAP); break;
         case 4: pushMenuScreen(MENU_SCREEN_ADSB_SETTINGS); break;
         case 5: pushMenuScreen(MENU_SCREEN_WEATHER_SETTINGS); break;
+        case 6: pushMenuScreen(MENU_SCREEN_FLIGHT_RECORDINGS); break;
       }
       playFeedbackTone(900.0f, 80);
       return;
@@ -818,6 +841,44 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
       saveSettings();
       playFeedbackTone(1100.0f, 120);
       menuGoBack();  // back to Weather Settings
+      return;
+
+    case MENU_SCREEN_FLIGHT_RECORDINGS:
+      switch (index) {
+        case 0:
+          // Cycles in place. Deliberately NOT saved -- see
+          // flightRecorderEnabled's comment in settings.h; always back
+          // on at next boot. setFlightRecorderEnabled() also cleanly
+          // closes an in-progress recording if this just turned it off.
+          setFlightRecorderEnabled(!flightRecorderEnabled);
+          displayDirty = true;
+          playFeedbackTone(600.0f, 50);
+          return;
+        case 1:
+          pushMenuScreen(MENU_SCREEN_EXPORT_FILES);
+          playFeedbackTone(900.0f, 80);
+          return;
+      }
+      return;
+
+    case MENU_SCREEN_EXPORT_FILES:
+      if (index == 0) {
+        if (isFileServerRunning()) {
+          stopFileServer();
+          playFeedbackTone(600.0f, 50);
+        } else {
+          bool started = startFileServer();
+          // startFileServer() fails cleanly (does nothing) if WiFi isn't
+          // connected or the SD card isn't mounted -- the low tone here
+          // is the only feedback for that, same as an empty WiFi slot
+          // elsewhere in this menu; Serial has the specific reason.
+          playFeedbackTone(started ? 1100.0f : 300.0f, started ? 120 : 60);
+        }
+        displayDirty = true;  // item count (1 <-> 2) and label both change
+        return;
+      }
+      // index == 1 -- the URL row, informational only.
+      playFeedbackTone(900.0f, 40);
       return;
   }
 }

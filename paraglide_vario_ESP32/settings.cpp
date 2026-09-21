@@ -90,6 +90,10 @@ bool airspaceAlertBarEnabled = true;
 // match the app's original always-on airspace display behaviour.
 bool airspaceInfoBarEnabled = true;
 
+// Deliberately NOT persisted -- see the comment in settings.h. Always
+// starts true at boot.
+bool flightRecorderEnabled = true;
+
 // Default matches the original hardcoded far/default rings (30km outer,
 // 15km inner).
 float adsbRingOuterKm = 30.0f;
@@ -169,9 +173,9 @@ void loadSettings() {
 
   airspaceInfoBarEnabled = prefs.getBool("aspInfoBar", airspaceInfoBarEnabled);
 
-  // airspaceAlertBarEnabled is intentionally never read here -- see its
-  // comment in settings.h. It keeps its compiled-in default (true) every
-  // boot.
+  // airspaceAlertBarEnabled and flightRecorderEnabled are intentionally
+  // never read here -- see their comments in settings.h. Both keep
+  // their compiled-in default (true) every boot.
 }
 
 void saveSettings() {
@@ -213,6 +217,6 @@ void saveSettings() {
 
   prefs.putBool("aspInfoBar", airspaceInfoBarEnabled);
 
-  // airspaceAlertBarEnabled is intentionally never written here -- see
-  // its comment in settings.h.
+  // airspaceAlertBarEnabled and flightRecorderEnabled are intentionally
+  // never written here -- see their comments in settings.h.
 }

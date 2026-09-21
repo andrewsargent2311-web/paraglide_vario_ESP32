@@ -84,13 +84,26 @@ extern uint8_t activePageIndex;
 //   |          drawAirspaceInfoBar() -- ADS-B page only, bottom of
 //   |          screen, current airspace name/frequency including CFZ,
 //   |          or "Class G" if not inside anything charted)
-//   `-- WEATHER_SETTINGS
-//         |-- WEATHER_POLL_INTERVAL   (Zephyr station poll cadence)
-//         |-- WEATHER_STATIONS_SHOWN  (how many stations to display)
-//         `-- WEATHER_SOURCE          ("FANET" / "Zephyr" -- preferred
-//                                      Weather-page data source; falls
-//                                      back to FANET regardless if the
-//                                      preferred source has no data)
+//   |-- WEATHER_SETTINGS
+//   |     |-- WEATHER_POLL_INTERVAL   (Zephyr station poll cadence)
+//   |     |-- WEATHER_STATIONS_SHOWN  (how many stations to display)
+//   |     `-- WEATHER_SOURCE          ("FANET" / "Zephyr" -- preferred
+//   |                                  Weather-page data source; falls
+//   |                                  back to FANET regardless if the
+//   |                                  preferred source has no data)
+//   `-- FLIGHT_RECORDINGS
+//         |-- (Recording toggle, cycled in place -- NOT persisted,
+//         |    always back on at reboot; see flightRecorderEnabled in
+//         |    settings.h. OFF cleanly closes any in-progress IGC file
+//         |    rather than abandoning it -- see setFlightRecorderEnabled())
+//         `-- EXPORT_FILES     (Start/Stop a read-only WiFi file server
+//                                for downloading IGC logs -- see
+//                                FileServer.h. Needs WiFi connected
+//                                (Connections > WiFi) and the SD card
+//                                mounted; shows the URL to browse to
+//                                once running. Auto-stops after 15
+//                                minutes idle -- see
+//                                FILE_SERVER_IDLE_TIMEOUT_MS)
 //
 // Gestures (see updatePageButton() in the main .ino):
 //   short press  -- move the highlight down (wraps within the current screen)
@@ -124,7 +137,9 @@ enum MenuScreen {
   MENU_SCREEN_WEATHER_SETTINGS,
   MENU_SCREEN_WEATHER_POLL_INTERVAL,
   MENU_SCREEN_WEATHER_STATIONS_SHOWN,
-  MENU_SCREEN_WEATHER_SOURCE
+  MENU_SCREEN_WEATHER_SOURCE,
+  MENU_SCREEN_FLIGHT_RECORDINGS,
+  MENU_SCREEN_EXPORT_FILES
 };
 
 extern bool menuActive;
@@ -182,6 +197,19 @@ void setFanetEnabled(bool enabled);
 // u8g2.setDisplayRotation() -- call after changing it so the flip takes
 // effect immediately (defined in the main .ino).
 void applyScreenOrientation();
+
+// Turns the IGC flight recorder on/off (Flight Recordings > Recording).
+// OFF cleanly closes any in-progress recording (see stopIgcRecording())
+// rather than leaving the file open-but-dangling -- updateIgcRecorder()
+// itself is gated on flightRecorderEnabled and would otherwise just stop
+// being called at all, without ever reaching its normal
+// landing-detected close path. Does NOT persist -- flightRecorderEnabled
+// (settings.h) always resets to true at boot, same reasoning as
+// airspaceAlertBarEnabled, so a flight can never go unrecorded just
+// because recording was switched off during ground testing and never
+// switched back on. Call after changing flightRecorderEnabled so it
+// takes effect immediately (defined in the main .ino).
+void setFlightRecorderEnabled(bool enabled);
 
 // =====================================================
 // Menu functions

@@ -144,6 +144,15 @@ extern bool airspaceAlertBarEnabled;
 // PERSISTENCE section below.
 extern bool airspaceInfoBarEnabled;
 
+// Turns the IGC flight recorder on/off -- see setFlightRecorderEnabled()
+// (main .ino), applied immediately on change via Flight Recordings >
+// Recording in menu.cpp. Deliberately NOT persisted -- like
+// airspaceAlertBarEnabled above, always resets to true at boot
+// regardless of how it was last left, so a flight can never
+// accidentally go unrecorded because it was switched off during ground
+// testing and never switched back on.
+extern bool flightRecorderEnabled;
+
 // =====================================================
 // ADS-B RANGE RINGS
 // The "far" (default) range rings drawn by drawADSBPage() -- outer and

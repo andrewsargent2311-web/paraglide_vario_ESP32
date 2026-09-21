@@ -27,6 +27,7 @@
 #include "Sx126xLink.h"
 #include "Fanet.h"
 #include "wifi_manager.h"
+#include "FileServer.h"
 #include "DrawPages.h"
 // =====================================================
 // WIFI (feeds Weather + ADS-B pages) + BLUETOOTH (engine meter)
@@ -1671,6 +1672,14 @@ void backgroundTask(void* parameter) {
     wifiManagerLoop();
     bleManagerLoop();
 
+    // Export Files (Flight Recordings > Export Files) -- serves IGC
+    // files over WiFi when running. Deliberately on Core 0, not in the
+    // main loop() on Core 1: handleClient() can block for a noticeable
+    // stretch while streaming a file to a slow/distant client, and Core
+    // 1 must never be delayed (see this function's header comment).
+    // No-ops immediately if the server isn't currently started.
+    fileServerLoop();
+
     // ---------------------------------------------------------
     // Network state machines
     // ---------------------------------------------------------
@@ -2646,6 +2655,7 @@ void stopIgcRecording() {
   Serial.printf("[IGC] Recording stopped: %s\n", igcFilename);
 }
 void updateIgcRecorder() {
+  if (!flightRecorderEnabled) return;
   if (!gps.speed.isValid()) return;
 
   float speedKph = gps.speed.kmph();
@@ -2706,7 +2716,7 @@ void updateVario() {
   }
 
   bool gpsAltitudeGood =
-    gps.altitude.isValid() && gps.altitude.age() < 2000 && gps.satellites.isValid() && gps.satellites.value() >= 5 && gps.hdop.isValid() && gps.hdop.hdop() <= 2.5;
+    gps.altitude.isValid() && gps.altitude.age() < 2000 && gps.satellites.isValid() && gps.satellites.value() >= 6 && gps.hdop.isValid() && gps.hdop.hdop() <= 2.5;
 
   // Runs the real GPS-derived calibration the first time a good fix
   // shows up, AND -- if we're currently sitting on the no-GPS fallback
@@ -3641,6 +3651,29 @@ void applyScreenOrientation() {
                              : U8G2_R0);
   displayDirty = true;
 }
+
+// =====================================================
+// FLIGHT RECORDER ENABLE/DISABLE (Flight Recordings > Recording)
+// Called from menu.cpp any time the pilot flips the toggle. No boot-time
+// call needed -- flightRecorderEnabled (settings.h) is never persisted,
+// so it's already true (its compiled-in default) the moment setup()
+// runs; updateIgcRecorder() reads it directly every call regardless.
+// =====================================================
+void setFlightRecorderEnabled(bool enabled) {
+  flightRecorderEnabled = enabled;
+
+  if (!enabled && igcRecording) {
+    // Close cleanly rather than leave the file open-but-dangling --
+    // updateIgcRecorder() is gated on flightRecorderEnabled and would
+    // otherwise just stop being called at all from this point on,
+    // without ever reaching its normal landing-detected stopIgcRecording()
+    // path.
+    stopIgcRecording();
+  }
+
+  Serial.printf("[IGC] Flight recorder %s\n", enabled ? "enabled" : "disabled");
+}
+
 // =====================================================
 // TONE GENERATION: non-blocking. Unlike a single long i2s_write() call
 // (which blocks for the tone's whole duration and would stall GPS/baro/
