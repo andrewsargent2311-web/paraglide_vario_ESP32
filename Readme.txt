@@ -16,4 +16,5 @@ Total; $60 USD excluding shipping (~$100 NZD), not including assembly
 
 All code has been written with the help of Claude, GPT5, Gemini, & copilot (and copying code from Github, however the PCB has been made by yours truely 😂.
 
-Airspace can be cropped from here; https://www.openaip.net/ just drop the .txt file into the SD card make sure it is called "AIRSPACE.txt", you can run into issues if the file is too big, i might work on downscaling airspace into .adem files.
+Airspace can be cropped from here; https://www.openaip.net/ just drop the .txt file into the SD card make sure it is called "AIRSPACE.txt", you can run into issues if the file is too big, i might work on downscaling airspace into .adem files. You can find more maps her; https://drive.google.com/drive/folders/18hl1OCvvLns53WSxIf6_7ccbEHTFu314?usp=sharing
+
