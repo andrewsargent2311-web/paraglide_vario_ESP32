@@ -1966,9 +1966,14 @@ void drawDashboard() {
         case PAGE_PARAMOTOR: drawParamotorPage(); break;
         default: break;
       }
-      // Drawn last, on top of whatever page is active, so a nearby/entered
-      // controlled airspace is never hidden behind a page cycle.
-      drawAirspaceWarning();
+      // Drawn last, on top of whatever page is active. Airspace warning
+      // takes priority for this slot (safety-critical); a received
+      // FANET message only gets it when there's no airspace warning to
+      // show -- see drawFanetMessageBanner()'s header comment.
+      bool airspaceBannerShown = drawAirspaceWarning();
+      if (!airspaceBannerShown) {
+        drawFanetMessageBanner();
+      }
     }
   } while (u8g2.nextPage());
 }
@@ -2010,11 +2015,16 @@ bool getAirspaceInfoSnapshot(AirspaceResult& out) {
   return valid;
 }
 
-void drawAirspaceWarning() {
+// Returns true if a banner was actually drawn (occupying the top
+// banner slot), false if there was nothing to show. Used by
+// drawDashboard() to decide whether drawFanetMessageBanner() gets to
+// use that same slot instead -- see the comment there for why airspace
+// warnings take priority over a received message.
+bool drawAirspaceWarning() {
   AirspaceResult result;
   bool valid = getAirspaceSnapshot(result);
 
-  if (!valid) return;
+  if (!valid) return false;
 
   // insideVert / vertDistance_ft are meaningless when result.vertKnown is
   // false (floor or ceiling is AGL/SFC-referenced and there's currently no
@@ -2043,9 +2053,9 @@ void drawAirspaceWarning() {
 
   // Visual banner only -- see the comment above for why the tone above
   // this point is unaffected by the setting.
-  if (!airspaceAlertBarEnabled) return;
+  if (!airspaceAlertBarEnabled) return false;
 
-  if (!insideNow && !nearby) return;
+  if (!insideNow && !nearby) return false;
 
   char line1[40];
   char line2[40];
@@ -2061,6 +2071,47 @@ void drawAirspaceWarning() {
       snprintf(line2, sizeof(line2), "%.1fkm  VERT: --", result.horizDistance_km);
     }
   }
+
+  const int bannerY = TOP_BAR_HEIGHT_PX;
+  const int bannerH = 30;
+
+  u8g2.setDrawColor(1);
+  u8g2.drawBox(0, bannerY, SCREEN_W, bannerH);
+  u8g2.setDrawColor(0);
+
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  u8g2.drawStr(6, bannerY + 13, line1);
+  u8g2.drawStr(6, bannerY + 27, line2);
+
+  u8g2.setDrawColor(1);  // restore default before returning to normal page drawing
+
+  return true;
+}
+
+// =====================================================
+// FANET MESSAGE BANNER
+//
+// Shares the top-of-screen slot with drawAirspaceWarning() above --
+// drawDashboard() only calls this when that one didn't draw anything,
+// so an airspace warning (safety-critical) is never obscured by a
+// received message (not safety-critical, even for a "Need assistance"
+// preset -- see FanetMessaging.h). The tone already fired back in
+// onFanetMessageReceived() when the message arrived, not here -- this
+// function only draws; it runs on every redraw while the message is
+// still within its display window, which would replay the tone
+// constantly if it lived here instead.
+// =====================================================
+void drawFanetMessageBanner() {
+  if (!lastFanetMessage.valid) return;
+
+  if (millis() - lastFanetMessage.receivedMs >= FANET_MESSAGE_BANNER_MS) return;
+
+  char line1[40];
+  char line2[40];
+
+  snprintf(line1, sizeof(line1), "MSG from %02X:%04X",
+           lastFanetMessage.src.manufacturer, lastFanetMessage.src.id);
+  snprintf(line2, sizeof(line2), "%s", lastFanetMessage.text);
 
   const int bannerY = TOP_BAR_HEIGHT_PX;
   const int bannerH = 30;

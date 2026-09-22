@@ -131,6 +131,7 @@ FanetStack::FanetStack(
 
     , _trackingCb(nullptr)
     , _weatherCb(nullptr)
+    , _messageCb(nullptr)
     , _rawCb(nullptr)
 {
 }
@@ -705,6 +706,46 @@ bool FanetStack::sendTrackingNow() {
     );
 }
 
+bool FanetStack::sendMessageNow(const char* text) {
+
+    if (text == nullptr) {
+        return false;
+    }
+
+    // header(4) + subtype(1) + text
+    uint8_t packet[4 + 1 + FANET_MAX_MESSAGE_LEN];
+
+    size_t headerLen =
+        encodeHeader(
+            packet,
+            FANET_TYPE_MESSAGE,
+            false
+        );
+
+    packet[headerLen] = 0;  // subtype 0 = Normal Message
+
+    size_t textLen =
+        strlen(text);
+
+    if (textLen > FANET_MAX_MESSAGE_LEN) {
+        textLen = FANET_MAX_MESSAGE_LEN;
+    }
+
+    memcpy(
+        packet + headerLen + 1,
+        text,
+        textLen
+    );
+
+    size_t packetLen =
+        headerLen + 1 + textLen;
+
+    return _link.send(
+        packet,
+        packetLen
+    );
+}
+
 // ============================================================================
 // Decode received FANET packet
 // ============================================================================
@@ -825,6 +866,49 @@ void FanetStack::decodeAndDispatch(
             rssi,
             snr
         );
+
+        return;
+    }
+
+    // ------------------------------------------------------------------------
+    // Message packet
+    // ------------------------------------------------------------------------
+    //
+    // [Byte 0] subtype (only 0, "Normal Message", is currently defined)
+    // [Byte 1..] text, arbitrary length, NOT necessarily null-terminated
+    // by the sender.
+    // ------------------------------------------------------------------------
+
+    if (type == FANET_TYPE_MESSAGE) {
+
+        if (payloadLen >= 1 && _messageCb) {
+
+            FanetMessage msg;
+
+            msg.subtype = payload[0];
+
+            size_t textLen =
+                payloadLen - 1;
+
+            if (textLen > FANET_MAX_MESSAGE_LEN) {
+                textLen = FANET_MAX_MESSAGE_LEN;
+            }
+
+            memcpy(
+                msg.text,
+                payload + 1,
+                textLen
+            );
+
+            msg.text[textLen] = '\0';
+
+            _messageCb(
+                src,
+                msg,
+                rssi,
+                snr
+            );
+        }
 
         return;
     }

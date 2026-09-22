@@ -26,6 +26,7 @@
 #include "settings.h"
 #include "Sx126xLink.h"
 #include "Fanet.h"
+#include "FanetMessaging.h"
 #include "wifi_manager.h"
 #include "FileServer.h"
 #include "DrawPages.h"
@@ -587,13 +588,27 @@ bool muteToneIsMuteSequence = false;  // true = muting order (650->gap->500); fa
 // quality drops mid-window (gpsAltitudeGood goes false), the window is
 // abandoned and a fresh one starts from scratch on the next good fix,
 // rather than silently averaging across a gap.
-#define QNH_GPS_AVERAGE_MS 30000UL
+#define QNH_GPS_AVERAGE_MS 10000UL
 
 // A window that reaches QNH_GPS_AVERAGE_MS with fewer fresh fixes than
 // this is treated as not enough data to trust (e.g. a flaky GPS module
-// only reporting a handful of updates in 30s) -- the window resets and
-// tries again rather than calibrating off too few samples.
+// only reporting a handful of updates in the window) -- the window
+// resets and tries again rather than calibrating off too few samples.
+// At a typical 1Hz GPS this is up to half the fixes a full
+// QNH_GPS_AVERAGE_MS window could contain missed and still trusted --
+// worth tightening if that proves too lenient in practice now that the
+// window itself is shorter than it was.
 #define QNH_GPS_MIN_SAMPLES 5
+
+// Once calibrated, QNH is re-averaged and updated on this cadence for
+// as long as the flight continues, rather than being locked in once and
+// never touched again -- real atmospheric pressure drifts over a
+// multi-hour flight as weather systems move through, and an unchanging
+// QNH would let indicated altitude/AGL quietly drift away from reality
+// over that time. Each recalibration reuses the exact same
+// QNH_GPS_AVERAGE_MS averaging window and QNH_GPS_MIN_SAMPLES floor as
+// the initial calibration -- see updateVario().
+#define QNH_RECALIBRATION_INTERVAL_MS (15UL * 60UL * 1000UL)
 #define CLIMB_WINDOW_N 8
 #define BARO_SAMPLE_MS 100
 // CLIMB_DEADBAND_MS is defined in DrawPages.h (shared with drawParagliderPage()'s sink indicator, and with updateI2sAudioBuzzer() below).
@@ -1002,6 +1017,7 @@ void setup() {
       fanet.begin();
       fanet.onTracking(onFanetTracking);
       fanet.onWeather(onFanetWeather);
+      fanet.onMessage(onFanetMessageReceived);
       fanet.setBeaconIntervalMs(FANET_BEACON_INTERVAL_MS);
       Serial.println("FANET RADIO INITIALIZED");
     } else {
@@ -2722,25 +2738,36 @@ void updateVario() {
   // shows up, AND -- if we're currently sitting on the no-GPS fallback
   // value -- also the first time a good fix shows up *after* that, so a
   // merely-slow GPS still gets upgraded to a proper calibration instead
-  // of being stuck on 1013.25 for the rest of the flight. Once genuinely
-  // calibrated (qnhIsFallback == false), this never fires again.
+  // of being stuck on 1013.25 for the rest of the flight. AND, once
+  // genuinely calibrated (qnhIsFallback == false), again every
+  // QNH_RECALIBRATION_INTERVAL_MS from that point on, so QNH keeps
+  // tracking real atmospheric pressure changes over a long flight
+  // instead of staying frozen at whatever it was on takeoff.
   //
-  // Averages GPS altitude over QNH_GPS_AVERAGE_MS (30s) of continuous
+  // Averages GPS altitude over QNH_GPS_AVERAGE_MS of continuous
   // good-quality fixes rather than calibrating off a single instantaneous
   // sample -- see QNH_GPS_AVERAGE_MS's comment above for why a one-shot
   // sample proved unreliable in real-world testing. qnhAvgActive/
   // qnhAvgStartMs/qnhAvgAltSum/qnhAvgCount persist this averaging window
   // across calls; static rather than global since nothing outside this
-  // function needs them.
+  // function needs them. lastQnhCalibrationMs tracks when calibration
+  // last actually succeeded, so the periodic-recalibration check below
+  // has something to measure from.
   static bool qnhAvgActive = false;
   static unsigned long qnhAvgStartMs = 0;
   static double qnhAvgAltSum = 0.0;
   static uint16_t qnhAvgCount = 0;
+  static unsigned long lastQnhCalibrationMs = 0;
 
-  if (gpsAltitudeGood && (!qnhCalibrated || qnhIsFallback)) {
+  bool qnhRecalibrationDue =
+    qnhCalibrated && !qnhIsFallback &&
+    (millis() - lastQnhCalibrationMs >= QNH_RECALIBRATION_INTERVAL_MS);
+
+  if (gpsAltitudeGood && (!qnhCalibrated || qnhIsFallback || qnhRecalibrationDue)) {
 
     if (!qnhAvgActive) {
-      // First good fix -- start a fresh 30s averaging window.
+      // First good fix, or the periodic recalibration interval just
+      // came due -- start a fresh averaging window.
       qnhAvgActive = true;
       qnhAvgStartMs = millis();
       qnhAvgAltSum = 0.0;
@@ -2778,9 +2805,15 @@ void updateVario() {
           currentQNH = calculatedQNH;
           qnhCalibrated = true;
           qnhIsFallback = false;
+          lastQnhCalibrationMs = millis();
 
-          Serial.print(wasFallback ? "QNH upgraded from GPS altitude (fallback replaced): "
-                                   : "QNH calibrated from GPS altitude: ");
+          if (wasFallback) {
+            Serial.print("QNH upgraded from GPS altitude (fallback replaced): ");
+          } else if (qnhRecalibrationDue) {
+            Serial.print("QNH re-calibrated from GPS altitude (15-minute refresh): ");
+          } else {
+            Serial.print("QNH calibrated from GPS altitude: ");
+          }
           Serial.printf("%.2f (averaged over %u fixes / %lus)\n",
                         currentQNH, qnhAvgCount, QNH_GPS_AVERAGE_MS / 1000UL);
 
@@ -2793,21 +2826,24 @@ void updateVario() {
                       qnhAvgCount, QNH_GPS_MIN_SAMPLES);
       }
 
-      // Reset either way -- a successful calibration means this whole
-      // block won't run again (the qnhCalibrated && !qnhIsFallback check
-      // above short-circuits it); a failed/underfilled window just
-      // starts a fresh 30s attempt on the next good fix.
+      // Reset either way -- a successful non-recalibration calibration
+      // means this whole block won't fire again until the next
+      // QNH_RECALIBRATION_INTERVAL_MS comes due (the qnhCalibrated &&
+      // !qnhIsFallback && recalibration-due check above); a failed/
+      // underfilled window just starts a fresh attempt on the next good
+      // fix, same as before.
       qnhAvgActive = false;
     }
 
   } else {
 
     // Either GPS quality isn't good enough right now, or we're already
-    // properly calibrated and don't need this at all -- either way,
+    // calibrated and not yet due for a recalibration -- either way,
     // abandon any in-progress averaging window rather than let a
     // dropped-out stretch silently count toward it. A later good fix
-    // starts a fresh 30s window from scratch. (No-op once already
-    // calibrated, since qnhAvgActive is already false by then.)
+    // starts a fresh window from scratch. (No-op most of the time once
+    // already calibrated, since qnhAvgActive is already false between
+    // recalibration windows.)
     qnhAvgActive = false;
 
     if (!qnhCalibrated && millis() >= GPS_QNH_FALLBACK_MS) {
@@ -3621,6 +3657,7 @@ void setFanetEnabled(bool enabled) {
       fanet.begin();
       fanet.onTracking(onFanetTracking);
       fanet.onWeather(onFanetWeather);
+      fanet.onMessage(onFanetMessageReceived);
       fanet.setBeaconIntervalMs(FANET_BEACON_INTERVAL_MS);
       Serial.println("FANET RADIO INITIALIZED (enabled from menu)");
     } else {

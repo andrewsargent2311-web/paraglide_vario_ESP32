@@ -1,6 +1,7 @@
 #include "menu.h"
 #include "wifi_manager.h"
 #include "FileServer.h"
+#include "FanetMessaging.h"
 #include "ble_manager.h"
 #include "secrets.h"
 #include <FS.h>
@@ -232,7 +233,8 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_VARIO_BEEP_PULSE_MIN: return VARIO_BEEP_CHOICE_COUNT;
     case MENU_SCREEN_VARIO_BEEP_PULSE_MAX: return VARIO_BEEP_CHOICE_COUNT;
     case MENU_SCREEN_SCREEN: return 2;
-    case MENU_SCREEN_CONNECTIONS: return 3;
+    case MENU_SCREEN_CONNECTIONS: return 4;
+    case MENU_SCREEN_FANET_MESSAGING: return 1 + FANET_MESSAGE_PRESET_COUNT;
     case MENU_SCREEN_WIFI_LIST: return WIFI_NETWORK_COUNT + 1;
     case MENU_SCREEN_BLUETOOTH: return 3;
     case MENU_SCREEN_BLUETOOTH_SCAN: return bleScanResultCount() > 0 ? bleScanResultCount() : 1;
@@ -267,6 +269,7 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_VARIO_BEEP_PULSE_MAX: return "MAX PULSE";
     case MENU_SCREEN_SCREEN: return "SCREEN";
     case MENU_SCREEN_CONNECTIONS: return "CONNECTIONS";
+    case MENU_SCREEN_FANET_MESSAGING: return "FANET MESSAGING";
     case MENU_SCREEN_WIFI_LIST: return "WIFI";
     case MENU_SCREEN_BLUETOOTH: return "BLUETOOTH";
     case MENU_SCREEN_BLUETOOTH_SCAN: return "SCAN DEVICES";
@@ -378,8 +381,22 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         case 0: snprintf(buf, buflen, "WiFi"); break;
         case 1: snprintf(buf, buflen, "Bluetooth"); break;
         case 2: snprintf(buf, buflen, "FANET: %s", fanetEnabled ? "On" : "Off"); break;
+        case 3: snprintf(buf, buflen, "FANET Messaging"); break;
       }
       break;
+    case MENU_SCREEN_FANET_MESSAGING: {
+      if (index == 0) {
+        snprintf(buf, buflen, "Messaging: %s", fanetMessagingEnabled ? "On" : "Off");
+      } else {
+        // Bare preset text, no "Send: " prefix -- the longest preset
+        // ("Sink here, be careful") plus a prefix risks running past
+        // the visible 300px screen width at this font size; the screen
+        // title ("FANET MESSAGING") and position below the toggle
+        // already make these read as sendable messages without it.
+        snprintf(buf, buflen, "%s", FANET_MESSAGE_PRESETS[index - 1]);
+      }
+      break;
+    }
     case MENU_SCREEN_WIFI_LIST: {
       if (index == 0) {
         snprintf(buf, buflen, "WiFi: %s", wifiEnabled ? "On" : "Off");
@@ -669,6 +686,7 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           displayDirty = true;
           playFeedbackTone(600.0f, 50);
           return;
+        case 3: pushMenuScreen(MENU_SCREEN_FANET_MESSAGING); break;
       }
       playFeedbackTone(900.0f, 80);
       return;
@@ -879,6 +897,29 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
       }
       // index == 1 -- the URL row, informational only.
       playFeedbackTone(900.0f, 40);
+      return;
+
+    case MENU_SCREEN_FANET_MESSAGING:
+      if (index == 0) {
+        // Cycles in place, like FANET's own On/Off -- persisted (unlike
+        // airspaceAlertBarEnabled-style safety toggles), see
+        // fanetMessagingEnabled's comment in settings.h.
+        fanetMessagingEnabled = !fanetMessagingEnabled;
+        saveSettings();
+        displayDirty = true;
+        playFeedbackTone(600.0f, 50);
+        return;
+      }
+      // index >= 1 -- broadcast the corresponding preset immediately.
+      // sendFanetMessagePreset() fails cleanly (messaging/FANET off, or
+      // the radio's channel-busy/TX-in-flight -- see its comment in
+      // FanetMessaging.h) rather than queuing or retrying; the tone is
+      // the only feedback either way, matching Export Files' pattern
+      // above.
+      {
+        bool sent = sendFanetMessagePreset((uint8_t)(index - 1));
+        playFeedbackTone(sent ? 1100.0f : 300.0f, sent ? 120 : 60);
+      }
       return;
   }
 }

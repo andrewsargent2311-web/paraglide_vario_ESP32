@@ -27,6 +27,7 @@
 #include "settings.h"        // altitudeUnitLabel(), altitudeToDisplay(), speedUnitLabel(), speedKphToDisplay(), etc.
 #include "ble_manager.h"     // engineDataValid/engineRpm/engineEgtC/engineChtC for drawParamotorPage()
 #include "Fanet.h"           // FanetAddress -- FanetContact below
+#include "FanetMessaging.h"  // lastFanetMessage, FANET_MESSAGE_BANNER_MS -- drawFanetMessageBanner()
 
 // =====================================================
 // Display-related constants (moved here from the .ino so both the .ino
@@ -184,7 +185,16 @@ void drawWeatherPage();
 void drawADSBPage();
 void drawParamotorPage();
 void drawDashboard();
-void drawAirspaceWarning();
+// Returns true if it actually drew a banner (see its header comment in
+// DrawPages.cpp for why drawDashboard() needs to know that).
+bool drawAirspaceWarning();
+
+// FANET message banner -- shares the same top-of-screen slot as
+// drawAirspaceWarning() (drawDashboard() only calls this when that one
+// didn't draw anything). Shows the most recently received FANET Message
+// packet (see FanetMessaging.h) for FANET_MESSAGE_BANNER_MS, then goes
+// quiet on its own. All pages, unlike the ADS-B-only airspace info bar.
+void drawFanetMessageBanner();
 
 // Shared drawing helpers.
 void drawLargestBoldCentered(int centerX, int baselineY, int maxWidth, const char* text);

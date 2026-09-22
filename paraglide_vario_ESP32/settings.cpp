@@ -119,6 +119,9 @@ uint8_t mainPageSelection = 0;  // 0 = Paraglider, 1 = Paramotor
 // Default: radio on, matching the app's original always-on behaviour.
 bool fanetEnabled = true;
 
+// Default on -- matches fanetEnabled's default.
+bool fanetMessagingEnabled = true;
+
 // Default matches the app's original (and only, until now) orientation.
 ScreenOrientation screenOrientation = SCREEN_ORIENTATION_GPS_BOTTOM;
 
@@ -169,6 +172,7 @@ void loadSettings() {
   wifiEnabled = prefs.getBool("wifiOn", wifiEnabled);
 
   fanetEnabled = prefs.getBool("fanetOn", fanetEnabled);
+  fanetMessagingEnabled = prefs.getBool("fanetMsgOn", fanetMessagingEnabled);
   screenOrientation = (ScreenOrientation)prefs.getUChar("scrOrient", (uint8_t)screenOrientation);
 
   airspaceInfoBarEnabled = prefs.getBool("aspInfoBar", airspaceInfoBarEnabled);
@@ -213,6 +217,7 @@ void saveSettings() {
   prefs.putBool("wifiOn", wifiEnabled);
 
   prefs.putBool("fanetOn", fanetEnabled);
+  prefs.putBool("fanetMsgOn", fanetMessagingEnabled);
   prefs.putUChar("scrOrient", (uint8_t)screenOrientation);
 
   prefs.putBool("aspInfoBar", airspaceInfoBarEnabled);

@@ -128,6 +128,31 @@ struct FanetWeather {
 };
 
 // -----------------------------------------------------------------------------
+// Decoded FANET Message (type 3) payload.
+//
+// Broadcast only -- this implementation's encodeHeader() only ever
+// writes the plain 4-byte broadcast header (see Fanet.cpp), so there is
+// no addressed/unicast messaging to a specific pilot. Only subtype 0
+// ("Normal Message") is defined by the protocol; any other subtype is
+// still decoded (text may or may not be meaningful) rather than
+// dropped, so the application layer can decide what to do with it.
+//
+// text is NOT necessarily null-terminated by the sender per the FANET
+// spec ("8bit String, of arbitrary length") -- decodeAndDispatch()
+// always null-terminates it here regardless, truncating to
+// FANET_MAX_MESSAGE_LEN if the received text is longer.
+// -----------------------------------------------------------------------------
+
+#define FANET_MAX_MESSAGE_LEN 40
+
+struct FanetMessage {
+
+    uint8_t subtype;
+
+    char text[FANET_MAX_MESSAGE_LEN + 1];
+};
+
+// -----------------------------------------------------------------------------
 // Callback types
 // -----------------------------------------------------------------------------
 
@@ -141,6 +166,13 @@ typedef void (*FanetTrackingCallback)(
 typedef void (*FanetWeatherCallback)(
     const FanetAddress& src,
     const FanetWeather& pkt,
+    float rssi,
+    float snr
+);
+
+typedef void (*FanetMessageCallback)(
+    const FanetAddress& src,
+    const FanetMessage& pkt,
     float rssi,
     float snr
 );
@@ -214,6 +246,10 @@ public:
         _weatherCb = cb;
     }
 
+    void onMessage(FanetMessageCallback cb) {
+        _messageCb = cb;
+    }
+
     void onRawPacket(FanetRawCallback cb) {
         _rawCb = cb;
     }
@@ -221,6 +257,14 @@ public:
     // Immediately transmit the current tracking packet.
     // Returns true if the packet was handed to the radio.
     bool sendTrackingNow();
+
+    // Immediately broadcasts a Type-3 Message packet (subtype 0, Normal
+    // Message) containing text. Truncated to FANET_MAX_MESSAGE_LEN if
+    // longer. Returns true if the packet was handed to the radio --
+    // like sendTrackingNow(), a single attempt (respects the radio's
+    // own CAD/channel-busy check, but does not queue or retry on
+    // failure; the caller decides whether to try again).
+    bool sendMessageNow(const char* text);
 
 private:
 
@@ -250,6 +294,7 @@ private:
 
     FanetTrackingCallback _trackingCb;
     FanetWeatherCallback _weatherCb;
+    FanetMessageCallback _messageCb;
     FanetRawCallback _rawCb;
 
     void handleReceived();

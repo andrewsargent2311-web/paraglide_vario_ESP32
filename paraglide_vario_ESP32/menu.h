@@ -65,9 +65,18 @@ extern uint8_t activePageIndex;
 //   |     |     |                devices -- select one to connect; this
 //   |     |     |                board is BLE-only, no Classic BT)
 //   |     |     `-- (Forget Device -- only actionable once one's saved)
-//   |     `-- FANET            (On/Off, cycled in place -- actually
-//   |                            sleeps/wakes the SX1262, not just the
-//   |                            software stack; see setFanetEnabled())
+//   |     |-- FANET            (On/Off, cycled in place -- actually
+//   |     |                      sleeps/wakes the SX1262, not just the
+//   |     |                      software stack; see setFanetEnabled())
+//   |     `-- FANET_MESSAGING  (On/Off toggle, persisted; see
+//   |                            fanetMessagingEnabled in settings.h --
+//   |                            plus one item per preset message,
+//   |                            selecting one broadcasts it
+//   |                            immediately. Broadcast only, no
+//   |                            addressed messages -- see
+//   |                            FanetMessaging.h/Fanet.h. Preset
+//   |                            wording is compiled-in, not editable
+//   |                            from the device -- no keyboard)
 //   |-- MAP                (list of *.ADEM files found on the SD card)
 //   |-- ADSB_SETTINGS
 //   |     |-- ADSB_RADIUS       (horizontal alert trigger distance)
@@ -139,7 +148,8 @@ enum MenuScreen {
   MENU_SCREEN_WEATHER_STATIONS_SHOWN,
   MENU_SCREEN_WEATHER_SOURCE,
   MENU_SCREEN_FLIGHT_RECORDINGS,
-  MENU_SCREEN_EXPORT_FILES
+  MENU_SCREEN_EXPORT_FILES,
+  MENU_SCREEN_FANET_MESSAGING
 };
 
 extern bool menuActive;

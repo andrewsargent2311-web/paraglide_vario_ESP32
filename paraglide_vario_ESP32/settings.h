@@ -247,6 +247,18 @@ extern char selectedDemFile[DEM_FILENAME_MAX_LEN];
 extern bool fanetEnabled;
 
 // =====================================================
+// FANET MESSAGING ENABLE
+// Turns FANET text messaging (Type 3 packets -- see Fanet.h/.cpp and
+// FanetMessaging.h) on or off, independent of fanetEnabled above (which
+// governs the radio itself). OFF means sendFanetMessagePreset() always
+// fails and incoming messages are silently ignored (no banner, no
+// tone) -- see FanetMessaging.h. Applied immediately on change via
+// Connections > FANET Messaging in menu.cpp. Persisted, so it survives
+// a reboot.
+// =====================================================
+extern bool fanetMessagingEnabled;
+
+// =====================================================
 // SCREEN ORIENTATION
 // The case can be mounted either way up; this flips the display 180
 // degrees to match, via u8g2.setDisplayRotation() (see
