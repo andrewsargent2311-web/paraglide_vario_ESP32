@@ -94,6 +94,10 @@ bool airspaceInfoBarEnabled = true;
 // starts true at boot.
 bool flightRecorderEnabled = true;
 
+// Persisted (unlike flightRecorderEnabled above) -- off by default, an
+// opt-in feature.
+bool igcAutoStopEnabled = false;
+
 // Default matches the original hardcoded far/default rings (30km outer,
 // 15km inner).
 float adsbRingOuterKm = 30.0f;
@@ -176,6 +180,7 @@ void loadSettings() {
   screenOrientation = (ScreenOrientation)prefs.getUChar("scrOrient", (uint8_t)screenOrientation);
 
   airspaceInfoBarEnabled = prefs.getBool("aspInfoBar", airspaceInfoBarEnabled);
+  igcAutoStopEnabled = prefs.getBool("igcAutoStop", igcAutoStopEnabled);
 
   // airspaceAlertBarEnabled and flightRecorderEnabled are intentionally
   // never read here -- see their comments in settings.h. Both keep
@@ -221,6 +226,7 @@ void saveSettings() {
   prefs.putUChar("scrOrient", (uint8_t)screenOrientation);
 
   prefs.putBool("aspInfoBar", airspaceInfoBarEnabled);
+  prefs.putBool("igcAutoStop", igcAutoStopEnabled);
 
   // airspaceAlertBarEnabled and flightRecorderEnabled are intentionally
   // never written here -- see their comments in settings.h.

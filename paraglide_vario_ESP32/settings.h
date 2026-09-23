@@ -153,6 +153,14 @@ extern bool airspaceInfoBarEnabled;
 // testing and never switched back on.
 extern bool flightRecorderEnabled;
 
+// When on, IGC recording auto-stops once ground speed has stayed below
+// IGC_AUTOSTOP_SPEED_KPH (5 km/h) for IGC_AUTOSTOP_SUSTAIN_MS (20s) --
+// see updateIgcRecorder(), main .ino. Off by default -- unlike
+// flightRecorderEnabled/airspaceAlertBarEnabled above, this one IS
+// persisted, since it's an ordinary recording-behaviour preference
+// rather than a safety net that must always default back on.
+extern bool igcAutoStopEnabled;
+
 // =====================================================
 // ADS-B RANGE RINGS
 // The "far" (default) range rings drawn by drawADSBPage() -- outer and

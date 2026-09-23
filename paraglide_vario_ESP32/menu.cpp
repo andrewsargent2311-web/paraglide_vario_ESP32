@@ -247,7 +247,7 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_WEATHER_POLL_INTERVAL: return WEATHER_POLL_CHOICE_COUNT;
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN: return WEATHER_STATIONS_CHOICE_COUNT;
     case MENU_SCREEN_WEATHER_SOURCE: return 2;
-    case MENU_SCREEN_FLIGHT_RECORDINGS: return 2;
+    case MENU_SCREEN_FLIGHT_RECORDINGS: return 3;
     case MENU_SCREEN_EXPORT_FILES: return isFileServerRunning() ? 2 : 1;
     default: return 1;
   }
@@ -525,6 +525,7 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       switch (index) {
         case 0: snprintf(buf, buflen, "Recording: %s", flightRecorderEnabled ? "On" : "Off"); break;
         case 1: snprintf(buf, buflen, "Export Files"); break;
+        case 2: snprintf(buf, buflen, "Auto-Stop: %s", igcAutoStopEnabled ? "On" : "Off"); break;
       }
       break;
     case MENU_SCREEN_EXPORT_FILES: {
@@ -875,6 +876,14 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
         case 1:
           pushMenuScreen(MENU_SCREEN_EXPORT_FILES);
           playFeedbackTone(900.0f, 80);
+          return;
+        case 2:
+          // Cycles in place. Persisted -- see igcAutoStopEnabled's
+          // comment in settings.h.
+          igcAutoStopEnabled = !igcAutoStopEnabled;
+          saveSettings();
+          displayDirty = true;
+          playFeedbackTone(600.0f, 50);
           return;
       }
       return;

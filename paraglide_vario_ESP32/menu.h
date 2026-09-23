@@ -105,14 +105,19 @@ extern uint8_t activePageIndex;
 //         |    always back on at reboot; see flightRecorderEnabled in
 //         |    settings.h. OFF cleanly closes any in-progress IGC file
 //         |    rather than abandoning it -- see setFlightRecorderEnabled())
-//         `-- EXPORT_FILES     (Start/Stop a read-only WiFi file server
-//                                for downloading IGC logs -- see
-//                                FileServer.h. Needs WiFi connected
-//                                (Connections > WiFi) and the SD card
-//                                mounted; shows the URL to browse to
-//                                once running. Auto-stops after 15
-//                                minutes idle -- see
-//                                FILE_SERVER_IDLE_TIMEOUT_MS)
+//         |-- EXPORT_FILES     (Start/Stop a read-only WiFi file server
+//         |                      for downloading IGC logs -- see
+//         |                      FileServer.h. Needs WiFi connected
+//         |                      (Connections > WiFi) and the SD card
+//         |                      mounted; shows the URL to browse to
+//         |                      once running. Auto-stops after 15
+//         |                      minutes idle -- see
+//         |                      FILE_SERVER_IDLE_TIMEOUT_MS)
+//         `-- (Auto-Stop toggle, cycled in place -- persisted, off by
+//              default; see igcAutoStopEnabled in settings.h. When on,
+//              recording stops itself once ground speed has stayed
+//              below 5km/h for 20s -- see IGC_AUTOSTOP_SPEED_KPH /
+//              IGC_AUTOSTOP_SUSTAIN_MS, main .ino)
 //
 // Gestures (see updatePageButton() in the main .ino):
 //   short press  -- move the highlight down (wraps within the current screen)

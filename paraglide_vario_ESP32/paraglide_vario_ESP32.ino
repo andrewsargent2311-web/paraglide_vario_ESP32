@@ -157,9 +157,18 @@ struct PositionSnapshot {
 PositionSnapshot sharedPosition;
 
 #define IGC_START_SPEED_KPH 10.0f
-#define IGC_STOP_SPEED_KPH 0.0f
 #define IGC_START_SUSTAIN_MS 10000UL
-#define IGC_STOP_SUSTAIN_MS 10000UL
+
+// Auto-stop (Flight Recordings > Auto-Stop, igcAutoStopEnabled in
+// settings.h -- off by default). Previously this existed as
+// IGC_STOP_SPEED_KPH/IGC_STOP_SUSTAIN_MS with a threshold of 0.0f kph,
+// which GPS speed can never go below -- so recording never actually
+// auto-stopped via this path; it only ever stopped by the pilot turning
+// flightRecorderEnabled off (see setFlightRecorderEnabled()) or power
+// off. Renamed now that it's a real, user-facing feature.
+#define IGC_AUTOSTOP_SPEED_KPH 5.0f
+#define IGC_AUTOSTOP_SUSTAIN_MS 20000UL
+
 #define IGC_FIX_INTERVAL_MS 4000UL
 
 unsigned long igcAboveThresholdSince = 0;
@@ -2627,8 +2636,8 @@ void startIgcRecording() {
   struct tm utcTm;
   gmtime_r(&nowEpoch, &utcTm);
 
-  snprintf(igcFilename, sizeof(igcFilename), "/%04d%02d%02d_%02d%02d%02d.IGC",
-           utcTm.tm_year + 1900, utcTm.tm_mon + 1, utcTm.tm_mday,
+  snprintf(igcFilename, sizeof(igcFilename), "/%02d_%02d_%04d_%02d%02d%02d.IGC",
+           utcTm.tm_mday, utcTm.tm_mon + 1, utcTm.tm_year + 1900,
            utcTm.tm_hour, utcTm.tm_min, utcTm.tm_sec);
 
   if (sdMutex == nullptr || xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
@@ -2691,16 +2700,27 @@ void updateIgcRecorder() {
     return;
   }
 
-  // Already recording.
-  if (speedKph < IGC_STOP_SPEED_KPH) {
-    if (igcBelowThresholdSince == 0) {
-      igcBelowThresholdSince = now;
-    } else if (now - igcBelowThresholdSince >= IGC_STOP_SUSTAIN_MS) {
-      stopIgcRecording();
+  // Already recording. Auto-stop is opt-in (igcAutoStopEnabled, off by
+  // default, settings.h) -- when off, recording only ever stops via
+  // flightRecorderEnabled being switched off or power loss, same as
+  // before this feature existed.
+  if (igcAutoStopEnabled) {
+    if (speedKph < IGC_AUTOSTOP_SPEED_KPH) {
+      if (igcBelowThresholdSince == 0) {
+        igcBelowThresholdSince = now;
+      } else if (now - igcBelowThresholdSince >= IGC_AUTOSTOP_SUSTAIN_MS) {
+        stopIgcRecording();
+        igcBelowThresholdSince = 0;
+        return;
+      }
+    } else {
       igcBelowThresholdSince = 0;
-      return;
     }
   } else {
+    // Keep the timer clean in case the setting gets re-enabled later in
+    // the same flight -- otherwise a stale timestamp from before it was
+    // turned off could make the very next low-speed moment look like
+    // it's already been sustained for a while.
     igcBelowThresholdSince = 0;
   }
 
