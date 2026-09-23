@@ -24,7 +24,7 @@ static uint8_t mapFileCount = 0;
 // =====================================================
 // SCREEN NAVIGATION STACK
 // 4 deep now that Vario Beep adds a 4th level: MAIN > CONFIG >
-// VARIO_BEEP > (Min Gap / Max Gap / Min Pulse / Max Pulse). Every other
+// VARIO_BEEP > (Climb Volume / Sink Volume). Every other
 // screen in the app still only goes 3 deep, so this just adds headroom
 // -- it doesn't change how any existing screen behaves.
 // =====================================================
@@ -175,17 +175,26 @@ static const uint8_t VARIO_FREQ_CHOICE_COUNT = 5;
 // =====================================================
 // VOLUME CHOICES
 // =====================================================
-static const uint8_t VOLUME_CHOICES_PERCENT[] = { 20, 40, 60, 80, 85, 90, 95, 100 };
-static const uint8_t VOLUME_CHOICE_COUNT = 8;
+// 10-100% in 10% steps, dB-scaled -- see the BUZZER VOLUME comment in
+// settings.h for the percent -> dB mapping (shown next to each entry).
+static const uint8_t VOLUME_CHOICES_PERCENT[] = { 10, 20, 30, 40, 50, 60, 70, 80, 90, 100 };
+static const uint8_t VOLUME_CHOICE_COUNT = 10;
 
 // =====================================================
-// VARIO BEEP TIMING CHOICES
-// Same 100ms-1000ms/100ms-step range used for all 4 climbGapMinMs/
-// climbGapMaxMs/climbPulseMinMs/climbPulseMaxMs settings (settings.h) --
-// choice[index] = (index + 1) * 100.
+// VARIO CLIMB / SINK VOLUME CHOICES
+// 0-100% in 10% steps for both climbVolumePercent and sinkVolumePercent
+// (settings.h) -- choice[index] = index * 10. The percentage is converted
+// to a dB-scaled amplitude in the main .ino (varioVolumeToGain()).
 // =====================================================
-#define VARIO_BEEP_CHOICE_COUNT 10
-#define VARIO_BEEP_CHOICE_MS(index) (((unsigned long)(index) + 1UL) * 100UL)
+#define VARIO_VOLUME_CHOICE_COUNT 11
+#define VARIO_VOLUME_CHOICE_PERCENT(index) ((uint8_t)((index) * 10))
+
+// Test tones played back at the chosen level when a volume is picked:
+// ~1200Hz is a typical climb beep, ~250Hz is a typical sink tone.
+#define VARIO_VOLUME_PREVIEW_CLIMB_HZ 1200.0f
+#define VARIO_VOLUME_PREVIEW_CLIMB_MS 350UL
+#define VARIO_VOLUME_PREVIEW_SINK_HZ 250.0f
+#define VARIO_VOLUME_PREVIEW_SINK_MS 700UL
 
 // =====================================================
 // ADS-B ALERT CHOICES
@@ -227,11 +236,9 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_UNITS: return 2;
     case MENU_SCREEN_VARIO_FREQ: return VARIO_FREQ_CHOICE_COUNT;
     case MENU_SCREEN_CONFIG_VOLUME: return VOLUME_CHOICE_COUNT;
-    case MENU_SCREEN_VARIO_BEEP: return 4;
-    case MENU_SCREEN_VARIO_BEEP_GAP_MIN: return VARIO_BEEP_CHOICE_COUNT;
-    case MENU_SCREEN_VARIO_BEEP_GAP_MAX: return VARIO_BEEP_CHOICE_COUNT;
-    case MENU_SCREEN_VARIO_BEEP_PULSE_MIN: return VARIO_BEEP_CHOICE_COUNT;
-    case MENU_SCREEN_VARIO_BEEP_PULSE_MAX: return VARIO_BEEP_CHOICE_COUNT;
+    case MENU_SCREEN_VARIO_BEEP: return 2;
+    case MENU_SCREEN_VARIO_BEEP_CLIMB_VOL: return VARIO_VOLUME_CHOICE_COUNT;
+    case MENU_SCREEN_VARIO_BEEP_SINK_VOL: return VARIO_VOLUME_CHOICE_COUNT;
     case MENU_SCREEN_SCREEN: return 2;
     case MENU_SCREEN_CONNECTIONS: return 4;
     case MENU_SCREEN_FANET_MESSAGING: return 1 + FANET_MESSAGE_PRESET_COUNT;
@@ -263,10 +270,8 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_VARIO_FREQ: return "VARIO FREQ";
     case MENU_SCREEN_CONFIG_VOLUME: return "VOLUME";
     case MENU_SCREEN_VARIO_BEEP: return "VARIO BEEP";
-    case MENU_SCREEN_VARIO_BEEP_GAP_MIN: return "MIN GAP";
-    case MENU_SCREEN_VARIO_BEEP_GAP_MAX: return "MAX GAP";
-    case MENU_SCREEN_VARIO_BEEP_PULSE_MIN: return "MIN PULSE";
-    case MENU_SCREEN_VARIO_BEEP_PULSE_MAX: return "MAX PULSE";
+    case MENU_SCREEN_VARIO_BEEP_CLIMB_VOL: return "CLIMB VOLUME";
+    case MENU_SCREEN_VARIO_BEEP_SINK_VOL: return "SINK VOLUME";
     case MENU_SCREEN_SCREEN: return "SCREEN";
     case MENU_SCREEN_CONNECTIONS: return "CONNECTIONS";
     case MENU_SCREEN_FANET_MESSAGING: return "FANET MESSAGING";
@@ -337,36 +342,29 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
     case MENU_SCREEN_CONFIG_VOLUME: {
       uint8_t pct = VOLUME_CHOICES_PERCENT[index];
       bool isActive = (buzzerVolumePercent == pct);
-      snprintf(buf, buflen, "%u%%%s", pct, isActive ? " *" : "");
+      int db = (int)lroundf(buzzerVolumePercentToDb(pct));
+      if (db == 0) {
+        snprintf(buf, buflen, "%u%%  0 dB%s", pct, isActive ? " *" : "");
+      } else {
+        snprintf(buf, buflen, "%u%%  %+d dB%s", pct, db, isActive ? " *" : "");
+      }
       break;
     }
     case MENU_SCREEN_VARIO_BEEP: {
-      static const char* items[] = { "Min Gap", "Max Gap", "Min Pulse", "Max Pulse" };
+      static const char* items[] = { "Climb Volume", "Sink Volume" };
       snprintf(buf, buflen, "%s", items[index]);
       break;
     }
-    case MENU_SCREEN_VARIO_BEEP_GAP_MIN: {
-      unsigned long ms = VARIO_BEEP_CHOICE_MS(index);
-      bool isActive = (climbGapMinMs == ms);
-      snprintf(buf, buflen, "%lu ms%s", ms, isActive ? " *" : "");
+    case MENU_SCREEN_VARIO_BEEP_CLIMB_VOL: {
+      uint8_t pct = VARIO_VOLUME_CHOICE_PERCENT(index);
+      bool isActive = (climbVolumePercent == pct);
+      snprintf(buf, buflen, "%u%%%s", pct, isActive ? " *" : "");
       break;
     }
-    case MENU_SCREEN_VARIO_BEEP_GAP_MAX: {
-      unsigned long ms = VARIO_BEEP_CHOICE_MS(index);
-      bool isActive = (climbGapMaxMs == ms);
-      snprintf(buf, buflen, "%lu ms%s", ms, isActive ? " *" : "");
-      break;
-    }
-    case MENU_SCREEN_VARIO_BEEP_PULSE_MIN: {
-      unsigned long ms = VARIO_BEEP_CHOICE_MS(index);
-      bool isActive = (climbPulseMinMs == ms);
-      snprintf(buf, buflen, "%lu ms%s", ms, isActive ? " *" : "");
-      break;
-    }
-    case MENU_SCREEN_VARIO_BEEP_PULSE_MAX: {
-      unsigned long ms = VARIO_BEEP_CHOICE_MS(index);
-      bool isActive = (climbPulseMaxMs == ms);
-      snprintf(buf, buflen, "%lu ms%s", ms, isActive ? " *" : "");
+    case MENU_SCREEN_VARIO_BEEP_SINK_VOL: {
+      uint8_t pct = VARIO_VOLUME_CHOICE_PERCENT(index);
+      bool isActive = (sinkVolumePercent == pct);
+      snprintf(buf, buflen, "%u%%%s", pct, isActive ? " *" : "");
       break;
     }
     case MENU_SCREEN_SCREEN: {
@@ -579,7 +577,11 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
         case 0: pushMenuScreen(MENU_SCREEN_CONFIG_TIME); break;
         case 1: pushMenuScreen(MENU_SCREEN_UNITS); break;
         case 2: pushMenuScreen(MENU_SCREEN_VARIO_FREQ); break;
-        case 3: pushMenuScreen(MENU_SCREEN_CONFIG_VOLUME); break;
+        case 3:
+          pushMenuScreen(MENU_SCREEN_CONFIG_VOLUME);
+          menuSelectedIndex = (buzzerVolumePercent >= 10) ? (buzzerVolumePercent / 10 - 1) : 0;  // start on the current level
+          if (menuSelectedIndex >= VOLUME_CHOICE_COUNT) menuSelectedIndex = VOLUME_CHOICE_COUNT - 1;
+          break;
         case 4: pushMenuScreen(MENU_SCREEN_VARIO_BEEP); break;
         case 5: pushMenuScreen(MENU_SCREEN_SCREEN); break;
       }
@@ -629,40 +631,33 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
 
     case MENU_SCREEN_VARIO_BEEP:
       switch (index) {
-        case 0: pushMenuScreen(MENU_SCREEN_VARIO_BEEP_GAP_MIN); break;
-        case 1: pushMenuScreen(MENU_SCREEN_VARIO_BEEP_GAP_MAX); break;
-        case 2: pushMenuScreen(MENU_SCREEN_VARIO_BEEP_PULSE_MIN); break;
-        case 3: pushMenuScreen(MENU_SCREEN_VARIO_BEEP_PULSE_MAX); break;
+        case 0:
+          pushMenuScreen(MENU_SCREEN_VARIO_BEEP_CLIMB_VOL);
+          menuSelectedIndex = climbVolumePercent / 10;  // start on the current level
+          break;
+        case 1:
+          pushMenuScreen(MENU_SCREEN_VARIO_BEEP_SINK_VOL);
+          menuSelectedIndex = sinkVolumePercent / 10;
+          break;
       }
       playFeedbackTone(900.0f, 80);
       return;
 
-    case MENU_SCREEN_VARIO_BEEP_GAP_MIN:
-      climbGapMinMs = VARIO_BEEP_CHOICE_MS(index);
-      saveSettings();
-      playFeedbackTone(1100.0f, 120);
-      menuGoBack();  // back to Vario Beep
+    // The two volume screens apply the level immediately, play a short test
+    // tone at that level, and STAY on the screen -- so several levels can be
+    // tried back to back. Double-press to go back to Vario Beep.
+    case MENU_SCREEN_VARIO_BEEP_CLIMB_VOL:
+      climbVolumePercent = VARIO_VOLUME_CHOICE_PERCENT(index);
+      saveVarioVolumes();
+      displayDirty = true;
+      playVolumePreviewTone(VARIO_VOLUME_PREVIEW_CLIMB_HZ, VARIO_VOLUME_PREVIEW_CLIMB_MS, climbVolumePercent);
       return;
 
-    case MENU_SCREEN_VARIO_BEEP_GAP_MAX:
-      climbGapMaxMs = VARIO_BEEP_CHOICE_MS(index);
-      saveSettings();
-      playFeedbackTone(1100.0f, 120);
-      menuGoBack();  // back to Vario Beep
-      return;
-
-    case MENU_SCREEN_VARIO_BEEP_PULSE_MIN:
-      climbPulseMinMs = VARIO_BEEP_CHOICE_MS(index);
-      saveSettings();
-      playFeedbackTone(1100.0f, 120);
-      menuGoBack();  // back to Vario Beep
-      return;
-
-    case MENU_SCREEN_VARIO_BEEP_PULSE_MAX:
-      climbPulseMaxMs = VARIO_BEEP_CHOICE_MS(index);
-      saveSettings();
-      playFeedbackTone(1100.0f, 120);
-      menuGoBack();  // back to Vario Beep
+    case MENU_SCREEN_VARIO_BEEP_SINK_VOL:
+      sinkVolumePercent = VARIO_VOLUME_CHOICE_PERCENT(index);
+      saveVarioVolumes();
+      displayDirty = true;
+      playVolumePreviewTone(VARIO_VOLUME_PREVIEW_SINK_HZ, VARIO_VOLUME_PREVIEW_SINK_MS, sinkVolumePercent);
       return;
 
     case MENU_SCREEN_SCREEN:

@@ -90,24 +90,64 @@ extern unsigned long climbGapMaxMs;
 extern unsigned long climbPulseMinMs;
 extern unsigned long climbPulseMaxMs;
 
+// NOTE: these four are no longer used by the audio code (the climb cadence
+// now follows the BlueFly curve, blueflyBeepDurationMs() in the main .ino)
+// and Config > Vario Beep no longer edits them -- it now sets the climb and
+// sink volumes below. They're left declared/persisted so existing stored
+// settings still load cleanly.
+
 // =====================================================
-// BUZZER VOLUME
-// Applied to the ES8311 codec's DAC digital volume register by
+// VARIO CLIMB / SINK VOLUME
+// Independent loudness of the climb beeps and the sink tone, 0-100% in
+// 10% steps (Config > Vario Beep in the menu). Defined, loaded and saved
+// in the main .ino (loadVarioVolumes()/saveVarioVolumes(), own keys in the
+// same NVS namespace) -- NOT part of loadSettings()/saveSettings().
+// 100% = full tone-generator level; lower values are scaled in dB (see
+// VARIO_VOLUME_DB_PER_PERCENT in the main .ino). 0% = silent.
+// =====================================================
+#define VARIO_VOLUME_DEFAULT_CLIMB_PERCENT 100
+#define VARIO_VOLUME_DEFAULT_SINK_PERCENT 60
+
+extern uint8_t climbVolumePercent;
+extern uint8_t sinkVolumePercent;
+
+void loadVarioVolumes();
+void saveVarioVolumes();
+
+// =====================================================
+// BUZZER VOLUME (main / master volume)
+// Applied to the ES8311 codec's DAC digital volume register (0x32) by
 // applyBuzzerVolume() (main .ino) -- called once at boot (es8311Init())
 // and again immediately whenever this changes via Config > Volume in the
-// menu. 20-100: 20% steps up to 80%, then 5% steps from 80-100% (see
-// VOLUME_CHOICES_PERCENT in menu.cpp) -- the finer top-end steps exist
-// so a speaker that clips at 100% has room to back off a little without
-// dropping all the way to 80%. Default (80%) approximates the app's
-// original hard-coded register value (0xBF of 0xFF, ~75%).
+// menu.
 //
-// NOTE: that register is dB-linear (0.5dB per LSB across its range), not
-// linear in perceived loudness, so a straightforward "percent of the
-// register's full range" mapping means the low end (20%/40%) may come
-// out quieter than a literal "20%/40% as loud" would suggest -- worth a
-// listen on real hardware; see applyBuzzerVolume() if that mapping needs
-// adjusting.
+// 10-100% in 10% steps, scaled in dB (loudness is roughly logarithmic, so
+// equal dB steps sound like equal loudness steps). Each 10% step is
+// BUZZER_VOLUME_DB_PER_STEP dB, and 100% is BUZZER_VOLUME_MAX_DB, so with
+// the defaults below:
+//     100% = +12 dB   90% = +9   80% = +6   70% = +3   60% = 0 dB
+//      50% = -3 dB    40% = -6   30% = -9   20% = -12  10% = -15 dB
+//
+// ES8311 register 0x32: 0x00 = -95.5dB, 0xBF = 0dB, 0xFF = +32dB, in
+// 0.5dB steps. (0xFF is NOT "0dB / loudest-but-clean" -- it is +32dB of
+// digital gain, which clips the tones badly. That is why 100% here stops at
+// +12 dB: above roughly that, the loudest tone at full climb/sink volume
+// starts to clip.) Raise BUZZER_VOLUME_MAX_DB for more headroom at your own
+// risk.
+//
+// The default (80% = +6 dB) matches the previous default level (+6.5 dB).
+// Older builds stored this value on a different (linear-register) scale --
+// loadVarioVolumes() (main .ino) converts a stored old-scale value once,
+// keeping the same loudness where it fits in the new range.
 // =====================================================
+#define BUZZER_VOLUME_MAX_DB 12.0f
+#define BUZZER_VOLUME_DB_PER_STEP 3.0f  // dB per 10% step
+
+// dB (relative to the codec's 0dB point) that a master volume percentage maps to.
+static inline float buzzerVolumePercentToDb(uint8_t percent) {
+  return BUZZER_VOLUME_MAX_DB - ((100 - (int)percent) / 10.0f) * BUZZER_VOLUME_DB_PER_STEP;
+}
+
 extern uint8_t buzzerVolumePercent;
 
 // =====================================================

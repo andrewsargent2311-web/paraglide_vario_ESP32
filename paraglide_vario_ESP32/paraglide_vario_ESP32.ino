@@ -18,6 +18,7 @@
 #include <string.h>
 #include <esp_task_wdt.h>
 #include <esp_timer.h>
+#include <Preferences.h>  // climb/sink volume persistence (see loadVarioVolumes())
 #include <FS.h>
 #include <SD_MMC.h>
 #include "secrets.h"
@@ -545,26 +546,59 @@ bool codecOK = false;   // I2S peripheral configured
 bool es8311OK = false;  // ES8311 chip found and initialized over I2C
 
 volatile float toneFrequency = 0.0f;  // 0 = silent
+// Per-step loudness multiplier applied on top of the normal tone amplitude
+// (1.0 = normal). Only the mute/unmute jingle changes it; updateI2sAudioBuzzer()
+// resets it to 1.0 on every call so nothing else is ever affected.
+volatile float toneGain = 1.0f;
 float tonePhase = 0.0f;
 
 // =====================================================
 // MUTE / UNMUTE CONFIRMATION TONE
-// A short two-tone jingle played once whenever buzzerMuted is toggled by
-// the long-press gesture (see updatePageButton()), so the pilot gets
-// audible confirmation of which state they just landed in. Sequenced
-// non-blockingly inside updateI2sAudioBuzzer(), same as the rest of the
-// buzzer state machine. Muting plays 650Hz(1s) -> 10ms gap -> 500Hz
-// (0.5s); unmuting plays the same three segments in reverse.
+// Played once whenever buzzerMuted is toggled by the long-press gesture
+// (see updatePageButton()), so the pilot gets audible confirmation of
+// which state they just landed in. Sequenced non-blockingly inside
+// updateI2sAudioBuzzer().
+//
+// These reproduce the BlueFly's own mute/unmute sounds, measured from a
+// recording of the real device:
+//   MUTE   : 200ms @ ~3320Hz, then three 100ms beeps @ ~3420Hz with
+//            growing gaps (100 / 200 / 300 ms).  Total 1.1s.
+//   UNMUTE : 1.0s @ ~4020Hz, 100ms gap, 100ms @ ~4020Hz.  Total 1.2s.
+//            On the real BlueFly the first ~0.42s of the long beep is
+//            ~14dB louder than the rest, so it is split into two steps.
+//
+// Each step is {frequency Hz (0 = silence), duration ms, gain}. Gain is a
+// loudness multiplier: 1.0 = the normal beep level, 2.6 = ~+8dB, 0.55 =
+// ~-5dB. Edit the tables to retune -- nothing else needs to change.
 // =====================================================
-#define MUTE_TONE_FREQ_HIGH_HZ 3400.0f
-#define MUTE_TONE_FREQ_LOW_HZ 1500.0f
-#define MUTE_TONE_HIGH_MS 100UL
-#define MUTE_TONE_LOW_MS 200UL
-#define MUTE_TONE_GAP_MS 100UL
+struct ToneStep {
+  float freq;
+  uint16_t ms;
+  float gain;
+};
+
+static const ToneStep MUTE_SEQUENCE[] = {
+  { 3320.0f, 200, 1.0f },
+  {    0.0f, 100, 1.0f },
+  { 3420.0f, 100, 1.0f },
+  {    0.0f, 200, 1.0f },
+  { 3420.0f, 100, 1.0f },
+  {    0.0f, 300, 1.0f },
+  { 3420.0f, 100, 1.0f },
+};
+
+static const ToneStep UNMUTE_SEQUENCE[] = {
+  { 4020.0f, 420, 2.6f  },  // loud first part of the long beep
+  { 4020.0f, 580, 0.55f },  // quieter remainder (1.0s total)
+  {    0.0f, 100, 1.0f  },
+  { 4020.0f, 100, 0.55f },
+};
+
+#define TONE_SEQ_LEN(arr) (sizeof(arr) / sizeof((arr)[0]))
 
 bool muteToneActive = false;
 unsigned long muteToneStart = 0;
-bool muteToneIsMuteSequence = false;  // true = muting order (650->gap->500); false = unmuting order (500->gap->650)
+bool muteToneIsMuteSequence = false;  // true = play MUTE_SEQUENCE; false = play UNMUTE_SEQUENCE
 
 // =====================================================
 // BATTERY MONITOR- Variables
@@ -626,18 +660,50 @@ bool muteToneIsMuteSequence = false;  // true = muting order (650->gap->500); fa
 //#define SINK_RELEASE_MS -5.0f  // Set to -5m/s as not uncommon to hit 4 m/s sink alarm switches off above 5 m/s to avoid distraction
 //commented out max sink threshold for debugging as its causing clipping
 // Sink alarm -- constant (non-pulsed) tone, pitch dropping as sink
-// strengthens. SINK_TONE_MAX_HZ is the pitch right at the SINK_ALARM_MS
-// threshold; SINK_TONE_MIN_HZ is the floor pitch reached at/beyond
-// SINK_TONE_MAX_MS. See the SINK ALARM OUTPUT block in updateVario().
-#define SINK_TONE_MAX_HZ 350
-#define SINK_TONE_MIN_HZ 150
-#define SINK_TONE_MAX_MS -5.0f
+// strengthens. Matches the BlueFly hardware settings (manual v1.8):
+//   sinkFreq = sinkFreqBase - sinkFreqIncrement * |sink|
+// measured from 0 m/s (NOT from the sink threshold), clamped to the
+// BlueFly's 130Hz minimum. Defaults: 400Hz base, 100Hz per m/s.
+// If your BlueFly's sink settings have been changed in XCSoar, change
+// these to match. See the SINK ALARM OUTPUT block in updateI2sAudioBuzzer().
+#define SINK_FREQ_BASE_HZ 400.0f
+#define SINK_FREQ_INCREMENT_HZ 100.0f  // Hz of pitch drop per 1 m/s of sink
+#define SINK_FREQ_MIN_HZ 130.0f
 // Climb tone frequency range: climbToneMinHz/climbToneMaxHz (settings.h),
 // editable from Config > Vario Freq in the menu.
-// Climb pulse timing: climbGapMinMs/climbGapMaxMs/climbPulseMinMs/
-// climbPulseMaxMs (settings.h), editable from Config > Vario Beep. Both
-// the gap AND the pulse length shrink together as lift strengthens, so
-// they compress in step toward the continuous-tone region below.
+// Climb beep cadence follows the BlueFly curve in blueflyBeepDurationMs().
+// (The old climbGapMinMs/climbGapMaxMs/climbPulseMinMs/climbPulseMaxMs
+// settings are no longer used by the audio code -- Config > Vario Beep now
+// sets the climb and sink volumes instead.)
+
+// ============================================================
+// CLIMB / SINK VOLUME (Config > Vario Beep)
+// Independent loudness for the climb beeps and the sink tone, 0-100% in
+// 10% steps. 100% = the full level the tone generator produces (the same
+// level as before these settings existed); lower values are scaled in dB,
+// not linearly, because loudness is perceived roughly logarithmically:
+// each 1% below 100 is VARIO_VOLUME_DB_PER_PERCENT dB quieter, so with
+// 0.3 each 10% menu step is -3 dB (50% = -15 dB, 10% = -27 dB). 0% is
+// silent. This scales the tone generator's amplitude only -- the overall
+// speaker volume (Config > Volume, codec register) still applies on top.
+// Defaults are VARIO_VOLUME_DEFAULT_*_PERCENT in settings.h.
+// ============================================================
+#define VARIO_VOLUME_DB_PER_PERCENT 0.3f
+
+uint8_t climbVolumePercent = VARIO_VOLUME_DEFAULT_CLIMB_PERCENT;
+uint8_t sinkVolumePercent = VARIO_VOLUME_DEFAULT_SINK_PERCENT;
+
+// Gain used while a page/feedback beep (or a volume-preview tone) is
+// sounding -- 1.0 for normal UI beeps.
+float pageBeepGain = 1.0f;
+
+// Converts a 0-100 volume percentage to a linear amplitude multiplier.
+static float varioVolumeToGain(uint8_t percent) {
+  if (percent == 0) return 0.0f;
+  if (percent >= 100) return 1.0f;
+  return powf(10.0f, -((float)(100 - percent) * VARIO_VOLUME_DB_PER_PERCENT) / 20.0f);
+}
+
 // ============================================================
 // VARIO AUDIO STATE
 // ============================================================
@@ -776,6 +842,7 @@ void setup() {
   // Pull every persisted setting out of NVS before anything below reads
   // one of them (buzzer volume, climb tone, selected DEM file, etc.).
   loadSettings();
+  loadVarioVolumes();  // climb/sink volume (Config > Vario Beep)
   activePages[0] = (mainPageSelection == 1) ? PAGE_PARAMOTOR : PAGE_PARAGLIDER;
   currentPage = activePages[0];
   Serial.println("[BOOT] Settings loaded from flash");
@@ -1293,8 +1360,80 @@ void loop() {
 // the mute setting.
 void playFeedbackTone(float freq, unsigned long durationMs) {
   if (buzzerMuted) return;
+  pageBeepGain = 1.0f;
   setToneFrequency(freq);
   pageBeepUntil = millis() + durationMs;
+}
+
+// Same as playFeedbackTone(), but at the loudness a given climb/sink volume
+// percentage (0-100) would produce -- used by Config > Vario Beep so the
+// pilot can audition a volume level as they pick it.
+void playVolumePreviewTone(float freq, unsigned long durationMs, uint8_t volumePercent) {
+  if (buzzerMuted) return;
+  pageBeepGain = varioVolumeToGain(volumePercent);
+  setToneFrequency(freq);
+  pageBeepUntil = millis() + durationMs;
+}
+
+// Climb/sink volume persistence. Stored in the same NVS namespace
+// ("vario") as the rest of the settings, under their own keys, so this is
+// independent of loadSettings()/saveSettings(). Call loadVarioVolumes()
+// once at boot, after loadSettings(); call saveVarioVolumes() after either
+// value changes.
+//
+// This also does the one-time conversion of the master volume
+// (buzzerVolumePercent, normally loaded by loadSettings()) from the old
+// linear-register scale to the current dB scale -- see the BUZZER VOLUME
+// comment in settings.h. A "volScheme" key marks it as done.
+static uint8_t migrateOldBuzzerVolumePercent(uint8_t oldPercent) {
+  if (oldPercent > 100) oldPercent = 100;
+  // What register value (and so what dB) the old scheme produced.
+  const int oldReg = (int)((oldPercent / 100.0f) * 255.0f + 0.5f);
+  const float oldDb = (oldReg - 0xBF) * 0.5f;
+  // Nearest 10% step on the new scale.
+  const float stepsBelowMax = (BUZZER_VOLUME_MAX_DB - oldDb) / BUZZER_VOLUME_DB_PER_STEP;
+  int pct = 100 - (int)lroundf(stepsBelowMax) * 10;
+  if (pct < 10) pct = 10;
+  if (pct > 100) pct = 100;
+  return (uint8_t)pct;
+}
+
+void loadVarioVolumes() {
+  uint8_t volScheme = 0;
+  Preferences prefs;
+  if (prefs.begin("vario", false)) {
+    climbVolumePercent = prefs.getUChar("climbVol", VARIO_VOLUME_DEFAULT_CLIMB_PERCENT);
+    sinkVolumePercent = prefs.getUChar("sinkVol", VARIO_VOLUME_DEFAULT_SINK_PERCENT);
+    volScheme = prefs.getUChar("volScheme", 0);
+    prefs.end();
+  }
+  if (climbVolumePercent > 100) climbVolumePercent = 100;
+  if (sinkVolumePercent > 100) sinkVolumePercent = 100;
+
+  if (volScheme < 1) {
+    // First boot on the dB-scaled master volume: convert the old value.
+    buzzerVolumePercent = migrateOldBuzzerVolumePercent(buzzerVolumePercent);
+    saveSettings();
+    if (prefs.begin("vario", false)) {
+      prefs.putUChar("volScheme", 1);
+      prefs.end();
+    }
+  } else {
+    // Keep it on a valid menu step (10-100%, multiples of 10).
+    int pct = ((int)buzzerVolumePercent + 5) / 10 * 10;
+    if (pct < 10) pct = 10;
+    if (pct > 100) pct = 100;
+    buzzerVolumePercent = (uint8_t)pct;
+  }
+}
+
+void saveVarioVolumes() {
+  Preferences prefs;
+  if (prefs.begin("vario", false)) {
+    prefs.putUChar("climbVol", climbVolumePercent);
+    prefs.putUChar("sinkVol", sinkVolumePercent);
+    prefs.end();
+  }
 }
 void advanceActivePage() {
   activePageIndex = (activePageIndex + 1) % ACTIVE_PAGE_COUNT;
@@ -3280,12 +3419,16 @@ static unsigned long blueflyBeepDurationMs(float climbMs){
 void updateI2sAudioBuzzer(){
   const unsigned long now = millis();
 
+  // Only the mute/unmute jingle below overrides this.
+  toneGain = 1.0f;
+
 
   // ============================================================
   // PAGE-CHANGE BEEP HAS PRIORITY
   // ============================================================
 
   if ((int32_t)(pageBeepUntil - now) > 0) {
+    toneGain = pageBeepGain;
     return;
   }
 
@@ -3345,60 +3488,49 @@ void updateI2sAudioBuzzer(){
 
   if (muteToneActive) {
 
-    unsigned long elapsed =
-      now - muteToneStart;
+    const unsigned long elapsed = now - muteToneStart;
 
-    float freqA =
+    const ToneStep* seq =
+      muteToneIsMuteSequence ? MUTE_SEQUENCE : UNMUTE_SEQUENCE;
+
+    const size_t seqLen =
       muteToneIsMuteSequence
-      ? MUTE_TONE_FREQ_HIGH_HZ
-      : MUTE_TONE_FREQ_LOW_HZ;
+      ? TONE_SEQ_LEN(MUTE_SEQUENCE)
+      : TONE_SEQ_LEN(UNMUTE_SEQUENCE);
 
-    unsigned long durA =
-      muteToneIsMuteSequence
-      ? MUTE_TONE_HIGH_MS
-      : MUTE_TONE_LOW_MS;
+    // Walk the table, accumulating durations, until we find the step
+    // that covers the current elapsed time.
+    unsigned long stepEnd = 0;
+    bool stepFound = false;
 
-    float freqB =
-      muteToneIsMuteSequence
-      ? MUTE_TONE_FREQ_LOW_HZ
-      : MUTE_TONE_FREQ_HIGH_HZ;
+    for (size_t i = 0; i < seqLen; i++) {
 
-    unsigned long durB =
-      muteToneIsMuteSequence
-      ? MUTE_TONE_LOW_MS
-      : MUTE_TONE_HIGH_MS;
+      stepEnd += seq[i].ms;
 
+      if (elapsed < stepEnd) {
 
-    if (elapsed < durA) {
-
-      setToneFrequency(freqA);
-      return;
-
-    }
-    else if (elapsed < durA + MUTE_TONE_GAP_MS) {
-
-      setToneFrequency(0);
-      return;
-
-    }
-    else if (elapsed < durA + MUTE_TONE_GAP_MS + durB) {
-
-      setToneFrequency(freqB);
-      return;
-
-    }
-    else {
-
-      muteToneActive = false;
-
-      setToneFrequency(0);
-
-      if (buzzerMuted) {
-        digitalWrite(AMP_ENABLE_PIN, LOW);
+        toneGain = seq[i].gain;
+        setToneFrequency(seq[i].freq);
+        stepFound = true;
+        break;
       }
-
-      // Fall through to normal vario logic.
     }
+
+    if (stepFound) {
+      return;
+    }
+
+    // Sequence finished.
+    muteToneActive = false;
+    toneGain = 1.0f;
+
+    setToneFrequency(0);
+
+    if (buzzerMuted) {
+      digitalWrite(AMP_ENABLE_PIN, LOW);
+    }
+
+    // Fall through to normal vario logic.
   }
 
 
@@ -3453,20 +3585,15 @@ void updateI2sAudioBuzzer(){
 
   if (sinkAlarmActive) {
 
-    float sinkFactor =
-      (currentClimbRateMS - SINK_ALARM_MS) /
-      (SINK_TONE_MAX_MS - SINK_ALARM_MS);
+    // BlueFly sink pitch: base minus increment per m/s of sink.
+    // currentClimbRateMS is negative here, so this drops as sink grows.
+    float sinkToneFreq =
+      SINK_FREQ_BASE_HZ +
+      (SINK_FREQ_INCREMENT_HZ * currentClimbRateMS);
 
-    sinkFactor =
-      constrain(sinkFactor, 0.0f, 1.0f);
+    sinkToneFreq = max(SINK_FREQ_MIN_HZ, sinkToneFreq);
 
-    int sinkToneFreq =
-      SINK_TONE_MAX_HZ -
-      (int)(
-        sinkFactor *
-        (SINK_TONE_MAX_HZ - SINK_TONE_MIN_HZ)
-      );
-
+    toneGain = varioVolumeToGain(sinkVolumePercent);
     setToneFrequency(sinkToneFreq);
 
     return;
@@ -3532,6 +3659,9 @@ void updateI2sAudioBuzzer(){
       1000.0f,
       1800.0f
     );
+
+  // Climb volume (Config > Vario Beep) -- applies to every beep below.
+  toneGain = varioVolumeToGain(climbVolumePercent);
 
 
   // ============================================================
@@ -3698,14 +3828,19 @@ void es8311Init() {
   Serial.println("ES8311 CODEC INITIALIZED");
 }
 // Applies buzzerVolumePercent (settings.h) to the ES8311's DAC digital
-// volume register (0x32): 0x00 = mute, 0xFF = 0dB (loudest). Called once
+// volume register (0x32). That register is in 0.5dB steps with 0xBF = 0dB,
+// 0xFF = +32dB and 0x00 = -95.5dB (ES8311 datasheet). The pilot's percentage
+// is converted to dB with buzzerVolumePercentToDb() (settings.h): 10% steps,
+// BUZZER_VOLUME_DB_PER_STEP dB each, 100% = BUZZER_VOLUME_MAX_DB. Called once
 // at boot above, and again immediately whenever the pilot changes the
-// Config > Volume menu setting -- see the buzzerVolumePercent comment in
-// settings.h for the dB-linear-vs-perceived-loudness caveat.
+// Config > Volume menu setting.
 void applyBuzzerVolume() {
   if (!es8311OK) return;
-  uint8_t reg = (uint8_t)((buzzerVolumePercent / 100.0f) * 255.0f + 0.5f);
-  es8311WriteReg(0x32, reg);
+  const float db = buzzerVolumePercentToDb(buzzerVolumePercent);
+  int reg = 0xBF + (int)lroundf(db * 2.0f);  // 0.5dB per register step
+  if (reg < 0x00) reg = 0x00;
+  if (reg > 0xFF) reg = 0xFF;
+  es8311WriteReg(0x32, (uint8_t)reg);
 }
 
 // =====================================================
@@ -3833,7 +3968,37 @@ void i2sToneService() {
     // each beep decays like a real tone, not a ramped DC offset.
     // ---------------------------------------------------------
     const float TONE_PEAK_AMPLITUDE = 5000.0f;  // matches the previous fixed amplitude
-    const float TONE_RAMP_STEP = 50.0f;         // ~6.25ms fade to/from full amplitude at 16kHz
+    const float TONE_RAMP_STEP = 50.0f;         // ~6.25ms fade to/from full amplitude at 16kHz (at gain 1.0)
+
+    // ---------------------------------------------------------
+    // WAVEFORM: BAND-LIMITED SQUARE WAVE
+    // The BlueFly drives an electromagnetic transducer with a square
+    // wave; its buzzy character is the odd harmonics (3f, 5f, 7f...).
+    // A pure sine has none, so on this small speaker a 130-350Hz sink
+    // tone was thin and quiet. We sum the odd harmonics of a square
+    // wave (1/k weighting) but stop below Nyquist so nothing aliases.
+    // Harmonics are built with the recurrence
+    //     sin((k+2)x) = 2cos(2x)*sin(kx) - sin((k-2)x)
+    // so it costs only two trig calls per sample regardless of how
+    // many harmonics are summed.
+    //
+    // SQUARE_LEVEL: a square wave has ~3dB more RMS than a sine of the
+    // same peak; 0.72 keeps the climb beeps about as loud as they
+    // were with the sine, so only the sink loudness changes.
+    // ---------------------------------------------------------
+    const float SQUARE_LEVEL = 0.72f;
+    const float HARMONIC_LIMIT_HZ = 7500.0f;  // stay below Nyquist (8000Hz at 16kHz)
+
+    // ---------------------------------------------------------
+    // LOW-FREQUENCY GAIN COMPENSATION
+    // The speaker rolls off hard below ~500Hz, so the sink tone (130-400Hz)
+    // came out 6-8dB quieter than the climb beeps. Above LF_GAIN_KNEE_HZ
+    // gain is 1.0; below it gain rises as sqrt(knee/freq), capped at
+    // LF_GAIN_MAX. At 130Hz that is roughly +6dB. Tune these to taste:
+    // raise LF_GAIN_MAX or LF_GAIN_KNEE_HZ for a louder sink tone.
+    // ---------------------------------------------------------
+    const float LF_GAIN_KNEE_HZ = 500.0f;
+    const float LF_GAIN_MAX = 2.2f;
 
     static float toneAmplitude = 0.0f;
     static float lastAudibleFreq = 440.0f;
@@ -3843,20 +4008,63 @@ void i2sToneService() {
     }
 
     const float phaseIncFreq = (freq > 0.0f) ? freq : lastAudibleFreq;
-    const float targetAmplitude = (freq > 0.0f) ? TONE_PEAK_AMPLITUDE : 0.0f;
+
+    float lfGain = 1.0f;
+    if (phaseIncFreq < LF_GAIN_KNEE_HZ) {
+        lfGain = sqrtf(LF_GAIN_KNEE_HZ / phaseIncFreq);
+        if (lfGain > LF_GAIN_MAX) lfGain = LF_GAIN_MAX;
+    }
+
+    // Per-tone loudness multiplier (climb/sink volume settings, page beeps
+    // and the mute/unmute jingle all set toneGain). 0 = silent.
+    const float stepGain = (toneGain > 0.0f) ? toneGain : 0.0f;
+
+    const float totalGain = lfGain * stepGain;
+
+    // Remember the gain of the tone that was last actually sounding, so the
+    // fade-out at the end of a beep (when freq is 0) keeps the same ~6ms
+    // fade length instead of being far too abrupt for a quiet tone.
+    static float lastSoundingGain = 1.0f;
+    if (freq > 0.0f && totalGain > 0.0f) {
+        lastSoundingGain = totalGain;
+    }
+
+    const float targetAmplitude = (freq > 0.0f) ? (TONE_PEAK_AMPLITUDE * totalGain) : 0.0f;
+    // Scale the fade step with the gain so the anti-click fade stays ~6ms.
+    const float rampStep = TONE_RAMP_STEP * lastSoundingGain;
+
+    // Number of odd harmonics that fit below HARMONIC_LIMIT_HZ.
+    int maxHarmonic = (int)(HARMONIC_LIMIT_HZ / phaseIncFreq);
+    if (maxHarmonic < 1) maxHarmonic = 1;
+    if ((maxHarmonic & 1) == 0) maxHarmonic--;  // largest odd k <= limit
 
     for (int i = 0; i < I2S_TONE_CHUNK; i++) {
 
         if (toneAmplitude < targetAmplitude) {
-            toneAmplitude += TONE_RAMP_STEP;
+            toneAmplitude += rampStep;
             if (toneAmplitude > targetAmplitude) toneAmplitude = targetAmplitude;
         } else if (toneAmplitude > targetAmplitude) {
-            toneAmplitude -= TONE_RAMP_STEP;
+            toneAmplitude -= rampStep;
             if (toneAmplitude < targetAmplitude) toneAmplitude = targetAmplitude;
         }
 
+        const float x = 2.0f * PI * tonePhase;
+        const float twoCos2x = 2.0f * cosf(2.0f * x);
+
+        float sPrev = -sinf(x);  // sin(-1 * x)
+        float sCur = sinf(x);    // sin(1 * x)
+        float sum = sCur;        // k = 1 term (weight 1/1)
+
+        for (int k = 3; k <= maxHarmonic; k += 2) {
+            const float sNext = twoCos2x * sCur - sPrev;  // sin(k * x)
+            sum += sNext / (float)k;
+            sPrev = sCur;
+            sCur = sNext;
+        }
+
+        // (4/pi) scales the harmonic sum to a unit-amplitude square wave.
         chunk[i] = (int16_t)(
-            toneAmplitude * sinf(2.0f * PI * tonePhase)
+            toneAmplitude * SQUARE_LEVEL * (4.0f / PI) * sum
         );
 
         tonePhase += phaseIncFreq / (float)I2S_SAMPLE_RATE;

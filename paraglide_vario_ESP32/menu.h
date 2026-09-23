@@ -45,12 +45,12 @@ extern uint8_t activePageIndex;
 //   |     |                    manual UTC offset from -12 to +14 hours)
 //   |     |-- UNITS           (Altitude / Speed, cycled in place)
 //   |     |-- VARIO_FREQ      (climb-tone min Hz)
-//   |     |-- CONFIG_VOLUME   (buzzer volume, 20-100% in 20% steps)
+//   |     |-- CONFIG_VOLUME   (main buzzer volume, 10-100% in 10% steps,
+//   |     |                    dB-scaled: 100% = +12dB, 3dB per step)
 //   |     |-- VARIO_BEEP
-//   |     |     |-- VARIO_BEEP_GAP_MIN     (shortest gap between beeps)
-//   |     |     |-- VARIO_BEEP_GAP_MAX     (longest gap between beeps)
-//   |     |     |-- VARIO_BEEP_PULSE_MIN   (shortest beep length)
-//   |     |     `-- VARIO_BEEP_PULSE_MAX   (longest beep length)
+//   |     |     |-- VARIO_BEEP_CLIMB_VOL   (climb beep volume, 0-100%
+//   |     |     |                           in 10% steps, dB-scaled)
+//   |     |     `-- VARIO_BEEP_SINK_VOL    (sink tone volume, same scale)
 //   |     `-- SCREEN          ("GPS Top" / "GPS Bottom" -- 180-degree
 //   |                          display flip; see applyScreenOrientation())
 //   |-- CONNECTIONS
@@ -134,10 +134,8 @@ enum MenuScreen {
   MENU_SCREEN_VARIO_FREQ,
   MENU_SCREEN_CONFIG_VOLUME,
   MENU_SCREEN_VARIO_BEEP,
-  MENU_SCREEN_VARIO_BEEP_GAP_MIN,
-  MENU_SCREEN_VARIO_BEEP_GAP_MAX,
-  MENU_SCREEN_VARIO_BEEP_PULSE_MIN,
-  MENU_SCREEN_VARIO_BEEP_PULSE_MAX,
+  MENU_SCREEN_VARIO_BEEP_CLIMB_VOL,
+  MENU_SCREEN_VARIO_BEEP_SINK_VOL,
   MENU_SCREEN_SCREEN,
   MENU_SCREEN_CONNECTIONS,
   MENU_SCREEN_WIFI_LIST,
@@ -194,6 +192,11 @@ extern bool displayDirty;
 
 // Short non-blocking UI feedback tone (defined in the main .ino).
 void playFeedbackTone(float freq, unsigned long durationMs);
+
+// Same as playFeedbackTone(), but at the loudness that a climb/sink volume
+// percentage (0-100) would produce -- lets Config > Vario Beep play the
+// tone back at the level being picked (defined in the main .ino).
+void playVolumePreviewTone(float freq, unsigned long durationMs, uint8_t volumePercent);
 
 // Re-applies buzzerVolumePercent (settings.h) to the ES8311 codec's
 // volume register -- call after changing it so the new level takes
