@@ -556,11 +556,11 @@ float tonePhase = 0.0f;
 // buzzer state machine. Muting plays 650Hz(1s) -> 10ms gap -> 500Hz
 // (0.5s); unmuting plays the same three segments in reverse.
 // =====================================================
-#define MUTE_TONE_FREQ_HIGH_HZ 650.0f
-#define MUTE_TONE_FREQ_LOW_HZ 500.0f
-#define MUTE_TONE_HIGH_MS 500UL
+#define MUTE_TONE_FREQ_HIGH_HZ 3400.0f
+#define MUTE_TONE_FREQ_LOW_HZ 1500.0f
+#define MUTE_TONE_HIGH_MS 100UL
 #define MUTE_TONE_LOW_MS 200UL
-#define MUTE_TONE_GAP_MS 10UL
+#define MUTE_TONE_GAP_MS 100UL
 
 bool muteToneActive = false;
 unsigned long muteToneStart = 0;
