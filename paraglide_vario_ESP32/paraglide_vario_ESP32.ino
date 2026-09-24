@@ -525,13 +525,46 @@ bool displayDirty = true;
 #define AMP_ENABLE_PIN 46
 
 #define I2S_SAMPLE_RATE 16000
-// Deeper than a minimal setup: buffers this size (2048 samples total =
-// ~128ms at 16kHz) give i2sToneService() room to tolerate loop() jitter
-// (e.g. a slow SPI display redraw) without the tone audibly glitching.
-// Smaller buffers would need loop() called more often than it safely can.
-#define I2S_DMA_BUF_COUNT 8
-#define I2S_DMA_BUF_LEN 256
 #define I2S_TONE_CHUNK 64  // samples generated per i2sToneService() call
+
+// ---------------------------------------------------------
+// HOW THE TONE SAMPLES REACH THE I2S HARDWARE
+//
+// AUDIO_USE_DEDICATED_TASK = 1 (default): a dedicated high-priority task
+// (audioServiceTask(), Core 1) generates a chunk and does a BLOCKING
+// i2s_write(). Because the write blocks whenever the DMA ring is full, the
+// I2S hardware's own sample clock paces the task: the ring is always kept
+// topped up (~32ms of audio buffered) no matter what any other task or the
+// esp_timer task is doing, and there is nothing to drift.
+//
+// AUDIO_USE_DEDICATED_TASK = 0: the original design -- an esp_timer
+// callback every 4ms doing a zero-timeout i2s_write(). That has no way of
+// knowing how full the DMA ring is, so how much audio is buffered depends
+// on the (arbitrary) moment audio started and on timer jitter; when the
+// cushion is small, any delay to the timer task drops or repeats 4ms
+// chunks, which sounds like a scrambled/glitching tone. Kept only so you
+// can switch back to compare.
+// ---------------------------------------------------------
+#define AUDIO_USE_DEDICATED_TASK 1
+
+#if AUDIO_USE_DEDICATED_TASK
+  // 4 x 128 samples = 512 samples = ~32ms of buffered audio (tone changes
+  // are heard within ~35ms).
+  #define I2S_DMA_BUF_COUNT 4
+  #define I2S_DMA_BUF_LEN 128
+#else
+  // 8 x 256 samples = 2048 samples = ~128ms.
+  #define I2S_DMA_BUF_COUNT 8
+  #define I2S_DMA_BUF_LEN 256
+#endif
+
+// Smooths pitch changes while a tone is sounding. The vario rate (and so
+// the sink/climb pitch) only updates every 100ms, so without this the pitch
+// moves in audible little steps -- a rough, warbling texture on a sustained
+// low sink tone. This is a ~30ms glide (one-pole filter); big jumps (e.g.
+// the alarm's two-tone switch) and the start of every beep snap instantly.
+// Set to 0 to disable.
+#define TONE_PITCH_SMOOTH_MS 30.0f
 // i2sToneService() now runs from its own esp_timer callback instead of
 // being polled from loop(), so it can't be starved by a slow display
 // redraw or (formerly) a blocking network call. Period matches exactly
@@ -546,9 +579,10 @@ bool codecOK = false;   // I2S peripheral configured
 bool es8311OK = false;  // ES8311 chip found and initialized over I2C
 
 volatile float toneFrequency = 0.0f;  // 0 = silent
-// Per-step loudness multiplier applied on top of the normal tone amplitude
-// (1.0 = normal). Only the mute/unmute jingle changes it; updateI2sAudioBuzzer()
-// resets it to 1.0 on every call so nothing else is ever affected.
+// Loudness multiplier applied on top of the normal tone amplitude (1.0 =
+// normal), read asynchronously by the audio side. Whoever starts a tone sets
+// this to that tone's gain immediately BEFORE calling setToneFrequency();
+// it is never written to a temporary value (see updateI2sAudioBuzzer()).
 volatile float toneGain = 1.0f;
 float tonePhase = 0.0f;
 
@@ -774,6 +808,7 @@ void updatePageButton();
 float computeClimbRateLeastSquares();
 void es8311WriteReg(uint8_t reg, uint8_t value);
 void es8311Init();
+void audioServiceTask(void* arg);
 void applyBuzzerVolume();
 void setToneFrequency(float freq);
 void performADSBUpdate();
@@ -1178,12 +1213,33 @@ void setup() {
   }
 
   // ---------------------------------------------------------
-  // Independent audio-servicing timer. i2sToneService() no longer runs
-  // from loop() -- it's called on a fixed 4ms cadence regardless of what
-  // either core is doing, so a slow display redraw or (now relocated)
-  // network call can never starve the DMA buffer and cause the tone to
-  // glitch/cut out.
+  // Independent audio servicing -- i2sToneService() does not run from
+  // loop(), so a slow display redraw or a network call can never starve
+  // the DMA buffer. See AUDIO_USE_DEDICATED_TASK above for the two
+  // variants.
   // ---------------------------------------------------------
+#if AUDIO_USE_DEDICATED_TASK
+  {
+    // Priority 10: well above loop() (priority 1) so loop() can never delay
+    // it, but it spends nearly all of its time blocked in i2s_write().
+    // Pinned to Core 1 with loop(), away from the Core 0 network/WiFi
+    // activity.
+    BaseType_t audioTaskCreated = xTaskCreatePinnedToCore(
+      audioServiceTask,
+      "audio_svc",
+      4096,
+      nullptr,
+      10,
+      nullptr,
+      1
+    );
+    if (audioTaskCreated == pdPASS) {
+      Serial.println("[BOOT] Audio service task started (Core 1)");
+    } else {
+      Serial.println("[BOOT] Failed to create audio service task");
+    }
+  }
+#else
   const esp_timer_create_args_t audioTimerConfig = {
     .callback = [](void*) {
       i2sToneService();
@@ -1199,6 +1255,7 @@ void setup() {
   } else {
     Serial.printf("[BOOT] Failed to create audio service timer, err=%d\n", timerErr);
   }
+#endif
 
   // ---------------------------------------------------------
   // Background task: Wi-Fi reconnect, ADS-B polling, weather polling.
@@ -1361,6 +1418,7 @@ void loop() {
 void playFeedbackTone(float freq, unsigned long durationMs) {
   if (buzzerMuted) return;
   pageBeepGain = 1.0f;
+  toneGain = pageBeepGain;  // gain first, then frequency (see updateI2sAudioBuzzer())
   setToneFrequency(freq);
   pageBeepUntil = millis() + durationMs;
 }
@@ -1371,6 +1429,7 @@ void playFeedbackTone(float freq, unsigned long durationMs) {
 void playVolumePreviewTone(float freq, unsigned long durationMs, uint8_t volumePercent) {
   if (buzzerMuted) return;
   pageBeepGain = varioVolumeToGain(volumePercent);
+  toneGain = pageBeepGain;  // gain first, then frequency (see updateI2sAudioBuzzer())
   setToneFrequency(freq);
   pageBeepUntil = millis() + durationMs;
 }
@@ -3419,8 +3478,14 @@ static unsigned long blueflyBeepDurationMs(float climbMs){
 void updateI2sAudioBuzzer(){
   const unsigned long now = millis();
 
-  // Only the mute/unmute jingle below overrides this.
-  toneGain = 1.0f;
+  // NOTE ON toneGain: this function runs in loop() while the audio side
+  // reads toneGain/toneFrequency asynchronously from another task. So it
+  // must NEVER be written to a temporary value (e.g. "reset to 1.0 at the
+  // top, then set the real value later") -- the audio side could catch the
+  // temporary value for a chunk and play a burst at the wrong loudness.
+  // Instead, every branch below that sounds a tone sets its own final gain
+  // immediately BEFORE setting the frequency, and branches that are silent
+  // leave it alone.
 
 
   // ============================================================
@@ -3475,6 +3540,7 @@ void updateI2sAudioBuzzer(){
         ? INTERCEPT_TONE_HIGH_HZ
         : INTERCEPT_TONE_LOW_HZ;
 
+      toneGain = 1.0f;  // the alarm is always full level
       setToneFrequency(freq);
 
       return;
@@ -3522,7 +3588,6 @@ void updateI2sAudioBuzzer(){
 
     // Sequence finished.
     muteToneActive = false;
-    toneGain = 1.0f;
 
     setToneFrequency(0);
 
@@ -3773,19 +3838,52 @@ void setupI2sCodec() {
 // ES8311 CODEC CONTROL (I2C): wakes and unmutes the codec chip so the
 // I2S data stream above actually reaches the speaker.
 // =====================================================
-void es8311WriteReg(uint8_t reg, uint8_t value) {
-  Wire.beginTransmission(ES8311_I2C_ADDR);
-  Wire.write(reg);
-  Wire.write(value);
-  Wire.endTransmission();
+// Counts I2C writes to the codec that still failed after retries (see below).
+static uint16_t es8311WriteFailures = 0;
+
+// Writes one codec register, retrying if the I2C transfer isn't ACKed.
+// Espressif's own ES8311 driver notes that the first I2C write to this chip
+// occasionally fails, and the original version of this function ignored the
+// result -- a dropped write meant a register silently kept a stale/default
+// value for the whole session. Returns true if the write was ACKed.
+static bool es8311WriteRegChecked(uint8_t reg, uint8_t value) {
+  for (uint8_t attempt = 0; attempt < 3; attempt++) {
+    Wire.beginTransmission(ES8311_I2C_ADDR);
+    Wire.write(reg);
+    Wire.write(value);
+    if (Wire.endTransmission() == 0) return true;
+    delay(2);
+  }
+  es8311WriteFailures++;
+  return false;
 }
 
-void es8311Init() {
-  if (!i2cDevicePresent(ES8311_I2C_ADDR)) {
-    Serial.println("ES8311 NOT FOUND on I2C bus -- speaker will stay silent");
-    es8311OK = false;
-    return;
-  }
+void es8311WriteReg(uint8_t reg, uint8_t value) {
+  es8311WriteRegChecked(reg, value);
+}
+
+// Returns the register's value, or -1 if the read failed.
+static int es8311ReadReg(uint8_t reg) {
+  Wire.beginTransmission(ES8311_I2C_ADDR);
+  Wire.write(reg);
+  if (Wire.endTransmission(false) != 0) return -1;
+  if (Wire.requestFrom((uint8_t)ES8311_I2C_ADDR, (uint8_t)1) != 1) return -1;
+  return Wire.read();
+}
+
+// One full pass of the codec register setup. Split out from es8311Init() so
+// the whole sequence can be repeated if the read-back check fails.
+static void es8311ConfigureRegisters() {
+  // Full reset first, as Espressif's/ESPHome's drivers do. The codec is NOT
+  // reset when only the ESP32 restarts (it keeps its previous register
+  // contents until its own supply is fully removed), so without this a
+  // restart configured the codec on top of whatever state the last run left
+  // behind -- matching "scrambled until switched off for a while".
+  es8311WriteReg(0x44, 0x08);  // "I2C noise immunity" -- Espressif writes this twice because
+  es8311WriteReg(0x44, 0x08);  // the first write to the chip occasionally fails
+  es8311WriteReg(0x00, 0x1F);  // reset all digital blocks
+  delay(20);
+  es8311WriteReg(0x00, 0x00);  // release reset
 
   es8311WriteReg(0x01, 0x30);  // clock manager: power up analog, select clock source
   es8311WriteReg(0x02, 0x00);  // clock manager: clock divider defaults
@@ -3819,6 +3917,53 @@ void es8311Init() {
   es8311WriteReg(0x06, 0x03);  // clock manager: BCLK divider
   es8311WriteReg(0x07, 0x00);  // clock manager: LRCK divider (high byte)
   es8311WriteReg(0x08, 0xFF);  // clock manager: LRCK divider (low byte)
+}
+
+// Reads back the registers that decide whether the codec is running on the
+// right clocks/format. Returns true if they all hold what was written.
+static bool es8311VerifyRegisters() {
+  static const struct { uint8_t reg; uint8_t expected; } checks[] = {
+    { 0x01, 0x3F },  // all internal clocks enabled
+    { 0x06, 0x03 },  // BCLK divider
+    { 0x07, 0x00 },  // LRCK divider (high)
+    { 0x08, 0xFF },  // LRCK divider (low)
+    { 0x09, 0x00 },  // serial port: I2S, 16-bit
+  };
+  bool allGood = true;
+  for (const auto& c : checks) {
+    const int v = es8311ReadReg(c.reg);
+    if (v != c.expected) {
+      Serial.printf("[ES8311] register 0x%02X reads 0x%02X, expected 0x%02X\n",
+                    c.reg, (v < 0) ? 0xFF : v, c.expected);
+      allGood = false;
+    }
+  }
+  return allGood;
+}
+
+void es8311Init() {
+  if (!i2cDevicePresent(ES8311_I2C_ADDR)) {
+    Serial.println("ES8311 NOT FOUND on I2C bus -- speaker will stay silent");
+    es8311OK = false;
+    return;
+  }
+
+  // Configure, then read the key registers back; if any didn't stick (a
+  // dropped or corrupted I2C write), redo the whole sequence.
+  bool verified = false;
+  for (uint8_t attempt = 1; attempt <= 3 && !verified; attempt++) {
+    es8311ConfigureRegisters();
+    verified = es8311VerifyRegisters();
+    if (!verified) {
+      Serial.printf("[ES8311] register check failed on attempt %u\n", attempt);
+    }
+  }
+  if (!verified) {
+    Serial.println("[ES8311] WARNING: codec registers still wrong after 3 attempts");
+  }
+  if (es8311WriteFailures > 0) {
+    Serial.printf("[ES8311] %u I2C write(s) failed even after retries\n", es8311WriteFailures);
+  }
 
   es8311OK = true;  // must be set before applyBuzzerVolume() below, which checks it
 
@@ -4002,12 +4147,27 @@ void i2sToneService() {
 
     static float toneAmplitude = 0.0f;
     static float lastAudibleFreq = 440.0f;
+    static float smoothedFreq = 0.0f;  // 0 = no tone currently sounding
 
+    // Pitch smoothing (see TONE_PITCH_SMOOTH_MS): a tone that is already
+    // sounding glides toward its new pitch; a fresh tone (or a big jump)
+    // starts at its target immediately.
     if (freq > 0.0f) {
-        lastAudibleFreq = freq;
+        if (TONE_PITCH_SMOOTH_MS > 0.0f &&
+            smoothedFreq > 0.0f &&
+            fabsf(freq - smoothedFreq) <= 0.25f * smoothedFreq) {
+            const float chunkMs = 1000.0f * (float)I2S_TONE_CHUNK / (float)I2S_SAMPLE_RATE;
+            const float alpha = 1.0f - expf(-chunkMs / TONE_PITCH_SMOOTH_MS);
+            smoothedFreq += (freq - smoothedFreq) * alpha;
+        } else {
+            smoothedFreq = freq;
+        }
+        lastAudibleFreq = smoothedFreq;
+    } else {
+        smoothedFreq = 0.0f;
     }
 
-    const float phaseIncFreq = (freq > 0.0f) ? freq : lastAudibleFreq;
+    const float phaseIncFreq = (freq > 0.0f) ? smoothedFreq : lastAudibleFreq;
 
     float lfGain = 1.0f;
     if (phaseIncFreq < LF_GAIN_KNEE_HZ) {
@@ -4076,6 +4236,19 @@ void i2sToneService() {
 
     size_t bytesWritten = 0;
 
+#if AUDIO_USE_DEDICATED_TASK
+    // Blocking write: waits for room in the DMA ring, which is what paces
+    // audioServiceTask() to the I2S hardware clock. (Bounded, so a stalled
+    // I2S peripheral can't hang the task forever.)
+    i2s_write(
+        I2S_PORT,
+        chunk,
+        sizeof(chunk),
+        &bytesWritten,
+        pdMS_TO_TICKS(100)
+    );
+#else
+    // Zero-timeout: writes only what fits and never blocks (timer callback).
     i2s_write(
         I2S_PORT,
         chunk,
@@ -4083,4 +4256,22 @@ void i2sToneService() {
         &bytesWritten,
         0
     );
+#endif
 }
+
+#if AUDIO_USE_DEDICATED_TASK
+// Runs forever: generate one chunk, hand it to the I2S DMA ring, repeat.
+// i2s_write() blocks when the ring is full, so this loop runs exactly as
+// fast as the hardware plays samples -- see AUDIO_USE_DEDICATED_TASK.
+void audioServiceTask(void* arg) {
+  (void)arg;
+  for (;;) {
+    if (!codecOK || !es8311OK) {
+      // I2S/codec not up (yet, or failed) -- don't spin.
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
+    i2sToneService();
+  }
+}
+#endif
