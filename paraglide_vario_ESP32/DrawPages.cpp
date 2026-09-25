@@ -354,15 +354,36 @@ void drawLargeValueWithSmallUnit(
 // PARAGLIDER PAGE: 6-box grid (2 cols x 3 rows) below the top bar.
 // =====================================================
 
-// Fills buf with the cloud-base line for the AIR SPACE box, e.g. "CLD BASE: 4200ft".
-// Shown as altitude above sea level (same reference as the ALTITUDE box), so it
-// needs a calibrated QNH; otherwise falls back to "--".
-static void formatCloudBaseLine(char* buf, size_t len) {
+// AIR SPACE box: each row is now drawn as a fixed-width label ("VERT"/"HORI"/
+// "BASE") plus a value starting at this x offset from the row's left edge, so
+// the three numbers land in one aligned column instead of trailing off after
+// labels of different lengths ("NR VERT: " vs "NR HORI: " vs "CLD BASE: ").
+#define AIRSPACE_VALUE_X_OFFSET 46
+
+// Fills buf with just the vertical-distance value, e.g. "3ft" or "--ft".
+static void formatVertValue(char* buf, size_t len, bool valid, float ft) {
+  if (valid) snprintf(buf, len, "%dft", (int)roundf(ft));
+  else snprintf(buf, len, "--ft");
+}
+
+// Fills buf with just the horizontal-distance value. Under 1km this switches
+// to whole metres ("450m") instead of "0.4km" -- one less decimal point to
+// read at the ranges where this box matters most.
+static void formatHoriValue(char* buf, size_t len, bool valid, float km) {
+  if (!valid) { snprintf(buf, len, "--km"); return; }
+  if (km < 1.0f) snprintf(buf, len, "%dm", (int)roundf(km * 1000.0f));
+  else snprintf(buf, len, "%.1fkm", km);
+}
+
+// Fills buf with just the cloud-base value, e.g. "4200ft" or "--ft". Shown as
+// altitude above sea level (same reference as the ALTITUDE box), so it needs
+// a calibrated QNH; otherwise falls back to "--".
+static void formatCloudBaseValue(char* buf, size_t len) {
   if (bmpOK && windowCount > 0 && qnhCalibrated && !isnan(cloudBaseAboveM)) {
     float baseM = currentAltitudeM + cloudBaseAboveM;
-    snprintf(buf, len, "CLD BASE: %d%s", (int)roundf(altitudeToDisplay(baseM)), altitudeUnitLabel());
+    snprintf(buf, len, "%d%s", (int)roundf(altitudeToDisplay(baseM)), altitudeUnitLabel());
   } else {
-    snprintf(buf, len, "CLD BASE: --%s", altitudeUnitLabel());
+    snprintf(buf, len, "--%s", altitudeUnitLabel());
   }
 }
 
@@ -560,25 +581,24 @@ void drawParagliderPage() {
   AirspaceResult boxAirspace;
   bool boxAirspaceValid = getAirspaceSnapshot(boxAirspace);
 
-  char vertBuf[24];
-  char horiBuf[24];
-  if (boxAirspaceValid && boxAirspace.vertKnown) {
-    snprintf(vertBuf, sizeof(vertBuf), "NR VERT: %dft", (int)roundf(boxAirspace.vertDistance_ft));
-  } else {
-    snprintf(vertBuf, sizeof(vertBuf), "NR VERT: --ft");
-  }
-  if (boxAirspaceValid) {
-    snprintf(horiBuf, sizeof(horiBuf), "NR HORI: %.1fkm", boxAirspace.horizDistance_km);
-  } else {
-    snprintf(horiBuf, sizeof(horiBuf), "NR HORI: --km");
-  }
+  char vertBuf[16];
+  char horiBuf[16];
+  char cloudBuf[16];
+  formatVertValue(vertBuf, sizeof(vertBuf), boxAirspaceValid && boxAirspace.vertKnown, boxAirspace.vertDistance_ft);
+  formatHoriValue(horiBuf, sizeof(horiBuf), boxAirspaceValid, boxAirspace.horizDistance_km);
+  formatCloudBaseValue(cloudBuf, sizeof(cloudBuf));
 
-  char cloudBuf[24];
-  formatCloudBaseLine(cloudBuf, sizeof(cloudBuf));
+  int rowY1 = top + rowH + rowH / 2 - 10;
+  int rowY2 = top + rowH + rowH / 2 + 10;
+  int rowY3 = top + rowH + rowH / 2 + 30;
+  int valueX = colW + 5 + AIRSPACE_VALUE_X_OFFSET;
 
-  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 - 10, vertBuf);
-  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 10, horiBuf);
-  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 30, cloudBuf);
+  u8g2.drawStr(colW + 5, rowY1, "VERT");
+  u8g2.drawStr(valueX, rowY1, vertBuf);
+  u8g2.drawStr(colW + 5, rowY2, "HORI");
+  u8g2.drawStr(valueX, rowY2, horiBuf);
+  u8g2.drawStr(colW + 5, rowY3, "BASE");
+  u8g2.drawStr(valueX, rowY3, cloudBuf);
 
 
   // =========================================================
@@ -1924,25 +1944,24 @@ void drawParamotorPage() {
   AirspaceResult boxAirspace;
   bool boxAirspaceValid = getAirspaceSnapshot(boxAirspace);
 
-  char vertBuf[24];
-  char horiBuf[24];
-  if (boxAirspaceValid && boxAirspace.vertKnown) {
-    snprintf(vertBuf, sizeof(vertBuf), "NR VERT: %dft", (int)roundf(boxAirspace.vertDistance_ft));
-  } else {
-    snprintf(vertBuf, sizeof(vertBuf), "NR VERT: --ft");
-  }
-  if (boxAirspaceValid) {
-    snprintf(horiBuf, sizeof(horiBuf), "NR HORI: %.1fkm", boxAirspace.horizDistance_km);
-  } else {
-    snprintf(horiBuf, sizeof(horiBuf), "NR HORI: --km");
-  }
+  char vertBuf[16];
+  char horiBuf[16];
+  char cloudBuf[16];
+  formatVertValue(vertBuf, sizeof(vertBuf), boxAirspaceValid && boxAirspace.vertKnown, boxAirspace.vertDistance_ft);
+  formatHoriValue(horiBuf, sizeof(horiBuf), boxAirspaceValid, boxAirspace.horizDistance_km);
+  formatCloudBaseValue(cloudBuf, sizeof(cloudBuf));
 
-  char cloudBuf[24];
-  formatCloudBaseLine(cloudBuf, sizeof(cloudBuf));
+  int rowY1 = top + rowH + rowH / 2 - 10;
+  int rowY2 = top + rowH + rowH / 2 + 10;
+  int rowY3 = top + rowH + rowH / 2 + 30;
+  int valueX = colW + 5 + AIRSPACE_VALUE_X_OFFSET;
 
-  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 - 10, vertBuf);
-  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 10, horiBuf);
-  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 30, cloudBuf);
+  u8g2.drawStr(colW + 5, rowY1, "VERT");
+  u8g2.drawStr(valueX, rowY1, vertBuf);
+  u8g2.drawStr(colW + 5, rowY2, "HORI");
+  u8g2.drawStr(valueX, rowY2, horiBuf);
+  u8g2.drawStr(colW + 5, rowY3, "BASE");
+  u8g2.drawStr(valueX, rowY3, cloudBuf);
 
   // =========================================================
   // BOX (2,0): RPM -- from the nRF52840 engine meter over BLE, see

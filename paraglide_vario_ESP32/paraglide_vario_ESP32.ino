@@ -154,7 +154,11 @@ volatile bool airspaceInfoResultValid = false;
 struct PositionSnapshot {
   double lat = 0, lon = 0;
   float altFt = 0;
-  bool valid = false;
+  bool valid = false;     // fresh fix right now (age < 2000ms) -- used by DEM/airspace scan, unchanged
+  bool everValid = false; // true forever once the GPS has produced at least one real fix --
+                           // lat/lon above still hold whatever the last fix was, stale or not.
+                           // Used by ADS-B/weather so they run off the last known position
+                           // instead of skipping a poll just because the fix is momentarily stale.
 };
 PositionSnapshot sharedPosition;
 
@@ -1321,8 +1325,22 @@ void loop() {
     // calibrated); fall back to raw GPS altitude before calibration.
     sharedPosition.altFt = qnhCalibrated ? (currentAltitudeM * 3.28084f) : gps.altitude.feet();
     sharedPosition.valid = gps.location.isValid() && gps.location.age() < 2000;
+    if (gps.location.isValid()) sharedPosition.everValid = true;  // sticky -- never cleared once set
     xSemaphoreGive(backgroundDataMutex);
   }
+
+  // The moment the GPS produces its very first fix, force ADS-B and weather
+  // to be immediately due rather than waiting for their next scheduled tick
+  // (up to ADSB_INTERVAL_MS / weatherPollIntervalMs away). Fires once per
+  // boot -- gpsFirstFixPollTriggered latches so this doesn't re-trigger on
+  // every loop() pass once sharedPosition.everValid is true.
+  static bool gpsFirstFixPollTriggered = false;
+  if (!gpsFirstFixPollTriggered && sharedPosition.everValid) {
+    gpsFirstFixPollTriggered = true;
+    lastAdsbCheckTime = now - ADSB_INTERVAL_MS;
+    weatherTimerAnchor = now - WEATHER_FIRST_POLL_DELAY_MS;
+  }
+
   // ---------------------------------------------------------
   // 3. Flight instrumentation / high priority
   // ---------------------------------------------------------
@@ -1662,15 +1680,18 @@ void performADSBUpdate() {
   }
 
   // Snapshot the live GPS fix -- same mutex pattern used for the DEM/
-  // airspace scans further down loop(). Without a valid fix there's no
-  // sensible position to query adsb.fi around, so skip this poll cycle
-  // rather than falling back to a stale or default position.
+  // airspace scans further down loop(). Uses everValid (the GPS has
+  // produced at least one real fix, ever) rather than valid (fresh right
+  // now): myPos.lat/lon hold the last known position regardless of how
+  // stale the fix currently is, so a momentary dropout doesn't skip this
+  // poll -- at typical paraglider ground speeds the position from a few
+  // seconds ago is still close enough to be useful.
   PositionSnapshot myPos;
   if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
     myPos = sharedPosition;
     xSemaphoreGive(backgroundDataMutex);
   }
-  if (!myPos.valid) {
+  if (!myPos.everValid) {
     Serial.println("[ADS-B] No GPS fix yet -- skipping this poll");
     return;
   }
@@ -2176,14 +2197,16 @@ void updateWeather() {
   // ---------------------------------------------------------
   // GPS check -- station distance/bearing below need a real position to
   // measure from. Same sharedPosition snapshot pattern used by the
-  // DEM/airspace scans and performADSBUpdate().
+  // DEM/airspace scans and performADSBUpdate(). Uses everValid, not
+  // valid -- see performADSBUpdate()'s comment on the same pattern for
+  // why a stale-but-known position is fine here rather than skipping.
   // ---------------------------------------------------------
   PositionSnapshot myPos;
   if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
     myPos = sharedPosition;
     xSemaphoreGive(backgroundDataMutex);
   }
-  if (!myPos.valid) {
+  if (!myPos.everValid) {
     Serial.println("[Zephyr] No GPS fix yet -- skipping this poll");
     hasWeatherData = false;
     return;
@@ -2989,8 +3012,14 @@ void updateVario() {
 
   currentPressureHpa = bmp.pressure;
 
+  // Thresholds relaxed from the original (satellites >= 6, HDOP <= 2.5)
+  // after real-world testing on a hillside site never held a fix that
+  // strict for the full averaging window, even with a clear sky. >= 5
+  // satellites / HDOP <= 3 is still solidly "good" GPS accuracy (HDOP
+  // <5 is generally considered good, <2 excellent), just not demanding
+  // near-perfect satellite geometry to calibrate.
   bool gpsAltitudeGood =
-    gps.altitude.isValid() && gps.altitude.age() < 2000 && gps.satellites.isValid() && gps.satellites.value() >= 6 && gps.hdop.isValid() && gps.hdop.hdop() <= 2.5;
+    gps.altitude.isValid() && gps.altitude.age() < 2000 && gps.satellites.isValid() && gps.satellites.value() >= 5 && gps.hdop.isValid() && gps.hdop.hdop() <= 3.0;
 
   // Runs the real GPS-derived calibration the first time a good fix
   // shows up, AND -- if we're currently sitting on the no-GPS fallback
