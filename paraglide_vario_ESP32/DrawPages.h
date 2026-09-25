@@ -135,6 +135,7 @@ extern volatile bool airspaceInfoResultValid;
 
 extern bool bmpOK;
 extern float currentTempC;
+extern float cloudBaseAboveM;  // metres from you up to estimated cloud base, NAN if unknown
 
 extern float estimatedWindSpeedKph;
 extern float estimatedAirspeedKph;

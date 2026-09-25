@@ -354,6 +354,18 @@ void drawLargeValueWithSmallUnit(
 // PARAGLIDER PAGE: 6-box grid (2 cols x 3 rows) below the top bar.
 // =====================================================
 
+// Fills buf with the cloud-base line for the AIR SPACE box, e.g. "CLD BASE: 4200ft".
+// Shown as altitude above sea level (same reference as the ALTITUDE box), so it
+// needs a calibrated QNH; otherwise falls back to "--".
+static void formatCloudBaseLine(char* buf, size_t len) {
+  if (bmpOK && windowCount > 0 && qnhCalibrated && !isnan(cloudBaseAboveM)) {
+    float baseM = currentAltitudeM + cloudBaseAboveM;
+    snprintf(buf, len, "CLD BASE: %d%s", (int)roundf(altitudeToDisplay(baseM)), altitudeUnitLabel());
+  } else {
+    snprintf(buf, len, "CLD BASE: --%s", altitudeUnitLabel());
+  }
+}
+
 void drawParagliderPage() {
   const int top = TOP_BAR_HEIGHT_PX;
   const int colW = SCREEN_W / 2;
@@ -561,8 +573,12 @@ void drawParagliderPage() {
     snprintf(horiBuf, sizeof(horiBuf), "NR HORI: --km");
   }
 
+  char cloudBuf[24];
+  formatCloudBaseLine(cloudBuf, sizeof(cloudBuf));
+
   u8g2.drawStr(colW + 5, top + rowH + rowH / 2 - 10, vertBuf);
   u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 10, horiBuf);
+  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 30, cloudBuf);
 
 
   // =========================================================
@@ -1921,8 +1937,12 @@ void drawParamotorPage() {
     snprintf(horiBuf, sizeof(horiBuf), "NR HORI: --km");
   }
 
+  char cloudBuf[24];
+  formatCloudBaseLine(cloudBuf, sizeof(cloudBuf));
+
   u8g2.drawStr(colW + 5, top + rowH + rowH / 2 - 10, vertBuf);
   u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 10, horiBuf);
+  u8g2.drawStr(colW + 5, top + rowH + rowH / 2 + 30, cloudBuf);
 
   // =========================================================
   // BOX (2,0): RPM -- from the nRF52840 engine meter over BLE, see
