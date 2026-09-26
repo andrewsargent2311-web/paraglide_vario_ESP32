@@ -719,8 +719,9 @@ bool muteToneIsMuteSequence = false;  // true = play MUTE_SEQUENCE; false = play
 #define SINK_FREQ_BASE_HZ 400.0f
 #define SINK_FREQ_INCREMENT_HZ 100.0f  // Hz of pitch drop per 1 m/s of sink
 #define SINK_FREQ_MIN_HZ 130.0f
-// Climb tone frequency range: climbToneMinHz/climbToneMaxHz (settings.h),
-// editable from Config > Vario Freq in the menu.
+// Climb tone frequency range is fixed in the BLUEFLY PITCH block below
+// (not user-configurable -- the old Config > Vario Freq setting was
+// removed as it never actually fed into that calculation).
 // Climb beep cadence follows the BlueFly curve in blueflyBeepDurationMs().
 // (The old climbGapMinMs/climbGapMaxMs/climbPulseMinMs/climbPulseMaxMs
 // settings are no longer used by the audio code -- Config > Vario Beep now

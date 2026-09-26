@@ -57,18 +57,6 @@ extern int8_t utcOffsetHours;  // only used while timeZoneMode == TZ_MODE_MANUAL
 void getPilotLocalTime(struct tm* outTm);
 
 // =====================================================
-// VARIO CLIMB TONE FREQUENCY RANGE
-// climbToneMaxHz always tracks climbToneMinHz + VARIO_TONE_SPAN_HZ -- set
-// both together via setClimbToneMinHz() rather than assigning directly.
-// =====================================================
-#define VARIO_TONE_SPAN_HZ 700
-
-extern int climbToneMinHz;
-extern int climbToneMaxHz;
-
-void setClimbToneMinHz(int minHz);
-
-// =====================================================
 // VARIO BEEP TIMING
 // Controls the climb-tone pulse pattern in updateVario() (main .ino):
 // as lift gets stronger, the gap between beeps shrinks from

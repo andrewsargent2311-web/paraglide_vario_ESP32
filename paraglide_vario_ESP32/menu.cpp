@@ -167,12 +167,6 @@ static void extractMapLabel(const char* filename, char* out, size_t outLen) {
 #define TIMEZONE_CHOICE_COUNT (TIMEZONE_MANUAL_CHOICE_COUNT + 1)
 
 // =====================================================
-// VARIO FREQUENCY CHOICES
-// =====================================================
-static const int VARIO_FREQ_CHOICES[] = { 500, 550, 600, 650, 700 };
-static const uint8_t VARIO_FREQ_CHOICE_COUNT = 5;
-
-// =====================================================
 // VOLUME CHOICES
 // =====================================================
 // 10-100% in 10% steps, dB-scaled -- see the BUZZER VOLUME comment in
@@ -229,18 +223,17 @@ static const uint8_t WEATHER_STATIONS_CHOICE_COUNT = 3;
 // =====================================================
 static uint8_t getMenuItemCount(MenuScreen screen) {
   switch (screen) {
-    case MENU_SCREEN_MAIN: return 7;
+    case MENU_SCREEN_MAIN: return 8;
     case MENU_SCREEN_MAIN_PAGE_SELECT: return 2;
-    case MENU_SCREEN_CONFIG: return 6;
+    case MENU_SCREEN_CONFIG: return 5;
     case MENU_SCREEN_CONFIG_TIME: return TIMEZONE_CHOICE_COUNT;
     case MENU_SCREEN_UNITS: return 2;
-    case MENU_SCREEN_VARIO_FREQ: return VARIO_FREQ_CHOICE_COUNT;
     case MENU_SCREEN_CONFIG_VOLUME: return VOLUME_CHOICE_COUNT;
     case MENU_SCREEN_VARIO_BEEP: return 2;
     case MENU_SCREEN_VARIO_BEEP_CLIMB_VOL: return VARIO_VOLUME_CHOICE_COUNT;
     case MENU_SCREEN_VARIO_BEEP_SINK_VOL: return VARIO_VOLUME_CHOICE_COUNT;
     case MENU_SCREEN_SCREEN: return 2;
-    case MENU_SCREEN_CONNECTIONS: return 4;
+    case MENU_SCREEN_CONNECTIONS: return 3;
     case MENU_SCREEN_FANET_MESSAGING: return 1 + FANET_MESSAGE_PRESET_COUNT;
     case MENU_SCREEN_WIFI_LIST: return WIFI_NETWORK_COUNT + 1;
     case MENU_SCREEN_BLUETOOTH: return 3;
@@ -267,7 +260,6 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_CONFIG: return "CONFIG";
     case MENU_SCREEN_CONFIG_TIME: return "TIME";
     case MENU_SCREEN_UNITS: return "UNITS";
-    case MENU_SCREEN_VARIO_FREQ: return "VARIO FREQ";
     case MENU_SCREEN_CONFIG_VOLUME: return "VOLUME";
     case MENU_SCREEN_VARIO_BEEP: return "VARIO BEEP";
     case MENU_SCREEN_VARIO_BEEP_CLIMB_VOL: return "CLIMB VOLUME";
@@ -296,7 +288,7 @@ static const char* getMenuTitle(MenuScreen screen) {
 static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t buflen) {
   switch (screen) {
     case MENU_SCREEN_MAIN: {
-      static const char* items[] = { "Main Page", "Config", "Connections", "Map", "ADSB Settings", "Weather Settings", "Flight Recordings" };
+      static const char* items[] = { "Main Page", "Config", "Connections", "FANET Messaging", "Map", "ADSB Settings", "Weather Settings", "Flight Recordings" };
       snprintf(buf, buflen, "%s", items[index]);
       break;
     }
@@ -310,10 +302,9 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       switch (index) {
         case 0: snprintf(buf, buflen, "Time"); break;
         case 1: snprintf(buf, buflen, "Units"); break;
-        case 2: snprintf(buf, buflen, "Vario Freq"); break;
-        case 3: snprintf(buf, buflen, "Volume"); break;
-        case 4: snprintf(buf, buflen, "Vario Beep"); break;
-        case 5: snprintf(buf, buflen, "Screen"); break;
+        case 2: snprintf(buf, buflen, "Volume"); break;
+        case 3: snprintf(buf, buflen, "Vario Beep"); break;
+        case 4: snprintf(buf, buflen, "Screen"); break;
       }
       break;
     case MENU_SCREEN_CONFIG_TIME:
@@ -333,12 +324,6 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         snprintf(buf, buflen, "Speed: %s", speedUnitLabel());
       }
       break;
-    case MENU_SCREEN_VARIO_FREQ: {
-      int hz = VARIO_FREQ_CHOICES[index];
-      bool isActive = (climbToneMinHz == hz);
-      snprintf(buf, buflen, "%d Hz%s", hz, isActive ? " *" : "");
-      break;
-    }
     case MENU_SCREEN_CONFIG_VOLUME: {
       uint8_t pct = VOLUME_CHOICES_PERCENT[index];
       bool isActive = (buzzerVolumePercent == pct);
@@ -379,7 +364,6 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         case 0: snprintf(buf, buflen, "WiFi"); break;
         case 1: snprintf(buf, buflen, "Bluetooth"); break;
         case 2: snprintf(buf, buflen, "FANET: %s", fanetEnabled ? "On" : "Off"); break;
-        case 3: snprintf(buf, buflen, "FANET Messaging"); break;
       }
       break;
     case MENU_SCREEN_FANET_MESSAGING: {
@@ -553,10 +537,11 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
         case 0: pushMenuScreen(MENU_SCREEN_MAIN_PAGE_SELECT); break;
         case 1: pushMenuScreen(MENU_SCREEN_CONFIG); break;
         case 2: pushMenuScreen(MENU_SCREEN_CONNECTIONS); break;
-        case 3: pushMenuScreen(MENU_SCREEN_MAP); break;
-        case 4: pushMenuScreen(MENU_SCREEN_ADSB_SETTINGS); break;
-        case 5: pushMenuScreen(MENU_SCREEN_WEATHER_SETTINGS); break;
-        case 6: pushMenuScreen(MENU_SCREEN_FLIGHT_RECORDINGS); break;
+        case 3: pushMenuScreen(MENU_SCREEN_FANET_MESSAGING); break;
+        case 4: pushMenuScreen(MENU_SCREEN_MAP); break;
+        case 5: pushMenuScreen(MENU_SCREEN_ADSB_SETTINGS); break;
+        case 6: pushMenuScreen(MENU_SCREEN_WEATHER_SETTINGS); break;
+        case 7: pushMenuScreen(MENU_SCREEN_FLIGHT_RECORDINGS); break;
       }
       playFeedbackTone(900.0f, 80);
       return;
@@ -576,14 +561,13 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
       switch (index) {
         case 0: pushMenuScreen(MENU_SCREEN_CONFIG_TIME); break;
         case 1: pushMenuScreen(MENU_SCREEN_UNITS); break;
-        case 2: pushMenuScreen(MENU_SCREEN_VARIO_FREQ); break;
-        case 3:
+        case 2:
           pushMenuScreen(MENU_SCREEN_CONFIG_VOLUME);
           menuSelectedIndex = (buzzerVolumePercent >= 10) ? (buzzerVolumePercent / 10 - 1) : 0;  // start on the current level
           if (menuSelectedIndex >= VOLUME_CHOICE_COUNT) menuSelectedIndex = VOLUME_CHOICE_COUNT - 1;
           break;
-        case 4: pushMenuScreen(MENU_SCREEN_VARIO_BEEP); break;
-        case 5: pushMenuScreen(MENU_SCREEN_SCREEN); break;
+        case 3: pushMenuScreen(MENU_SCREEN_VARIO_BEEP); break;
+        case 4: pushMenuScreen(MENU_SCREEN_SCREEN); break;
       }
       playFeedbackTone(900.0f, 80);
       return;
@@ -612,13 +596,6 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
       saveSettings();
       displayDirty = true;
       playFeedbackTone(600.0f, 50);
-      return;
-
-    case MENU_SCREEN_VARIO_FREQ:
-      setClimbToneMinHz(VARIO_FREQ_CHOICES[index]);
-      saveSettings();
-      playFeedbackTone(1100.0f, 120);
-      menuGoBack();  // back to Config
       return;
 
     case MENU_SCREEN_CONFIG_VOLUME:
@@ -682,7 +659,6 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           displayDirty = true;
           playFeedbackTone(600.0f, 50);
           return;
-        case 3: pushMenuScreen(MENU_SCREEN_FANET_MESSAGING); break;
       }
       playFeedbackTone(900.0f, 80);
       return;

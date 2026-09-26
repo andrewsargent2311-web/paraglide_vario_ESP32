@@ -4,12 +4,9 @@
 static Preferences prefs;
 
 // Defaults match the values the display code used to have hard-coded:
-// altitude in feet, ground speed in km/h, climb tone 500-1200Hz.
+// altitude in feet, ground speed in km/h.
 AltitudeUnit altitudeUnit = ALT_UNIT_FEET;
 SpeedUnit speedUnit = SPEED_UNIT_KMH;
-
-int climbToneMinHz = 500;
-int climbToneMaxHz = 500 + VARIO_TONE_SPAN_HZ;
 
 // Default matches the app's original behaviour: automatic NZ time with
 // DST applied. utcOffsetHours only takes effect once the pilot picks a
@@ -57,11 +54,6 @@ const char* speedUnitLabel() {
     case SPEED_UNIT_MPH: return "mph";
     default: return "km/h";  // SPEED_UNIT_KMH
   }
-}
-
-void setClimbToneMinHz(int minHz) {
-  climbToneMinHz = minHz;
-  climbToneMaxHz = minHz + VARIO_TONE_SPAN_HZ;
 }
 
 // Defaults match the values that used to be hard-coded (100/500/100/400).
@@ -141,10 +133,6 @@ void loadSettings() {
   timeZoneMode = (TimeZoneMode)prefs.getUChar("tzMode", (uint8_t)timeZoneMode);
   utcOffsetHours = (int8_t)prefs.getChar("utcOff", utcOffsetHours);
 
-  // Goes through the setter so climbToneMaxHz stays in sync, same as a
-  // normal menu change would.
-  setClimbToneMinHz(prefs.getInt("toneMinHz", climbToneMinHz));
-
   climbGapMinMs = prefs.getUInt("gapMin", climbGapMinMs);
   climbGapMaxMs = prefs.getUInt("gapMax", climbGapMaxMs);
   climbPulseMinMs = prefs.getUInt("pulseMin", climbPulseMinMs);
@@ -193,8 +181,6 @@ void saveSettings() {
 
   prefs.putUChar("tzMode", (uint8_t)timeZoneMode);
   prefs.putChar("utcOff", utcOffsetHours);
-
-  prefs.putInt("toneMinHz", climbToneMinHz);
 
   prefs.putUInt("gapMin", climbGapMinMs);
   prefs.putUInt("gapMax", climbGapMaxMs);

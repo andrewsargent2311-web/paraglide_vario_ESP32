@@ -44,7 +44,6 @@ extern uint8_t activePageIndex;
 //   |     |-- CONFIG_TIME     ("NZ (Auto)" DST-aware default, or a fixed
 //   |     |                    manual UTC offset from -12 to +14 hours)
 //   |     |-- UNITS           (Altitude / Speed, cycled in place)
-//   |     |-- VARIO_FREQ      (climb-tone min Hz)
 //   |     |-- CONFIG_VOLUME   (main buzzer volume, 10-100% in 10% steps,
 //   |     |                    dB-scaled: 100% = +12dB, 3dB per step)
 //   |     |-- VARIO_BEEP
@@ -65,18 +64,18 @@ extern uint8_t activePageIndex;
 //   |     |     |                devices -- select one to connect; this
 //   |     |     |                board is BLE-only, no Classic BT)
 //   |     |     `-- (Forget Device -- only actionable once one's saved)
-//   |     |-- FANET            (On/Off, cycled in place -- actually
-//   |     |                      sleeps/wakes the SX1262, not just the
-//   |     |                      software stack; see setFanetEnabled())
-//   |     `-- FANET_MESSAGING  (On/Off toggle, persisted; see
-//   |                            fanetMessagingEnabled in settings.h --
-//   |                            plus one item per preset message,
-//   |                            selecting one broadcasts it
-//   |                            immediately. Broadcast only, no
-//   |                            addressed messages -- see
-//   |                            FanetMessaging.h/Fanet.h. Preset
-//   |                            wording is compiled-in, not editable
-//   |                            from the device -- no keyboard)
+//   |     `-- FANET            (On/Off, cycled in place -- actually
+//   |                            sleeps/wakes the SX1262, not just the
+//   |                            software stack; see setFanetEnabled())
+//   |-- FANET_MESSAGING  (On/Off toggle, persisted; see
+//   |                      fanetMessagingEnabled in settings.h --
+//   |                      plus one item per preset message,
+//   |                      selecting one broadcasts it
+//   |                      immediately. Broadcast only, no
+//   |                      addressed messages -- see
+//   |                      FanetMessaging.h/Fanet.h. Preset
+//   |                      wording is compiled-in, not editable
+//   |                      from the device -- no keyboard)
 //   |-- MAP                (list of *.ADEM files found on the SD card)
 //   |-- ADSB_SETTINGS
 //   |     |-- ADSB_RADIUS       (horizontal alert trigger distance)
@@ -131,7 +130,6 @@ enum MenuScreen {
   MENU_SCREEN_CONFIG,
   MENU_SCREEN_CONFIG_TIME,
   MENU_SCREEN_UNITS,
-  MENU_SCREEN_VARIO_FREQ,
   MENU_SCREEN_CONFIG_VOLUME,
   MENU_SCREEN_VARIO_BEEP,
   MENU_SCREEN_VARIO_BEEP_CLIMB_VOL,

@@ -360,11 +360,19 @@ void drawLargeValueWithSmallUnit(
 // labels of different lengths ("NR VERT: " vs "NR HORI: " vs "CLD BASE: ").
 #define AIRSPACE_VALUE_X_OFFSET 46
 
-// Vertical gap between the 3 rows in the AIR SPACE / WIND-AIRSPEED boxes.
-// The bottom row (BASE / AIR) is anchored 6px above the box's bottom edge --
-// same margin used by AGL and HDG in the boxes above -- and the other two
-// rows step up from there by this amount.
-#define AIRSPACE_ROW_GAP_PX 24
+// Works out the 3 row y-positions for the AIR SPACE / WIND-AIRSPEED boxes:
+// row1 sits one line-height below the title (a blank line's worth of gap),
+// row3 sits 6px above the box's bottom edge (same margin AGL/HDG use in the
+// boxes above), and row2 is placed exactly halfway between them -- so the
+// 3 rows are evenly spaced rather than packed at a fixed gap. Must be
+// called right after the title is drawn, while its font (helvB10) is still
+// the active font, since that's what sets the line-height measurement.
+static void computeBoxRows(int titleY, int boxBottom, int& row1, int& row2, int& row3) {
+  int lineHeight = u8g2.getFontAscent() - u8g2.getFontDescent();
+  row1 = titleY + 2 * lineHeight;  // a bit more breathing room than a single line-height
+  row3 = boxBottom - 6;
+  row2 = (row1 + row3) / 2;
+}
 
 // Fills buf with just the vertical-distance value, e.g. "3ft" or "--ft".
 static void formatVertValue(char* buf, size_t len, bool valid, float ft) {
@@ -590,9 +598,8 @@ void drawParagliderPage() {
   formatHoriValue(horiBuf, sizeof(horiBuf), boxAirspaceValid, boxAirspace.horizDistance_km);
   formatCloudBaseValue(cloudBuf, sizeof(cloudBuf));
 
-  int rowY3 = top + rowH + rowH - 6;  // same "6px above box bottom" margin as AGL/HDG
-  int rowY2 = rowY3 - AIRSPACE_ROW_GAP_PX;
-  int rowY1 = rowY3 - 2 * AIRSPACE_ROW_GAP_PX;
+  int rowY1, rowY2, rowY3;
+  computeBoxRows(top + rowH + 14, top + 2 * rowH, rowY1, rowY2, rowY3);
 
   drawBoxRow(colW + 5, rowY1, "VERT", vertBuf);
   drawBoxRow(colW + 5, rowY2, "HORI", horiBuf);
@@ -668,9 +675,8 @@ void drawParagliderPage() {
     snprintf(airBuf, sizeof(airBuf), "-- %s", speedUnitLabel());
   }
 
-  int windRowY3 = top + 2 * rowH + rowH - 6;  // same "6px above box bottom" margin as AGL/HDG
-  int windRowY2 = windRowY3 - AIRSPACE_ROW_GAP_PX;
-  int windRowY1 = windRowY3 - 2 * AIRSPACE_ROW_GAP_PX;
+  int windRowY1, windRowY2, windRowY3;
+  computeBoxRows(top + 2 * rowH + 14, top + 3 * rowH, windRowY1, windRowY2, windRowY3);
 
   drawBoxRow(colW + 5, windRowY1, "WIND", windBuf);
   drawBoxRow(colW + 5, windRowY2, "FROM", windDirBuf);
@@ -1886,9 +1892,8 @@ void drawParamotorPage() {
     snprintf(airBuf, sizeof(airBuf), "-- %s", speedUnitLabel());
   }
 
-  int windRowY3 = top + rowH + rowH - 6;  // same "6px above box bottom" margin as AGL/HDG
-  int windRowY2 = windRowY3 - AIRSPACE_ROW_GAP_PX;
-  int windRowY1 = windRowY3 - 2 * AIRSPACE_ROW_GAP_PX;
+  int windRowY1, windRowY2, windRowY3;
+  computeBoxRows(top + rowH + 14, top + 2 * rowH, windRowY1, windRowY2, windRowY3);
 
   drawBoxRow(5, windRowY1, "WIND", windBuf);
   drawBoxRow(5, windRowY2, "FROM", windDirBuf);
@@ -1914,9 +1919,8 @@ void drawParamotorPage() {
   formatHoriValue(horiBuf, sizeof(horiBuf), boxAirspaceValid, boxAirspace.horizDistance_km);
   formatCloudBaseValue(cloudBuf, sizeof(cloudBuf));
 
-  int rowY3 = top + rowH + rowH - 6;  // same "6px above box bottom" margin as AGL/HDG
-  int rowY2 = rowY3 - AIRSPACE_ROW_GAP_PX;
-  int rowY1 = rowY3 - 2 * AIRSPACE_ROW_GAP_PX;
+  int rowY1, rowY2, rowY3;
+  computeBoxRows(top + rowH + 14, top + 2 * rowH, rowY1, rowY2, rowY3);
 
   drawBoxRow(colW + 5, rowY1, "VERT", vertBuf);
   drawBoxRow(colW + 5, rowY2, "HORI", horiBuf);
