@@ -360,6 +360,12 @@ void drawLargeValueWithSmallUnit(
 // labels of different lengths ("NR VERT: " vs "NR HORI: " vs "CLD BASE: ").
 #define AIRSPACE_VALUE_X_OFFSET 46
 
+// Vertical gap between the 3 rows in the AIR SPACE / WIND-AIRSPEED boxes.
+// The bottom row (BASE / AIR) is anchored 6px above the box's bottom edge --
+// same margin used by AGL and HDG in the boxes above -- and the other two
+// rows step up from there by this amount.
+#define AIRSPACE_ROW_GAP_PX 24
+
 // Fills buf with just the vertical-distance value, e.g. "3ft" or "--ft".
 static void formatVertValue(char* buf, size_t len, bool valid, float ft) {
   if (valid) snprintf(buf, len, "%dft", (int)roundf(ft));
@@ -385,6 +391,16 @@ static void formatCloudBaseValue(char* buf, size_t len) {
   } else {
     snprintf(buf, len, "--%s", altitudeUnitLabel());
   }
+}
+
+// Draws a left-aligned "label" (small, regular) at xLabel, and its "value"
+// (bold, one size up) at a fixed offset to its right -- the AIR SPACE /
+// WIND-AIRSPEED box row style, so a box's values form one aligned column.
+static void drawBoxRow(int xLabel, int y, const char* label, const char* value) {
+  u8g2.setFont(u8g2_font_helvR10_tf);
+  u8g2.drawStr(xLabel, y, label);
+  u8g2.setFont(u8g2_font_helvB18_tf);
+  u8g2.drawStr(xLabel + AIRSPACE_VALUE_X_OFFSET, y, value);
 }
 
 void drawParagliderPage() {
@@ -448,15 +464,15 @@ void drawParagliderPage() {
   // ALT AGL -- moved here from the AGL/AIR SPC box, bottom-centre of
   // this box (6px up from the box's bottom edge, same margin used
   // elsewhere on this page for a bottom-anchored line).
-  char aglLineBuf[24];
-  if (bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid) {
+  char aglLineBuf[16];
+  bool aglOk = bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid;
+  if (aglOk) {
     float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
-    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: %d%s", (int)roundf(altitudeToDisplay(aglM)), altitudeUnitLabel());
+    snprintf(aglLineBuf, sizeof(aglLineBuf), "%d%s", (int)roundf(altitudeToDisplay(aglM)), altitudeUnitLabel());
   } else {
-    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: --%s", altitudeUnitLabel());
+    snprintf(aglLineBuf, sizeof(aglLineBuf), "--%s", altitudeUnitLabel());
   }
-  u8g2.setFont(u8g2_font_helvB10_tf);
-  u8g2.drawStr((colW - u8g2.getStrWidth(aglLineBuf)) / 2, top + rowH - 6, aglLineBuf);
+  drawBoxRow(5, top + rowH - 6, "AGL", aglLineBuf);  // left-aligned under the ALTITUDE header (x=5)
 
 
   // =========================================================
@@ -480,7 +496,7 @@ void drawParagliderPage() {
 
     drawLargeValueWithSmallUnit(
       colW + colW / 2,
-      top + rowH / 2,
+      top + rowH / 2 + 20,  // matches ALTITUDE's +20 so the two big numbers sit inline
       colW - 10,
       buffer,
       speedUnitLabel());
@@ -489,7 +505,7 @@ void drawParagliderPage() {
 
     drawLargeValueWithSmallUnit(
       colW + colW / 2,
-      top + rowH / 2,
+      top + rowH / 2 + 20,
       colW - 10,
       "--",
       speedUnitLabel());
@@ -500,28 +516,14 @@ void drawParagliderPage() {
   // Heading
   // ---------------------------------------------------------
 
-  u8g2.setFont(u8g2_font_helvB10_tf);
-
+  char hdgValueBuf[8];
   if (gps.course.isValid()) {
-
-    snprintf(
-      buffer,
-      sizeof(buffer),
-      "HDG %s",
-      getCompassDirection(gps.course.deg()));
-
+    snprintf(hdgValueBuf, sizeof(hdgValueBuf), "%s", getCompassDirection(gps.course.deg()));
   } else {
-
-    snprintf(
-      buffer,
-      sizeof(buffer),
-      "HDG ---");
+    snprintf(hdgValueBuf, sizeof(hdgValueBuf), "---");
   }
 
-  u8g2.drawStr(
-    colW + (colW - u8g2.getStrWidth(buffer)) / 2 - 20,  // 💡 Subtracted 20 to shift left
-    top + rowH - 16,
-    buffer);
+  drawBoxRow(colW + 5, top + rowH - 6, "HDG", hdgValueBuf);  // left-aligned under the V GROUND header (x=colW+5)
 
 
   // =========================================================
@@ -588,17 +590,13 @@ void drawParagliderPage() {
   formatHoriValue(horiBuf, sizeof(horiBuf), boxAirspaceValid, boxAirspace.horizDistance_km);
   formatCloudBaseValue(cloudBuf, sizeof(cloudBuf));
 
-  int rowY1 = top + rowH + rowH / 2 - 10;
-  int rowY2 = top + rowH + rowH / 2 + 10;
-  int rowY3 = top + rowH + rowH / 2 + 30;
-  int valueX = colW + 5 + AIRSPACE_VALUE_X_OFFSET;
+  int rowY3 = top + rowH + rowH - 6;  // same "6px above box bottom" margin as AGL/HDG
+  int rowY2 = rowY3 - AIRSPACE_ROW_GAP_PX;
+  int rowY1 = rowY3 - 2 * AIRSPACE_ROW_GAP_PX;
 
-  u8g2.drawStr(colW + 5, rowY1, "VERT");
-  u8g2.drawStr(valueX, rowY1, vertBuf);
-  u8g2.drawStr(colW + 5, rowY2, "HORI");
-  u8g2.drawStr(valueX, rowY2, horiBuf);
-  u8g2.drawStr(colW + 5, rowY3, "BASE");
-  u8g2.drawStr(valueX, rowY3, cloudBuf);
+  drawBoxRow(colW + 5, rowY1, "VERT", vertBuf);
+  drawBoxRow(colW + 5, rowY2, "HORI", horiBuf);
+  drawBoxRow(colW + 5, rowY3, "BASE", cloudBuf);
 
 
   // =========================================================
@@ -645,7 +643,9 @@ void drawParagliderPage() {
 
 
   // =========================================================
-  // BOX (2,1): WIND / AIRSPEED
+  // BOX (2,1): WIND / AIRSPEED -- left-aligned to match the AIR SPACE
+  // box directly above (same column), so all six values in this column
+  // line up in one place.
   // =========================================================
 
   u8g2.setFont(u8g2_font_helvB10_tf);
@@ -655,68 +655,26 @@ void drawParagliderPage() {
     top + 2 * rowH + 14,
     "WIND / AIRSPEED");
 
-
-  char windBuf[20];
-  char airBuf[20];
-  char windDirBuf[20];
+  char windBuf[12];
+  char airBuf[12];
+  char windDirBuf[8];
   if (windEstimateValid) {
-
-    snprintf(
-      windBuf,
-      sizeof(windBuf),
-      "WIND %.0f %s",
-      speedKphToDisplay(estimatedWindSpeedKph),
-      speedUnitLabel());
-
-    snprintf(
-      windDirBuf,
-      sizeof(airBuf),
-      "FROM %s",
-      getCompassDirection(estimatedWindDirectionDeg));
-
-    snprintf(
-      airBuf,
-      sizeof(airBuf),
-      "AIR %.0f %s",
-      speedKphToDisplay(estimatedAirspeedKph),
-      speedUnitLabel());
-
+    snprintf(windBuf, sizeof(windBuf), "%.0f %s", speedKphToDisplay(estimatedWindSpeedKph), speedUnitLabel());
+    snprintf(windDirBuf, sizeof(windDirBuf), "%s", getCompassDirection(estimatedWindDirectionDeg));
+    snprintf(airBuf, sizeof(airBuf), "%.0f %s", speedKphToDisplay(estimatedAirspeedKph), speedUnitLabel());
   } else {
-
-    snprintf(
-      windBuf,
-      sizeof(windBuf),
-      "WIND -- %s",
-      speedUnitLabel());
-
-    snprintf(
-      windDirBuf,
-      sizeof(windDirBuf),
-      "FROM --");
-
-    snprintf(
-      airBuf,
-      sizeof(airBuf),
-      "AIR -- %s",
-      speedUnitLabel());
+    snprintf(windBuf, sizeof(windBuf), "-- %s", speedUnitLabel());
+    snprintf(windDirBuf, sizeof(windDirBuf), "--");
+    snprintf(airBuf, sizeof(airBuf), "-- %s", speedUnitLabel());
   }
 
+  int windRowY3 = top + 2 * rowH + rowH - 6;  // same "6px above box bottom" margin as AGL/HDG
+  int windRowY2 = windRowY3 - AIRSPACE_ROW_GAP_PX;
+  int windRowY1 = windRowY3 - 2 * AIRSPACE_ROW_GAP_PX;
 
-  u8g2.setFont(u8g2_font_helvB14_tf);
-
-  u8g2.drawStr(
-    colW + (colW - u8g2.getStrWidth(windBuf)) / 2,
-    top + 2 * rowH + 40,
-    windBuf);
-
-  u8g2.drawStr(
-    colW + (colW - u8g2.getStrWidth(windBuf)) / 2,
-    top + 2 * rowH + 60,
-    windDirBuf);
-  u8g2.drawStr(
-    colW + (colW - u8g2.getStrWidth(airBuf)) / 2,
-    top + 2 * rowH + 100,
-    airBuf);
+  drawBoxRow(colW + 5, windRowY1, "WIND", windBuf);
+  drawBoxRow(colW + 5, windRowY2, "FROM", windDirBuf);
+  drawBoxRow(colW + 5, windRowY3, "AIR", airBuf);
 }
 
 // =====================================================
@@ -1874,15 +1832,15 @@ void drawParamotorPage() {
   // ALT AGL -- moved here from the AGL/AIR SPC box, bottom-centre of
   // this box (6px up from the box's bottom edge, same margin used
   // elsewhere on this page for a bottom-anchored line).
-  char aglLineBuf[24];
-  if (bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid) {
+  char aglLineBuf[16];
+  bool aglOk = bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid;
+  if (aglOk) {
     float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
-    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: %d%s", (int)roundf(altitudeToDisplay(aglM)), altitudeUnitLabel());
+    snprintf(aglLineBuf, sizeof(aglLineBuf), "%d%s", (int)roundf(altitudeToDisplay(aglM)), altitudeUnitLabel());
   } else {
-    snprintf(aglLineBuf, sizeof(aglLineBuf), "ALT AGL: --%s", altitudeUnitLabel());
+    snprintf(aglLineBuf, sizeof(aglLineBuf), "--%s", altitudeUnitLabel());
   }
-  u8g2.setFont(u8g2_font_helvB10_tf);
-  u8g2.drawStr((colW - u8g2.getStrWidth(aglLineBuf)) / 2, top + rowH - 6, aglLineBuf);
+  drawBoxRow(5, top + rowH - 6, "AGL", aglLineBuf);  // left-aligned under the ALTITUDE header (x=5)
 
   // =========================================================
   // BOX (0,1): V GROUND + HDG -- identical to drawParagliderPage()
@@ -1892,44 +1850,49 @@ void drawParamotorPage() {
 
   if (gps.speed.isValid()) {
     snprintf(buffer, sizeof(buffer), "%d", (int)roundf(speedKphToDisplay(gps.speed.kmph())));
-    drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH / 2, colW - 10, buffer, speedUnitLabel());
+    drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH / 2 + 20, colW - 10, buffer, speedUnitLabel());
   } else {
-    drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH / 2, colW - 10, "--", speedUnitLabel());
+    drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH / 2 + 20, colW - 10, "--", speedUnitLabel());
   }
 
-  u8g2.setFont(u8g2_font_helvB10_tf);
+  char hdgValueBuf[8];
   if (gps.course.isValid()) {
-    snprintf(buffer, sizeof(buffer), "HDG %s", getCompassDirection(gps.course.deg()));
+    snprintf(hdgValueBuf, sizeof(hdgValueBuf), "%s", getCompassDirection(gps.course.deg()));
   } else {
-    snprintf(buffer, sizeof(buffer), "HDG ---");
+    snprintf(hdgValueBuf, sizeof(hdgValueBuf), "---");
   }
-  u8g2.drawStr(colW + (colW - u8g2.getStrWidth(buffer)) / 2 - 20, top + rowH - 16, buffer);
+  drawBoxRow(colW + 5, top + rowH - 6, "HDG", hdgValueBuf);  // left-aligned under the V GROUND header (x=colW+5)
 
   // =========================================================
-  // BOX (1,0): WIND / AIRSPEED -- same code as drawParagliderPage()'s
-  // box (2,1), just re-anchored to row 1 / col 0 (no colW offset, one
-  // rowH instead of two).
+  // BOX (1,0): WIND / AIRSPEED -- same left-aligned row style as
+  // drawParagliderPage()'s box (2,1), re-anchored to row 1 / col 0. Note
+  // this box is beside AIR SPACE on this page (not stacked under it like
+  // on the glider page), so its column lines up with ALTITUDE/CHT above
+  // and below it, not with AIR SPACE's column.
   // =========================================================
   u8g2.setFont(u8g2_font_helvB10_tf);
   u8g2.drawStr(5, top + rowH + 14, "WIND / AIRSPEED");
 
-  char windBuf[20];
-  char airBuf[20];
-  char windDirBuf[20];
+  char windBuf[12];
+  char airBuf[12];
+  char windDirBuf[8];
   if (windEstimateValid) {
-    snprintf(windBuf, sizeof(windBuf), "WIND %.0f %s", speedKphToDisplay(estimatedWindSpeedKph), speedUnitLabel());
-    snprintf(windDirBuf, sizeof(airBuf), "FROM %s", getCompassDirection(estimatedWindDirectionDeg));
-    snprintf(airBuf, sizeof(airBuf), "AIR %.0f %s", speedKphToDisplay(estimatedAirspeedKph), speedUnitLabel());
+    snprintf(windBuf, sizeof(windBuf), "%.0f %s", speedKphToDisplay(estimatedWindSpeedKph), speedUnitLabel());
+    snprintf(windDirBuf, sizeof(windDirBuf), "%s", getCompassDirection(estimatedWindDirectionDeg));
+    snprintf(airBuf, sizeof(airBuf), "%.0f %s", speedKphToDisplay(estimatedAirspeedKph), speedUnitLabel());
   } else {
-    snprintf(windBuf, sizeof(windBuf), "WIND -- %s", speedUnitLabel());
-    snprintf(windDirBuf, sizeof(windDirBuf), "FROM --");
-    snprintf(airBuf, sizeof(airBuf), "AIR -- %s", speedUnitLabel());
+    snprintf(windBuf, sizeof(windBuf), "-- %s", speedUnitLabel());
+    snprintf(windDirBuf, sizeof(windDirBuf), "--");
+    snprintf(airBuf, sizeof(airBuf), "-- %s", speedUnitLabel());
   }
 
-  u8g2.setFont(u8g2_font_helvB14_tf);
-  u8g2.drawStr((colW - u8g2.getStrWidth(windBuf)) / 2, top + rowH + 40, windBuf);
-  u8g2.drawStr((colW - u8g2.getStrWidth(windBuf)) / 2, top + rowH + 60, windDirBuf);
-  u8g2.drawStr((colW - u8g2.getStrWidth(windBuf)) / 2, top + rowH + 100, airBuf);
+  int windRowY3 = top + rowH + rowH - 6;  // same "6px above box bottom" margin as AGL/HDG
+  int windRowY2 = windRowY3 - AIRSPACE_ROW_GAP_PX;
+  int windRowY1 = windRowY3 - 2 * AIRSPACE_ROW_GAP_PX;
+
+  drawBoxRow(5, windRowY1, "WIND", windBuf);
+  drawBoxRow(5, windRowY2, "FROM", windDirBuf);
+  drawBoxRow(5, windRowY3, "AIR", airBuf);
 
   // =========================================================
   // BOX (1,1): AIR SPACE -- ALT AGL moved out to the ALTITUDE box above,
@@ -1951,17 +1914,13 @@ void drawParamotorPage() {
   formatHoriValue(horiBuf, sizeof(horiBuf), boxAirspaceValid, boxAirspace.horizDistance_km);
   formatCloudBaseValue(cloudBuf, sizeof(cloudBuf));
 
-  int rowY1 = top + rowH + rowH / 2 - 10;
-  int rowY2 = top + rowH + rowH / 2 + 10;
-  int rowY3 = top + rowH + rowH / 2 + 30;
-  int valueX = colW + 5 + AIRSPACE_VALUE_X_OFFSET;
+  int rowY3 = top + rowH + rowH - 6;  // same "6px above box bottom" margin as AGL/HDG
+  int rowY2 = rowY3 - AIRSPACE_ROW_GAP_PX;
+  int rowY1 = rowY3 - 2 * AIRSPACE_ROW_GAP_PX;
 
-  u8g2.drawStr(colW + 5, rowY1, "VERT");
-  u8g2.drawStr(valueX, rowY1, vertBuf);
-  u8g2.drawStr(colW + 5, rowY2, "HORI");
-  u8g2.drawStr(valueX, rowY2, horiBuf);
-  u8g2.drawStr(colW + 5, rowY3, "BASE");
-  u8g2.drawStr(valueX, rowY3, cloudBuf);
+  drawBoxRow(colW + 5, rowY1, "VERT", vertBuf);
+  drawBoxRow(colW + 5, rowY2, "HORI", horiBuf);
+  drawBoxRow(colW + 5, rowY3, "BASE", cloudBuf);
 
   // =========================================================
   // BOX (2,0): RPM -- from the nRF52840 engine meter over BLE, see
