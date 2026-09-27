@@ -94,6 +94,14 @@ extern unsigned long climbPulseMaxMs;
 // VARIO_VOLUME_DB_PER_PERCENT in the main .ino). 0% = silent.
 // =====================================================
 #define VARIO_VOLUME_DEFAULT_CLIMB_PERCENT 100
+
+// Defined in the main .ino (needs VARIO_VOLUME_DB_PER_PERCENT, defined
+// there). Declared here so other .cpp files can reuse the exact same
+// 0-100% -> linear-gain formula rather than duplicating it -- used for
+// the vario climb/sink/buzzer volumes and the ADS-B Alert Volume
+// (VoiceAlert.cpp) alike.
+float varioVolumeToGain(uint8_t percent);
+
 #define VARIO_VOLUME_DEFAULT_SINK_PERCENT 60
 
 extern uint8_t climbVolumePercent;

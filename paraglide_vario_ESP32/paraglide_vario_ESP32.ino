@@ -32,6 +32,7 @@
 #include "FileServer.h"
 #include "DrawPages.h"
 #include "CloudBase.h"
+#include "VoiceAlert.h"
 // =====================================================
 // WIFI (feeds Weather + ADS-B pages) + BLUETOOTH (engine meter)
 // Connection details (saved networks, remembered BLE device) live in
@@ -749,7 +750,10 @@ uint8_t sinkVolumePercent = VARIO_VOLUME_DEFAULT_SINK_PERCENT;
 float pageBeepGain = 1.0f;
 
 // Converts a 0-100 volume percentage to a linear amplitude multiplier.
-static float varioVolumeToGain(uint8_t percent) {
+// Declared in settings.h so other .cpp files (VoiceAlert.cpp) can reuse
+// this exact formula for the ADS-B Alert Volume setting, rather than
+// duplicating it.
+float varioVolumeToGain(uint8_t percent) {
   if (percent == 0) return 0.0f;
   if (percent >= 100) return 1.0f;
   return powf(10.0f, -((float)(100 - percent) * VARIO_VOLUME_DB_PER_PERCENT) / 20.0f);
@@ -954,6 +958,15 @@ void setup() {
   }
   sdCardOK = SD_MMC.begin("/sdcard", true);  // true = 1-bit mode (only D0 is wired)
   Serial.println(sdCardOK ? "SD CARD MOUNTED" : "SD CARD NOT FOUND -- IGC recording disabled");
+
+  // Voice alert clips (see VoiceAlert.h) -- loads all 60 clips from
+  // /VOICE/*.PCM into PSRAM once, up front, so real-time playback later
+  // never has to touch the SD card. If this fails (missing folder,
+  // missing PSRAM, etc.) voice alerts are just unavailable -- everything
+  // else on the device still works normally.
+  if (sdCardOK) {
+    loadVoiceClips();
+  }
 
   Serial.println("[BOOT] Drawing splash screen...");
 
@@ -4156,6 +4169,24 @@ void setToneFrequency(float freq) {
 void i2sToneService() {
 
     if (!codecOK || !es8311OK) return;
+
+    // Voice alerts take priority over the tone generator -- serve PCM
+    // samples straight from PSRAM (see VoiceAlert.cpp) instead of
+    // synthesizing a tone this chunk. Falls through to the normal tone
+    // code below once the sentence finishes (voiceIsPlaying() becomes
+    // false), so a climb/sink tone that was suppressed during playback
+    // resumes on its own next call.
+    if (voiceIsPlaying()) {
+      int16_t chunk[I2S_TONE_CHUNK];
+      voiceServiceChunk(chunk, I2S_TONE_CHUNK);
+      size_t bytesWritten = 0;
+#if AUDIO_USE_DEDICATED_TASK
+      i2s_write(I2S_PORT, chunk, sizeof(chunk), &bytesWritten, pdMS_TO_TICKS(100));
+#else
+      i2s_write(I2S_PORT, chunk, sizeof(chunk), &bytesWritten, 0);
+#endif
+      return;
+    }
 
     int16_t chunk[I2S_TONE_CHUNK];
 
