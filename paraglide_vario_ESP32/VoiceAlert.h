@@ -23,6 +23,7 @@
 // AIRSPACE.txt, the DEM terrain lookups, and IGC logging elsewhere).
 // =====================================================
 #include "VoiceClips.h"
+#include <stdint.h>
 
 #define VOICE_MAX_SENTENCE_CLIPS 24
 #define VOICE_INTER_CLIP_GAP_MS 90  // silence between spliced clips
