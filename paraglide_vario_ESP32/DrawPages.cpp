@@ -2043,7 +2043,7 @@ bool drawAirspaceWarning() {
 
   // One-shot alert on entering controlled airspace, not on every redraw.
   // Deliberately NOT gated on airspaceAlertBarEnabled -- that setting
-  // only hides the visual banner below, same as adsbAlarmMuted is kept
+  // only hides the visual banner below, same as adsbAlarmMode is kept
   // independent of ADS-B's Auto-Jump (settings.h). A pilot who's hidden
   // the banner still gets the one-time tone telling them they've
   // actually entered controlled airspace.

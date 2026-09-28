@@ -3,6 +3,7 @@
 #include "FileServer.h"
 #include "FanetMessaging.h"
 #include "ble_manager.h"
+#include "VoiceAlert.h"
 #include "secrets.h"
 #include <FS.h>
 #include <SD_MMC.h>
@@ -199,6 +200,12 @@ static const uint8_t ADSB_RADIUS_CHOICE_COUNT = 4;
 static const float ADSB_VERTICAL_CHOICES_FT[] = { 1000.0f, 1500.0f, 2000.0f, 3000.0f };
 static const uint8_t ADSB_VERTICAL_CHOICE_COUNT = 4;
 
+// Alert Volume: 0-100% in 10% steps (11 levels, same as VARIO_VOLUME_CHOICE_COUNT),
+// plus a "Test" item at the end that previews the current Alarm Sound
+// mode (siren or voice) at this volume.
+#define ADSB_ALERT_VOLUME_CHOICE_COUNT 12
+#define ADSB_ALERT_VOLUME_TEST_INDEX 11
+
 // Index 0 ("Default") reproduces the app's original hardcoded far/default
 // rings (30km outer / 15km inner). Inner is always half of outer -- see
 // the adsbRingOuterKm/adsbRingInnerKm comment in settings.h for what this
@@ -239,9 +246,10 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_BLUETOOTH: return 3;
     case MENU_SCREEN_BLUETOOTH_SCAN: return bleScanResultCount() > 0 ? bleScanResultCount() : 1;
     case MENU_SCREEN_MAP: return mapFileCount > 0 ? mapFileCount : 1;
-    case MENU_SCREEN_ADSB_SETTINGS: return 7;
+    case MENU_SCREEN_ADSB_SETTINGS: return 8;
     case MENU_SCREEN_ADSB_RADIUS: return ADSB_RADIUS_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_VERTICAL: return ADSB_VERTICAL_CHOICE_COUNT;
+    case MENU_SCREEN_ADSB_ALERT_VOLUME: return ADSB_ALERT_VOLUME_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_RANGE_RINGS: return ADSB_RING_CHOICE_COUNT;
     case MENU_SCREEN_WEATHER_SETTINGS: return 3;
     case MENU_SCREEN_WEATHER_POLL_INTERVAL: return WEATHER_POLL_CHOICE_COUNT;
@@ -274,6 +282,7 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_ADSB_SETTINGS: return "ADSB SETTINGS";
     case MENU_SCREEN_ADSB_RADIUS: return "ALERT RADIUS";
     case MENU_SCREEN_ADSB_VERTICAL: return "VERT THRESHOLD";
+    case MENU_SCREEN_ADSB_ALERT_VOLUME: return "ALERT VOLUME";
     case MENU_SCREEN_ADSB_RANGE_RINGS: return "RANGE RINGS";
     case MENU_SCREEN_WEATHER_SETTINGS: return "WEATHER SETTINGS";
     case MENU_SCREEN_WEATHER_POLL_INTERVAL: return "POLL INTERVAL";
@@ -444,16 +453,30 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       if (index == 2) {
         snprintf(buf, buflen, "Auto-Jump: %s", adsbAutoJumpEnabled ? "On" : "Off");
       } else if (index == 3) {
-        snprintf(buf, buflen, "Alarm Sound: %s", adsbAlarmMuted ? "Off" : "On");
+        const char* modeStr = (adsbAlarmMode == ADSB_ALARM_OFF) ? "Off"
+                             : (adsbAlarmMode == ADSB_ALARM_TONE) ? "Alarm" : "Voice";
+        snprintf(buf, buflen, "Alarm Sound: %s", modeStr);
       } else if (index == 4) {
-        snprintf(buf, buflen, "Range Rings");
+        snprintf(buf, buflen, "Alert Volume");
       } else if (index == 5) {
-        snprintf(buf, buflen, "Airspace Alert Bar: %s", airspaceAlertBarEnabled ? "On" : "Off");
+        snprintf(buf, buflen, "Range Rings");
       } else if (index == 6) {
+        snprintf(buf, buflen, "Airspace Alert Bar: %s", airspaceAlertBarEnabled ? "On" : "Off");
+      } else if (index == 7) {
         snprintf(buf, buflen, "Airspace Info: %s", airspaceInfoBarEnabled ? "On" : "Off");
       } else {
         static const char* items[] = { "Alert Radius", "Vertical Threshold" };
         snprintf(buf, buflen, "%s", items[index]);
+      }
+      break;
+    }
+    case MENU_SCREEN_ADSB_ALERT_VOLUME: {
+      if (index == ADSB_ALERT_VOLUME_TEST_INDEX) {
+        snprintf(buf, buflen, "Test");
+      } else {
+        uint8_t pct = VARIO_VOLUME_CHOICE_PERCENT(index);
+        bool isActive = (adsbAlertVolumePercent == pct);
+        snprintf(buf, buflen, "%u%%%s", pct, isActive ? " *" : "");
       }
       break;
     }
@@ -754,23 +777,29 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           playFeedbackTone(600.0f, 50);
           return;
         case 3:
-          adsbAlarmMuted = !adsbAlarmMuted;
+          // Off -> Alarm -> Voice -> Off. Cycles in place, like Auto-Jump.
+          adsbAlarmMode = (adsbAlarmMode + 1) % 3;
           saveSettings();
           displayDirty = true;
           playFeedbackTone(600.0f, 50);
           return;
         case 4:
-          pushMenuScreen(MENU_SCREEN_ADSB_RANGE_RINGS);
+          pushMenuScreen(MENU_SCREEN_ADSB_ALERT_VOLUME);
+          menuSelectedIndex = adsbAlertVolumePercent / 10;  // start on the current level
           playFeedbackTone(900.0f, 80);
           return;
         case 5:
+          pushMenuScreen(MENU_SCREEN_ADSB_RANGE_RINGS);
+          playFeedbackTone(900.0f, 80);
+          return;
+        case 6:
           // Deliberately NOT saved -- see airspaceAlertBarEnabled's
           // comment in settings.h; always back on at next boot.
           airspaceAlertBarEnabled = !airspaceAlertBarEnabled;
           displayDirty = true;
           playFeedbackTone(600.0f, 50);
           return;
-        case 6:
+        case 7:
           // Unlike airspaceAlertBarEnabled above, this one IS saved --
           // see its comment in settings.h.
           airspaceInfoBarEnabled = !airspaceInfoBarEnabled;
@@ -779,6 +808,38 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           playFeedbackTone(600.0f, 50);
           return;
       }
+      return;
+
+    // Sets the level immediately and STAYS on the screen (like the vario
+    // volume screens), but -- unlike those -- does NOT auto-play a
+    // preview on every selection: a full voice sentence is ~5s, and
+    // replaying that on every scroll through 11 levels would be
+    // exhausting. Press "Test" (the last item) when you actually want
+    // to hear it. Double-press to go back to ADS-B Settings.
+    case MENU_SCREEN_ADSB_ALERT_VOLUME:
+      if (index == ADSB_ALERT_VOLUME_TEST_INDEX) {
+        if (adsbAlarmMode == ADSB_ALARM_TONE) {
+          interceptAlarmActive = true;
+          interceptAlarmStart = millis();
+        } else if (adsbAlarmMode == ADSB_ALARM_VOICE && voiceClipsLoaded()) {
+          // Fixed example values -- same sentence structure a real alert
+          // uses, so this is a true preview of what you'll hear in the
+          // field, just with made-up numbers (2 o'clock, flying NW, at
+          // 2400ft, 1200ft above you, 800m away).
+          VoiceClipId sentence[VOICE_MAX_SENTENCE_CLIPS];
+          int n = buildAlertSentence(sentence, VOICE_MAX_SENTENCE_CLIPS,
+                                      2, true, 315.0f,
+                                      2400, 1200, true,
+                                      800, true);
+          voicePlaySequence(sentence, n, varioVolumeToGain(adsbAlertVolumePercent));
+        }
+        // ADSB_ALARM_OFF: nothing to test -- silently does nothing.
+        return;
+      }
+      adsbAlertVolumePercent = VARIO_VOLUME_CHOICE_PERCENT(index);
+      saveSettings();
+      displayDirty = true;
+      playFeedbackTone(600.0f, 50);
       return;
 
     case MENU_SCREEN_ADSB_RADIUS:

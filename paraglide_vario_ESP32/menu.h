@@ -81,7 +81,15 @@ extern uint8_t activePageIndex;
 //   |     |-- ADSB_RADIUS       (horizontal alert trigger distance)
 //   |     |-- ADSB_VERTICAL     (vertical alert trigger distance)
 //   |     |-- (Auto-Jump toggle, cycled in place)
-//   |     |-- (Alarm Sound toggle, cycled in place)
+//   |     |-- (Alarm Sound: Off/Alarm/Voice, cycled in place -- see
+//   |     |    adsbAlarmMode in settings.h. Alarm is the existing 5s
+//   |     |    two-tone siren; Voice speaks the nearest threat's clock
+//   |     |    position, heading, altitude and distance instead -- see
+//   |     |    triggerAdsbAlert()/VoiceAlert.h)
+//   |     |-- ADSB_ALERT_VOLUME (0-100% in 10% steps, same dB scale as
+//   |     |                      the vario volumes, plus a Test item
+//   |     |                      that previews whichever of Alarm/Voice
+//   |     |                      is currently selected at this volume)
 //   |     |-- ADSB_RANGE_RINGS  (far/default range ring pair -- 15/30km,
 //   |     |                      10/20km, 20/40km, or 30/60km)
 //   |     |-- (Airspace Alert Bar toggle, cycled in place -- NOT
@@ -143,6 +151,7 @@ enum MenuScreen {
   MENU_SCREEN_ADSB_SETTINGS,
   MENU_SCREEN_ADSB_RADIUS,
   MENU_SCREEN_ADSB_VERTICAL,
+  MENU_SCREEN_ADSB_ALERT_VOLUME,
   MENU_SCREEN_ADSB_RANGE_RINGS,
   MENU_SCREEN_WEATHER_SETTINGS,
   MENU_SCREEN_WEATHER_POLL_INTERVAL,

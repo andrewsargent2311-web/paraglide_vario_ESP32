@@ -460,10 +460,38 @@ const char* getCompassDirection(float heading) {
 unsigned long lastAdsbCheckTime = 0;           // Stores the last time we requested data
 const unsigned long ADSB_INTERVAL_MS = 15000;  // Poll the server every 15 seconds
 
+// Re-alerts (siren or voice, whichever is selected) every this many ms
+// while any aircraft remains inside the alert radius/vertical band --
+// reset by every alert (new or repeat), not on a fixed clock, so a
+// repeat alert doesn't fire right on the heels of an immediate one.
+// See the "4.5 ADS-B new intruder" block in loop().
+#define ADSB_ALERT_REPEAT_MS 60000UL
+unsigned long lastAdsbAlertAnnounceMs = 0;
+
 // Add these to your global variables list
 #define MAX_TRACKED_THREATS 10
 char activeThreatHexes[MAX_TRACKED_THREATS][9] = {};  // Fixed-size ADS-B hex IDs
 int activeThreatCount = 0;
+
+// Published by performADSBUpdate() (Core 0) each poll, alongside
+// activeThreatHexes above -- same mutex, same publish point. Holds full
+// detail on whichever currently-alerting aircraft is nearest, so the
+// main loop can speak/sound an alert about it without re-deriving
+// anything from the raw ADS-B JSON (which isn't safely readable outside
+// performADSBUpdate() anyway). valid=false means no aircraft is
+// currently inside the alert radius/vertical band at all.
+struct NearestThreatSnapshot {
+  bool valid = false;
+  char hex[9] = "";
+  float distanceKm = 0;
+  float verticalDeltaFt = 0;   // always >= 0 -- see aircraftAbove for direction
+  bool aircraftAbove = false;
+  float altitudeFt = 0;        // aircraft's absolute altitude (alt_baro)
+  float bearingFromMeDeg = 0;  // compass bearing from the pilot to the aircraft
+  bool headingKnown = false;
+  float headingDeg = 0;        // aircraft's own track/heading, if the feed has it
+};
+NearestThreatSnapshot sharedNearestThreat;
 
 // =====================================================
 // =====================================================
@@ -823,6 +851,7 @@ void formatIgcLatLon();
 void updateVario();
 void updateWindEstimator();
 void updateI2sAudioBuzzer();
+void triggerAdsbAlert(const NearestThreatSnapshot& threat);
 void updateBattery();
 bool syncClockFromGPS();
 void updatePageButton();
@@ -1396,19 +1425,39 @@ void loop() {
   // ---------------------------------------------------------
   updatePageButton();
   // ---------------------------------------------------------
-  // 4.5 ADS-B new intruder: jump to the traffic page and start
-  //     the 5s intercept alarm. adsbNewThreat is set on Core 0
-  //     by performADSBUpdate(); a plain bool is atomic on ESP32,
-  //     so no mutex is needed to read/clear it here.
+  // 4.5 ADS-B new intruder: jump to the traffic page and alert --
+  //     immediately when a brand new threat appears (adsbNewThreat, set
+  //     on Core 0 by performADSBUpdate(); a plain bool is atomic on
+  //     ESP32, so no mutex is needed to read/clear it here), then every
+  //     ADSB_ALERT_REPEAT_MS after that while sharedNearestThreat is
+  //     still valid. Both paths always alert about the CURRENTLY
+  //     nearest threat (not necessarily the one that just appeared) --
+  //     see sharedNearestThreat's comment. triggerAdsbAlert() itself
+  //     decides siren vs voice vs nothing based on adsbAlarmMode.
   // ---------------------------------------------------------
+  bool adsbAlertDue = false;
   if (adsbNewThreat) {
     adsbNewThreat = false;
     if (adsbAutoJumpEnabled) {
       jumpToActivePage(PAGE_ADSB);
     }
-    interceptAlarmActive = true;
-    interceptAlarmStart = millis();
+    adsbAlertDue = true;
+  } else if (now - lastAdsbAlertAnnounceMs >= ADSB_ALERT_REPEAT_MS) {
+    adsbAlertDue = true;  // only actually alerts below if a threat is still present
   }
+
+  if (adsbAlertDue) {
+    NearestThreatSnapshot nearestSnapshot;
+    if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+      nearestSnapshot = sharedNearestThreat;
+      xSemaphoreGive(backgroundDataMutex);
+    }
+    if (nearestSnapshot.valid) {
+      triggerAdsbAlert(nearestSnapshot);
+      lastAdsbAlertAnnounceMs = now;
+    }
+  }
+
   // ---------------------------------------------------------
   // 5. Audio state machine -- decides frequency/pulse pattern only.
   //    Actual sample generation (i2sToneService) runs on its own
@@ -1847,6 +1896,12 @@ void performADSBUpdate() {
   char currentFrameThreatHexes[MAX_TRACKED_THREATS][9] = {};
   int currentFrameThreatCount = 0;
 
+  // Built up alongside currentFrameThreatHexes above -- whichever
+  // qualifying aircraft ends up closest this poll becomes the published
+  // sharedNearestThreat (see below the loop).
+  NearestThreatSnapshot nearestThisFrame;
+  float nearestDistanceSoFar = 1.0e9f;
+
   for (JsonObject ac : aircraftList) {
 
     if (!ac.containsKey("lat") || !ac.containsKey("lon") || !ac.containsKey("hex")) {
@@ -1873,9 +1928,10 @@ void performADSBUpdate() {
         acLat,
         acLon);
 
+    float acAltitudeFt = ac["alt_baro"];
     float verticalDeltaFeet =
       fabsf(
-        (float)ac["alt_baro"] - myAltitudeFeet);
+        acAltitudeFt - myAltitudeFeet);
 
     if (distanceKM <= adsbAlertRadiusKm && verticalDeltaFeet <= adsbAlertVerticalFt) {
 
@@ -1885,9 +1941,26 @@ void performADSBUpdate() {
                 acHex,
                 sizeof(currentFrameThreatHexes[0]) - 1);
         currentFrameThreatHexes[currentFrameThreatCount]
-                               [sizeof(currentFrameThreatHexes[0]) - 1] = '\\0';
+                               [sizeof(currentFrameThreatHexes[0]) - 1] = '\0';
 
         currentFrameThreatCount++;
+      }
+
+      if (distanceKM < nearestDistanceSoFar) {
+        nearestDistanceSoFar = distanceKM;
+        nearestThisFrame.valid = true;
+        strncpy(nearestThisFrame.hex, acHex, sizeof(nearestThisFrame.hex) - 1);
+        nearestThisFrame.hex[sizeof(nearestThisFrame.hex) - 1] = '\0';
+        nearestThisFrame.distanceKm = distanceKM;
+        nearestThisFrame.verticalDeltaFt = verticalDeltaFeet;
+        nearestThisFrame.aircraftAbove = (acAltitudeFt >= myAltitudeFeet);
+        nearestThisFrame.altitudeFt = acAltitudeFt;
+        nearestThisFrame.bearingFromMeDeg = getBearing(myPos.lat, myPos.lon, acLat, acLon);
+        // "track" (heading) isn't sent by every aircraft/feed state --
+        // ADSB Settings > the voice alert says "heading unknown" rather
+        // than guessing when it's missing.
+        nearestThisFrame.headingKnown = ac.containsKey("track");
+        nearestThisFrame.headingDeg = nearestThisFrame.headingKnown ? (float)ac["track"] : 0.0f;
       }
 
       bool isExistingThreat = false;
@@ -1923,8 +1996,13 @@ void performADSBUpdate() {
     strncpy(activeThreatHexes[i],
             currentFrameThreatHexes[i],
             sizeof(activeThreatHexes[0]) - 1);
-    activeThreatHexes[i][sizeof(activeThreatHexes[0]) - 1] = '\\0';
+    activeThreatHexes[i][sizeof(activeThreatHexes[0]) - 1] = '\0';
   }
+
+  // nearestThisFrame.valid stays false (its default) if no aircraft
+  // qualified this poll, which correctly clears any previous alert
+  // target once nothing's in range any more.
+  sharedNearestThreat = nearestThisFrame;
 
   // ---------------------------------------------------------
   // Publish completed ADS-B data
@@ -3611,7 +3689,7 @@ void updateI2sAudioBuzzer(){
       climbToneOn = false;
 
     }
-    else if (!adsbAlarmMuted) {
+    else if (adsbAlarmMode == ADSB_ALARM_TONE) {
 
       unsigned long phase =
         elapsed % (INTERCEPT_TONE_TOGGLE_MS * 2);
@@ -3621,7 +3699,7 @@ void updateI2sAudioBuzzer(){
         ? INTERCEPT_TONE_HIGH_HZ
         : INTERCEPT_TONE_LOW_HZ;
 
-      toneGain = 1.0f;  // the alarm is always full level
+      toneGain = varioVolumeToGain(adsbAlertVolumePercent);
       setToneFrequency(freq);
 
       return;
@@ -3875,6 +3953,64 @@ void updateI2sAudioBuzzer(){
 
     setToneFrequency(blueflyFreq);
   }
+}
+
+// =====================================================
+// ADS-B ALERT TRIGGER
+// Called from loop() (the "ADS-B new intruder" hook) whenever an alert
+// is due -- either a brand new threat just appeared, or the 60s repeat
+// timer elapsed while a threat is still in range. Branches on
+// adsbAlarmMode to decide HOW to alert (nothing / siren / voice); the
+// WHEN is entirely the caller's job, not this function's.
+// =====================================================
+void triggerAdsbAlert(const NearestThreatSnapshot& threat) {
+  if (adsbAlarmMode == ADSB_ALARM_OFF || !threat.valid) return;
+
+  if (adsbAlarmMode == ADSB_ALARM_TONE) {
+    interceptAlarmActive = true;
+    interceptAlarmStart = millis();
+    return;
+  }
+
+  // ADSB_ALARM_VOICE
+  if (!voiceClipsLoaded()) return;  // SD card / PSRAM load failed at boot -- nothing to play
+
+  // Clock position needs the pilot's own heading. With no valid course
+  // (stationary, no GPS fix) there's no sensible "o'clock" to give, so
+  // skip the alert entirely rather than guess -- agreed behaviour.
+  if (!gps.course.isValid()) return;
+
+  float relativeBearing = threat.bearingFromMeDeg - (float)gps.course.deg();
+  while (relativeBearing < 0.0f) relativeBearing += 360.0f;
+  while (relativeBearing >= 360.0f) relativeBearing -= 360.0f;
+  int clockHour = (int)roundf(relativeBearing / 30.0f);
+  if (clockHour <= 0) clockHour = 12;
+  if (clockHour > 12) clockHour = 12;  // defensive only -- shouldn't occur
+
+  int altitudeFt = (int)(roundf(threat.altitudeFt / 100.0f) * 100.0f);
+  int relativeFt = (int)(roundf(threat.verticalDeltaFt / 100.0f) * 100.0f);
+
+  // Below 2km (checked on the un-rounded distance): whole metres, nearest
+  // 100. At/above 2km: whole kilometres. A raw distance just under 2km
+  // that rounds up to exactly 2000m is still spoken as "2000 meters" --
+  // which side of 2km it's spoken on is decided before rounding.
+  int distanceValue;
+  bool distanceIsMeters;
+  if (threat.distanceKm < 2.0f) {
+    distanceValue = (int)(roundf(threat.distanceKm * 1000.0f / 100.0f) * 100.0f);
+    distanceIsMeters = true;
+  } else {
+    distanceValue = (int)roundf(threat.distanceKm);
+    distanceIsMeters = false;
+  }
+
+  VoiceClipId sentence[VOICE_MAX_SENTENCE_CLIPS];
+  int n = buildAlertSentence(sentence, VOICE_MAX_SENTENCE_CLIPS,
+                              clockHour, threat.headingKnown, threat.headingDeg,
+                              altitudeFt, relativeFt, threat.aircraftAbove,
+                              distanceValue, distanceIsMeters);
+
+  voicePlaySequence(sentence, n, varioVolumeToGain(adsbAlertVolumePercent));
 }
 
 // =====================================================

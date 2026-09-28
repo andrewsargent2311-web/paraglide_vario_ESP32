@@ -72,7 +72,8 @@ uint8_t buzzerVolumePercent = 80;
 float adsbAlertRadiusKm = 5.0f;
 float adsbAlertVerticalFt = 2000.0f;
 bool adsbAutoJumpEnabled = true;
-bool adsbAlarmMuted = false;
+uint8_t adsbAlarmMode = ADSB_ALARM_TONE;  // preserves the old default (alarm audible, not muted)
+uint8_t adsbAlertVolumePercent = 100;
 
 // Deliberately NOT persisted -- see the comment in settings.h. Always
 // starts true at boot.
@@ -143,7 +144,8 @@ void loadSettings() {
   adsbAlertRadiusKm = prefs.getFloat("adsbRadius", adsbAlertRadiusKm);
   adsbAlertVerticalFt = prefs.getFloat("adsbVert", adsbAlertVerticalFt);
   adsbAutoJumpEnabled = prefs.getBool("adsbJump", adsbAutoJumpEnabled);
-  adsbAlarmMuted = prefs.getBool("adsbMute", adsbAlarmMuted);
+  adsbAlarmMode = prefs.getUChar("adsbAlarmMode", adsbAlarmMode);
+  adsbAlertVolumePercent = prefs.getUChar("adsbAlertVol", adsbAlertVolumePercent);
 
   // Inner ring is always half of outer (see menu.cpp) -- only the outer
   // value is persisted, inner is re-derived here the same way.
@@ -192,7 +194,8 @@ void saveSettings() {
   prefs.putFloat("adsbRadius", adsbAlertRadiusKm);
   prefs.putFloat("adsbVert", adsbAlertVerticalFt);
   prefs.putBool("adsbJump", adsbAutoJumpEnabled);
-  prefs.putBool("adsbMute", adsbAlarmMuted);
+  prefs.putUChar("adsbAlarmMode", adsbAlarmMode);
+  prefs.putUChar("adsbAlertVol", adsbAlertVolumePercent);
 
   prefs.putFloat("ringOuter", adsbRingOuterKm);
 

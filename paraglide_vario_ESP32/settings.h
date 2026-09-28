@@ -156,13 +156,34 @@ extern float adsbAlertRadiusKm;    // horizontal trigger distance, km
 extern float adsbAlertVerticalFt;  // vertical trigger distance, ft
 
 // Whether a new threat auto-switches the display to the ADS-B page.
-// The 5s intercept alarm tone (see adsbAlarmMuted) fires regardless of
-// this setting -- it only controls what's on screen, not the audio alert.
+// The 5s intercept alarm tone / voice alert (see adsbAlarmMode) fires
+// regardless of this setting -- it only controls what's on screen, not
+// the audio alert.
 extern bool adsbAutoJumpEnabled;
 
-// Mutes just the ADS-B intercept alarm tone, independent of the main
-// vario mute (buzzerMuted in the main .ino).
-extern bool adsbAlarmMuted;
+// ADS-B audio alert mode: cycles Off -> Alarm -> Voice -> Off (the
+// "Alarm Sound" menu item). Off mutes both; Alarm plays the existing 5s
+// two-tone siren; Voice speaks the traffic's clock position, heading,
+// altitude and distance instead (see VoiceAlert.h). Independent of the
+// main vario mute (buzzerMuted in the main .ino).
+enum AdsbAlarmMode : uint8_t {
+  ADSB_ALARM_OFF = 0,
+  ADSB_ALARM_TONE = 1,
+  ADSB_ALARM_VOICE = 2,
+};
+extern uint8_t adsbAlarmMode;
+
+// Loudness of whichever of the above is currently selected, 0-100% in
+// 10% steps -- same dB-scaled formula as the vario volumes (see
+// varioVolumeToGain()). Config > ADSB Settings > Alert Volume.
+extern uint8_t adsbAlertVolumePercent;
+
+// Intercept alarm state -- defined in the main .ino (the 5s two-tone
+// siren's own state machine, see updateI2sAudioBuzzer()). Declared here,
+// not just used locally, so the ADSB Settings > Alert Volume > Test item
+// (menu.cpp) can start the same siren directly for a preview.
+extern bool interceptAlarmActive;
+extern unsigned long interceptAlarmStart;
 
 // Shows/hides the airspace-intrusion banner (drawn whenever the pilot is
 // inside tracked airspace -- see OpenAirScanner.h/.cpp). Deliberately
