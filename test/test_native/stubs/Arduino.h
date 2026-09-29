@@ -32,6 +32,13 @@ struct HostSerial
 {
     void print(const char*) {}
     void println(const char*) {}
+    void println() {}
     void printf(const char*, ...) {}
+ 
+    // Numeric overloads, e.g. Serial.print(uint16_t) / Serial.print(x, 2).
+    template <typename T> void print(T) {}
+    template <typename T, typename U> void print(T, U) {}
+    template <typename T> void println(T) {}
+    template <typename T, typename U> void println(T, U) {}
 };
 extern HostSerial Serial;
