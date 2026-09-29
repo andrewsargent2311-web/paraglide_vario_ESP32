@@ -1,9 +1,10 @@
-adafruit/Adafruit Unified Sensor
+solderedelectronics/Soldered PCF85063A RTC Library
 bblanchon/ArduinoJson
 olikraus/U8g2
 h2zero/NimBLE-Arduino
-jgromes/RadioLib
 mikalhart/TinyGPSPlus
-adafruit/Adafruit BMP5xx Library
-solderedelectronics/Soldered PCF85063A RTC Library
 adafruit/Adafruit SHTC3 Library
+throwtheswitch/Unity@^2.6.1
+adafruit/Adafruit BMP5xx Library
+adafruit/Adafruit Unified Sensor
+jgromes/RadioLib
