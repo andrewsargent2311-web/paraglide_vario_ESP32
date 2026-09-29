@@ -7,6 +7,7 @@
 // See DrawPages.h for the declarations these functions rely on.
 // =====================================================
 #include "DrawPages.h"
+#include "AirspaceProximity.h" 
 
 // Used only by drawADSBPage() below to snapshot the shared adsbDoc JSON
 // into a plain array before drawing -- not needed anywhere else, so it
