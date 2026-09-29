@@ -36,3 +36,8 @@ volatile bool airspaceResultValid = false;
 // the findNearestControlledAirspace() call site in backgroundTask().
 AirspaceResult nearestAirspaceInfo;
 volatile bool airspaceInfoResultValid = false;
+
+// Feeds the VERT / HORI rows of the AIR SPACE box -- see
+// findAirspaceClearances() in OpenAirScanner.h for exactly what each means.
+AirspaceClearance airspaceClearance;
+volatile bool airspaceClearanceValid = false;

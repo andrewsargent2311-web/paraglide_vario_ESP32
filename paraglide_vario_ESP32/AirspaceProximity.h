@@ -24,3 +24,9 @@ extern AirspaceResult nearestAirspace;
 extern volatile bool airspaceResultValid;
 extern AirspaceResult nearestAirspaceInfo;
 extern volatile bool airspaceInfoResultValid;
+
+// Independent horizontal-at-my-altitude / vertical-above-or-below-me
+// answers (findAirspaceClearances()). Feeds only the VERT / HORI rows of
+// the AIR SPACE box on the Paraglider and Paramotor pages.
+extern AirspaceClearance airspaceClearance;
+extern volatile bool airspaceClearanceValid;

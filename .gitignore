@@ -6,7 +6,6 @@ build/
 
 *.elf
 *.hex
-*.bin
 *.map
 *.eep
 

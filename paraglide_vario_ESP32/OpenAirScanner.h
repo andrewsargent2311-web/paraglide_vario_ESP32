@@ -253,6 +253,61 @@ bool findNearestControlledAirspace(
     AirspaceResult& out);
 
 // ---------------------------------------------------------------------------
+// Clearances: "what is in front of me" and "what is above/below me"
+// ---------------------------------------------------------------------------
+//
+// findNearestControlledAirspace() answers "which airspace is nearest
+// horizontally" and reports the vertical gap to that SAME airspace, which
+// is misleading when an airspace nearby is far above/below you while a
+// different one is at your height. findAirspaceClearances() answers the
+// two questions a pilot actually asks, independently:
+//
+//   HORIZONTAL -- how far until I fly into controlled airspace at MY
+//                 CURRENT ALTITUDE? Only airspace whose floor/ceiling band
+//                 contains your altitude is considered (an airspace sitting
+//                 entirely above or below you can't stop you flying on
+//                 level). 0 = you are inside one right now.
+//   VERTICAL   -- how far above/below me is the nearest controlled airspace
+//                 I am horizontally INSIDE (i.e. directly over/under me)?
+//                 0 = you are inside one right now.
+//
+// alertEligible entries only (no CFZ), same as the alert/banner search.
+// AGL/SFC-referenced floors or ceilings need a valid ground elevation: when
+// groundElevValid is false, such an airspace is treated as *possibly* at
+// your altitude for the horizontal answer (the safe side, same policy as
+// the banner), and makes the vertical answer "unknown" rather than wrong.
+//
+// Like findNearestControlledAirspace(), searches the RAM cache only -- no
+// SD access.
+
+struct AirspaceClearance {
+
+    // Horizontal distance to the nearest controlled airspace at your altitude.
+    bool  horizValid;          // false = none at your altitude in the database
+    float horizDistance_km;    // 0 = inside it (horizontally, at your height)
+    char  horizName[OAS_MAX_NAME_LEN];
+    char  horizClassId[OAS_MAX_CLASS_LEN];
+
+    // Vertical clearance to the nearest controlled airspace directly over/under you.
+    bool  vertValid;           // false = not horizontally inside any (or unknown, see vertUnknown)
+    bool  vertUnknown;         // horizontally inside one but its floor/ceiling can't be resolved (no ground elevation)
+    float vertDistance_ft;     // 0 = inside it (vertically, too)
+    bool  vertAbove;           // true = airspace is above you (its floor), false = below you (its ceiling)
+    char  vertName[OAS_MAX_NAME_LEN];
+    char  vertClassId[OAS_MAX_CLASS_LEN];
+};
+
+// Returns false only if the database isn't loaded (out untouched); otherwise
+// true, with each half valid or not per the flags above.
+bool findAirspaceClearances(
+    double curLat,
+    double curLon,
+    float curAlt_ft_msl,
+    float groundElev_ft,
+    bool groundElevValid,
+    AirspaceClearance& out);
+
+// ---------------------------------------------------------------------------
 // Geometry helper
 // ---------------------------------------------------------------------------
 

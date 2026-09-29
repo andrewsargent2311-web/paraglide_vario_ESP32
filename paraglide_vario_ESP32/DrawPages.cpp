@@ -574,8 +574,9 @@ void drawParagliderPage() {
   // =========================================================
   // BOX (1,1): AIR SPACE -- ALT AGL moved out to the ALTITUDE box above,
   // so this now just shows nearest-airspace vertical/horizontal
-  // distance (see getAirspaceSnapshot(), same background-task scan used
-  // elsewhere), recentred as a 2-line block around the box's vertical
+  // distance (see getAirspaceClearanceSnapshot() -- VERT is the airspace
+  // directly above/below you, HORI the nearest airspace at your altitude),
+  // recentred as a 2-line block around the box's vertical
   // middle instead of the old 3-line block that started at the middle
   // and ran downward. Each line falls back to "--" independently if its
   // data isn't available yet.
@@ -588,14 +589,18 @@ void drawParagliderPage() {
     top + rowH + 14,
     "AIR SPACE");
 
-  AirspaceResult boxAirspace;
-  bool boxAirspaceValid = getAirspaceSnapshot(boxAirspace);
+  // VERT = nearest controlled airspace directly above/below you (you're
+  // horizontally inside it); HORI = distance to the nearest controlled
+  // airspace at YOUR altitude. Independent searches -- see
+  // findAirspaceClearances(). "--" when there's nothing to report.
+  AirspaceClearance boxClearance;
+  bool boxClearanceValid = getAirspaceClearanceSnapshot(boxClearance);
 
   char vertBuf[16];
   char horiBuf[16];
   char cloudBuf[16];
-  formatVertValue(vertBuf, sizeof(vertBuf), boxAirspaceValid && boxAirspace.vertKnown, boxAirspace.vertDistance_ft);
-  formatHoriValue(horiBuf, sizeof(horiBuf), boxAirspaceValid, boxAirspace.horizDistance_km);
+  formatVertValue(vertBuf, sizeof(vertBuf), boxClearanceValid && boxClearance.vertValid, boxClearance.vertDistance_ft);
+  formatHoriValue(horiBuf, sizeof(horiBuf), boxClearanceValid && boxClearance.horizValid, boxClearance.horizDistance_km);
   formatCloudBaseValue(cloudBuf, sizeof(cloudBuf));
 
   int rowY1, rowY2, rowY3;
@@ -1909,14 +1914,18 @@ void drawParamotorPage() {
   u8g2.setFont(u8g2_font_helvB10_tf);
   u8g2.drawStr(colW + 5, top + rowH + 14, "AIR SPACE");
 
-  AirspaceResult boxAirspace;
-  bool boxAirspaceValid = getAirspaceSnapshot(boxAirspace);
+  // VERT = nearest controlled airspace directly above/below you (you're
+  // horizontally inside it); HORI = distance to the nearest controlled
+  // airspace at YOUR altitude. Independent searches -- see
+  // findAirspaceClearances(). "--" when there's nothing to report.
+  AirspaceClearance boxClearance;
+  bool boxClearanceValid = getAirspaceClearanceSnapshot(boxClearance);
 
   char vertBuf[16];
   char horiBuf[16];
   char cloudBuf[16];
-  formatVertValue(vertBuf, sizeof(vertBuf), boxAirspaceValid && boxAirspace.vertKnown, boxAirspace.vertDistance_ft);
-  formatHoriValue(horiBuf, sizeof(horiBuf), boxAirspaceValid, boxAirspace.horizDistance_km);
+  formatVertValue(vertBuf, sizeof(vertBuf), boxClearanceValid && boxClearance.vertValid, boxClearance.vertDistance_ft);
+  formatHoriValue(horiBuf, sizeof(horiBuf), boxClearanceValid && boxClearance.horizValid, boxClearance.horizDistance_km);
   formatCloudBaseValue(cloudBuf, sizeof(cloudBuf));
 
   int rowY1, rowY2, rowY3;
@@ -1998,6 +2007,18 @@ bool getAirspaceSnapshot(AirspaceResult& out) {
   if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
     valid = airspaceResultValid;
     if (valid) out = nearestAirspace;
+    xSemaphoreGive(backgroundDataMutex);
+  }
+  return valid;
+}
+
+// Clearance counterpart: the AIR SPACE box's VERT / HORI rows. Same copy-out-
+// under-the-lock pattern as the two accessors around it.
+bool getAirspaceClearanceSnapshot(AirspaceClearance& out) {
+  bool valid = false;
+  if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+    valid = airspaceClearanceValid;
+    if (valid) out = airspaceClearance;
     xSemaphoreGive(backgroundDataMutex);
   }
   return valid;

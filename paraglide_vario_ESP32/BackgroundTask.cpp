@@ -163,7 +163,28 @@ void backgroundTask(void* parameter) {
           nearestInfo
         );
 
+        // Third search: the two independent clearances shown in the AIR
+        // SPACE box (horizontal at my altitude / vertical above-below me).
+        // Cheaper than either search above -- see findAirspaceClearances().
+        AirspaceClearance clearance;
+
+        bool foundClearance = findAirspaceClearances(
+          pos.lat,
+          pos.lon,
+          pos.altFt,
+          groundElevationFt,
+          groundElevationValid,
+          clearance
+        );
+
         if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+          if (foundClearance) {
+            airspaceClearance = clearance;
+            airspaceClearanceValid = true;
+          } else {
+            airspaceClearanceValid = false;
+          }
+
           if (found) {
             nearestAirspace = nearest;
             airspaceResultValid = true;

@@ -1,6 +1,6 @@
 # Paraglide Vario / Flight Computer (ESP32-S3)
 
-A DIY flight computer for paragliding and paramotoring that costs about **$60 USD** in parts. It has a sunlight-readable screen, a climb/sink beeper (vario), GPS, a barometer, airspace warnings, live ADS-B traffic, weather stations, FANET radio and IGC flight logging.
+A DIY flight computer for paragliding and paramotoring that costs about **$60 USD** in parts. It has a sunlight-readable screen, a climb/sink beeper (vario), GPS, a barometer, airspace warnings, live ADS-B traffic with spoken voice alerts, weather stations, FANET radio and IGC flight logging.
 
 ![The finished flight computer](Photos/20260919_101505.jpg)
 
@@ -25,11 +25,13 @@ A DIY flight computer for paragliding and paramotoring that costs about **$60 US
 11. [Step 8: Assemble everything](#step-8-assemble-everything)
 12. [Step 9: First power-on check](#step-9-first-power-on-check)
 13. [How to use it](#how-to-use-it)
-14. [Cloud base estimate](#cloud-base-estimate)
-15. [Optional extras](#optional-extras)
-16. [Troubleshooting](#troubleshooting)
-17. [Using it outside New Zealand](#using-it-outside-new-zealand)
-18. [Credits](#credits)
+14. [Voice traffic alerts](#voice-traffic-alerts)
+15. [Cloud base estimate](#cloud-base-estimate)
+16. [Optional extras](#optional-extras)
+17. [Troubleshooting](#troubleshooting)
+18. [Using it outside New Zealand](#using-it-outside-new-zealand)
+19. [Code layout](#code-layout)
+20. [Credits](#credits)
 
 ---
 
@@ -40,6 +42,7 @@ A DIY flight computer for paragliding and paramotoring that costs about **$60 US
 - **Airspace:** warns you about nearby controlled airspace from an OpenAIP file
 - **Cloud base estimate:** a rough guess of how high the cloud base is, worked out from the temperature, humidity and pressure sensors (see [Cloud base estimate](#cloud-base-estimate))
 - **ADS-B page:** shows nearby aircraft on a radar-style display
+- **Voice traffic alerts:** when an aircraft comes close, the speaker tells you where it is, e.g. *"Aircraft on your two o'clock, flying north west, at two thousand four hundred feet, one thousand two hundred feet above you, and is eight hundred meters away."* You can switch this to a siren, or turn it off (see [Voice traffic alerts](#voice-traffic-alerts))
 - **Weather page:** wind from nearby weather stations (Zephyr) or from FANET
 - **FANET:** sends and receives FANET radio messages, with preset messages you can broadcast
 - **IGC flight logging** to the SD card, downloadable over WiFi
@@ -218,17 +221,19 @@ If the upload doesn't start, hold the **BOOT** button on the board, tap **RESET*
 ## Step 7: Prepare the SD card
 
 1. **Format** the microSD card as **FAT32**.
-2. Copy the files you want from [`paraglide_vario_ESP32/Goes into SD card/`](paraglide_vario_ESP32/Goes%20into%20SD%20card/) into the **root** of the card (not inside a folder):
+2. Copy the files you want from [`paraglide_vario_ESP32/Goes into SD card/`](paraglide_vario_ESP32/Goes%20into%20SD%20card/) onto the **root** of the card. The two files go straight onto the card, but the **`VOICE` folder must be copied as a folder**, with the clips inside it:
 
-| File | What it's for |
+| File / folder | What it's for |
 |---|---|
 | `AIRSPACE.txt` | Airspace data, used for warnings |
 | `Lower_North_Island.ADEM` | Terrain height map, used to work out your height above ground (AGL). It's about 99 MB. |
+| `VOICE/` (folder) | The 60 short speech clips (`V000.PCM` to `V059.PCM`, about 1.25 MB in total) used for [voice traffic alerts](#voice-traffic-alerts). The card must end up with `/VOICE/V000.PCM`, `/VOICE/V001.PCM` and so on. |
 
 3. Eject the card safely and put it into the microSD slot on the Waveshare board.
 
 **Notes:**
-- The vario still works without the SD card, but you won't get flight logs, maps or airspace.
+- The vario still works without the SD card, but you won't get flight logs, maps, airspace or voice alerts.
+- All 60 voice clips must be present. If the `VOICE` folder or any single clip is missing, voice alerts are switched off (the rest of the unit works normally). `manifest.txt` in that folder is just a list of what each clip says. You don't need to copy it.
 - You can keep several `.ADEM` maps on the card and choose between them from the menu (**Map**).
 - The included airspace and terrain files cover the lower North Island of New Zealand. See [Optional extras](#optional-extras) for other areas.
 - An optional splash image can be shown at startup: a file called `ROY.BIN` in the card root. If it's missing, a plain text splash screen is shown instead, so you can skip this.
@@ -256,7 +261,7 @@ Do this indoors first, then repeat outside.
 2. Move the unit up and down by about a metre. You should hear the **vario beep** and see the altitude change.
 3. Take it **outside with a clear view of the sky**. The first GPS lock can take a few minutes. Once it locks, speed, heading and time appear.
 4. Look at the **AIR SPACE** box on the main screen. After the first temperature/humidity reading (about 10 seconds) and once the GPS has calibrated the altitude, the **CLD BASE** line shows a number. Until then it shows `--`. See [Cloud base estimate](#cloud-base-estimate) to calibrate it.
-5. To see what the device is doing while it boots, open **Tools → Serial Monitor** in the Arduino IDE (baud rate **115200**) while the unit is plugged into your computer. It prints messages showing whether the SD card, barometer, GPS and radio all started correctly.
+5. To see what the device is doing while it boots, open **Tools → Serial Monitor** in the Arduino IDE (baud rate **115200**) while the unit is plugged into your computer. It prints messages showing whether the SD card, barometer, GPS and radio all started correctly. If the voice clips loaded you will see `[Voice] Loaded 60 voice clips into PSRAM`.
 
 ---
 
@@ -277,13 +282,49 @@ The unit has **one button**:
 - **Config:** time zone, units (altitude / speed), vario pitch, volume, screen orientation
 - **Connections:** WiFi on/off and network choice, Bluetooth (engine meter), FANET on/off, FANET preset messages
 - **Map:** choose which terrain map to use
-- **ADS-B settings:** alert distances, range rings, airspace bar
+- **ADS-B settings:** alert radius and vertical threshold, auto-jump to the ADS-B page, **Alarm Sound** (Off / Alarm / Voice), **Alert Volume**, range rings, airspace bars
 - **Weather settings:** update interval, number of stations, data source
 - **Flight recordings:** recording on/off, **Export files** (see below)
 
 **Flight logs:** the unit automatically starts recording an `.IGC` file when you start moving (above about 10 km/h for 10 seconds). To download logs, open **Flight recordings → Export files**. Once the unit is connected to WiFi it shows a web address (something like `http://192.168.x.x/`). Open that in a browser on a phone or computer on the same network and click the file to download.
 
 ---
+
+## Voice traffic alerts
+
+When ADS-B shows an aircraft close to you, the unit can **speak** the warning (or sound a siren) as well as showing it on screen. For example:
+
+> *"Aircraft on your two o'clock, flying north west, at two thousand four hundred feet, one thousand two hundred feet above you, and is eight hundred meters away."*
+
+**Turning it on and setting it up** (all under **Config → ADSB Settings**):
+
+| Item | What it does |
+|---|---|
+| **Alarm Sound** | Select it (hold the button ~2 seconds) to cycle **Off → Alarm → Voice**; each select moves it to the next mode. *Alarm* is the two-tone siren (5 seconds). *Voice* speaks the sentence above. *Off* mutes both. |
+| **Alert Volume** | How loud the alert is, 0–100% in 10% steps. It applies to whichever of Alarm or Voice is selected. Select **Test** at the bottom of the list to hear it (it plays the example sentence above). It deliberately does not play a preview each time you scroll, because the full sentence takes about 5 seconds. |
+| **Alert Radius** | How close, sideways, an aircraft must be to trigger an alert: 3, 5, 8 or 10 km (default 5). |
+| **Vertical Threshold** | How close, up or down, it must be: 1000, 1500, 2000 or 3000 ft (default 2000). |
+| **Auto-Jump** | Whether a new aircraft also switches the screen to the ADS-B page. This only changes the screen. The audio alert happens either way. |
+
+**What it tells you, in order:**
+
+1. **Where it is** as a clock position relative to the direction you are travelling (12 o'clock is straight ahead, 3 is to your right, 9 to your left).
+2. **Which way it is flying** as a compass direction (north, north east, and so on). If the aircraft isn't broadcasting a heading it says *"heading unknown"*.
+3. **Its altitude**, rounded to the nearest 100 ft.
+4. **How far above or below you** it is, rounded to the nearest 100 ft.
+5. **How far away** it is: in metres (nearest 100) when it is under 2 km, or in whole kilometres from 2 km up.
+
+**When it speaks:**
+- **Straight away** when a new aircraft enters your alert radius and vertical band.
+- **Again every 60 seconds** for as long as an aircraft is still inside that zone. Each alert restarts the 60-second wait.
+- It always describes the **nearest** aircraft, which is not necessarily the one that triggered the alert.
+- It plays over the vario tone while it is speaking, and the vario carries on afterwards.
+
+**Good to know:**
+- **It needs a GPS fix and for you to be moving.** The clock position is worked out from your direction of travel, so with no valid GPS course (for example standing still on the ground, or before the first fix) the voice alert stays silent rather than guess. The siren does not have this limit.
+- **It needs the SD card with the `VOICE` folder** (see [Step 7](#step-7-prepare-the-sd-card)) and **PSRAM enabled** in the Tools settings (see [Step 6](#step-6-upload-the-code)). The clips are loaded into memory once at start-up, so nothing is read from the card while an alert is playing.
+- ADS-B data arrives over WiFi, so the alert only works when the unit is connected (for example to your phone hotspot). See the notes on ADS-B in [Step 5](#step-5-add-your-wifi-details).
+- Like the rest of this project it is an aid, not a safety system. Keep looking around.
 
 ## Cloud base estimate
 
@@ -311,7 +352,7 @@ The temperature sensor sits next to the processor and battery, so it reads **war
 1. Switch the unit on and leave it for about **10 minutes** so it warms up to normal.
 2. Compare the temperature on the unit with a trusted thermometer (or a nearby weather station) in the same conditions. Ideally do this outdoors, in the shade.
 3. Work out the difference. For example, the unit says 24°C and the thermometer says 21°C, so the difference is **3.0**.
-4. In the Arduino IDE, open `paraglide_vario_ESP32.ino` and use **Edit → Find** to search for `SHT_SELF_HEAT_OFFSET_C`.
+4. In the Arduino IDE, open the **`AuxSensors.h`** tab and use **Edit → Find** to search for `SHT_SELF_HEAT_OFFSET_C`.
 5. Change the number after it (the default is `0.0f`), for example:
 
 ```cpp
@@ -352,8 +393,12 @@ The [`Engine_meter/`](Engine_meter/) folder contains a separate project (nRF5284
 | **Error about `PCF85063A.h`, `U8g2` or another missing file** | A library isn't installed. Go back to [Step 4.4](#44-install-the-libraries). |
 | **Error mentioning `U8G2_ST7305_300X400…`** | The wrong U8g2 is installed. Use the copy from Waveshare's repo (see Step 4.4). |
 | **Screen stays blank or code crashes on boot** | Check the Tools settings in Step 6, especially **PSRAM: OPI PSRAM** and **Flash Size: 16MB**. |
-| **No sound** | Check the speaker is plugged in and the vario isn't muted (hold the button ~3 s). Check volume in **Config → Volume**. |
+| **No sound** | Check the speaker is plugged in and the vario isn't muted (hold the button ~3 s). Check volume in **Config → Volume**. Traffic alerts have their own level in **ADSB Settings → Alert Volume**. |
 | **No GPS fix** | Go outside with a clear view of the sky and wait a few minutes. Check the GPS module's soldering and that the case doesn't block it. |
+| **No voice alert (siren works, or nothing plays)** | Check **Config → ADSB Settings → Alarm Sound** is set to **Voice** (not Alarm or Off) and the Alert Volume isn't 0%. Then check the Serial Monitor at boot for `[Voice] Loaded 60 voice clips into PSRAM`. |
+| **Serial Monitor says `[Voice] /VOICE folder not found` or `Missing clip file`** | The `VOICE` folder must sit in the root of the SD card with all 60 clips in it (`V000.PCM` to `V059.PCM`). Copy the whole folder again. |
+| **Serial Monitor says `[Voice] PSRAM allocation failed`** | Set **Tools → PSRAM → OPI PSRAM** and upload again (see [Step 6](#step-6-upload-the-code)). |
+| **Voice alert works in the menu Test but never speaks in flight** | It stays silent until the GPS has a valid course, so you need a fix and to be moving. It also needs WiFi for the ADS-B data, and the aircraft must be inside your Alert Radius and Vertical Threshold. |
 | **Altitude doesn't change / vario silent** | The BMP580 isn't being detected. Check its soldering and orientation. The Serial Monitor will report this on boot. |
 | **SD card not detected** | Make sure it's FAT32, and files are in the root, not inside a folder. Try a different (smaller) card. |
 | **WiFi won't connect** | 2.4 GHz only. Check the name and password in `secrets.h` match exactly (they're case-sensitive), then re-upload. |
@@ -370,14 +415,32 @@ Still stuck? Open an **Issue** on this GitHub page, include what you were doing,
 
 The code is set up for New Zealand, so a few things need changing elsewhere:
 
-- **FANET radio frequency** is set to 868.2 MHz (NZ). Other regions differ (for example Australia uses the 915–928 MHz band). It's set in `paraglide_vario_ESP32.ino` where `fanetRadio.begin(` is called. **Check your local rules before changing it.**
+- **FANET radio frequency** is set to 868.2 MHz (NZ). Other regions differ (for example Australia uses the 915–928 MHz band). It's set where `fanetRadio.begin(` is called, which appears in both `paraglide_vario_ESP32.ino` and `FanetHandlers.cpp`, so change both. **Check your local rules before changing it.**
 - **Weather stations** come from Zephyr (`api.zephyrapp.nz`), which only covers NZ. FANET weather still works anywhere.
 - **Terrain maps** are built from NZ LINZ data. The conversion script would need different source data elsewhere.
 - **Time zone** defaults to NZ (with daylight saving); you can set a fixed offset in **Config → Time**.
 - **ADS-B** uses the worldwide adsb.fi service and airspace uses OpenAIP, so those work anywhere.
+- **Voice alerts** are in English, in feet and metres/kilometres, and work anywhere. To change the words you would need to regenerate the 60 clips and `VoiceClips.h` together so they stay in step.
 
 ---
 
+## Code layout
+
+The firmware is split into one `.h`/`.cpp` pair per subsystem, all inside `paraglide_vario_ESP32/`. `paraglide_vario_ESP32.ino` holds only the includes, `setup()` and `loop()`. You don't need any of this to build the project, but it helps if you want to change something.
+
+| File | What it does |
+|---|---|
+| `Buzzer` | Speaker and audio chip: vario beeps, sink tone, siren, mute jingle, and the voice alert trigger (`triggerAdsbAlert()`) |
+| `VoiceAlert`, `VoiceClips.h` | Voice alerts: loads the 60 clips from the SD card into PSRAM at start-up, builds the spoken sentence and plays it |
+| `AdsbClient` | Fetches and parses ADS-B traffic and works out which aircraft are threats |
+| `Vario`, `WindEstimator` | Barometer, altitude and climb rate; wind estimate |
+| `AuxSensors`, `CloudBase.h` | Battery, temperature/humidity sensor (cloud base estimate) and the clock |
+| `FanetHandlers`, `Fanet`, `FanetMessaging`, `Sx126xLink` | FANET radio |
+| `WeatherClient` | Weather station data |
+| `Gps`, `SdCard`, `Display`, `IgcRecorder` | GPS object, SD card, screen, flight logging |
+| `BackgroundTask` | The second processor core: WiFi, Bluetooth, web file server, ADS-B and weather polling, terrain and airspace lookups |
+| `PageButton`, `menu`, `settings`, `DrawPages` | The single button, the menus, saved settings and drawing the pages |
+
 ## Credits
 
-Designed and built by Andrew Sargent, including the PCB and case design. The code was written with help from Claude, GPT-5, Gemini and Copilot, plus code from other projects on GitHub. Thanks to everyone whose open-source work this builds on.
+Designed and built by Andrew Sargent, including the PCB and case design. The code was written with help from Claude, GPT-5, Gemini and Copilot, plus code from other projects on GitHub. The voice alert clips were generated offline with the [Piper](https://github.com/rhasspy/piper) neural text-to-speech engine. Thanks to everyone whose open-source work this builds on.

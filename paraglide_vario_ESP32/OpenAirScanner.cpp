@@ -1880,3 +1880,224 @@ bool findNearestControlledAirspace(
 
     return haveBest;
 }
+
+
+// ---------------------------------------------------------------------------
+// Clearances (see AirspaceClearance in the header)
+//
+// One pass over the cache, same building blocks as the search above, but
+// the work is split by what each answer needs:
+//   - HORIZONTAL distance is only computed for airspace at (or possibly at)
+//     the current altitude -- everything vertically clear of you is skipped,
+//     which is where the expensive per-edge distance work used to be spent.
+//   - the VERTICAL answer only needs "am I horizontally inside it?" -- a
+//     bounding-box test plus point-in-polygon, no distance maths at all.
+// ---------------------------------------------------------------------------
+
+bool findAirspaceClearances(
+    double curLat,
+    double curLon,
+    float curAlt_ft_msl,
+    float groundElev_ft,
+    bool groundElevValid,
+    AirspaceClearance& out) {
+
+    if (!databaseLoaded ||
+        airspaceCount == 0) {
+
+        return false;
+    }
+
+    out.horizValid = false;
+    out.horizDistance_km = 0.0f;
+    out.horizName[0] = '\0';
+    out.horizClassId[0] = '\0';
+
+    out.vertValid = false;
+    out.vertUnknown = false;
+    out.vertDistance_ft = 0.0f;
+    out.vertAbove = false;
+    out.vertName[0] = '\0';
+    out.vertClassId[0] = '\0';
+
+    double bestHorizKm = 1e18;
+    float  bestVertFt  = 1e18f;
+
+    for (uint16_t i = 0;
+         i < airspaceCount;
+         i++) {
+
+        const CachedAirspace& a =
+            airspaces[i];
+
+        // Same eligibility as the alert/banner search: never a CFZ.
+        if (!a.alertEligible) {
+            continue;
+        }
+
+        const float floorFt =
+            resolveAltitudeFt(a.floor, groundElev_ft);
+
+        const float ceilingFt =
+            resolveAltitudeFt(a.ceiling, groundElev_ft);
+
+        const bool floorNeedsGround =
+            (a.floor.ref == ALTREF_AGL) ||
+            (a.floor.ref == ALTREF_SFC);
+
+        const bool ceilingNeedsGround =
+            (a.ceiling.ref == ALTREF_AGL) ||
+            (a.ceiling.ref == ALTREF_SFC);
+
+        const bool vertKnown =
+            groundElevValid ||
+            !(floorNeedsGround || ceilingNeedsGround);
+
+        const bool insideVert =
+            (curAlt_ft_msl >= floorFt) &&
+            (curAlt_ft_msl <= ceilingFt);
+
+        // Could this airspace stop me flying on level right now? Unknown
+        // vertical extent is treated as "yes" (safe side).
+        const bool atMyAltitude = !vertKnown || insideVert;
+
+        // -------------------------------------------------------------------
+        // Horizontal relationship. horizKm is only filled in when this
+        // airspace is at my altitude; insideHoriz is always exact.
+        // -------------------------------------------------------------------
+
+        bool   insideHoriz = false;
+        double horizKm     = 1e18;
+
+        if (a.isCircle) {
+
+            // Bounding box is deliberately conservative for circles (see the
+            // note in findNearestControlledAirspace()), so always use the
+            // exact test -- it's a single haversine.
+            const double centerDistance =
+                haversine_km(
+                    curLat,
+                    curLon,
+                    a.centerLat,
+                    a.centerLon);
+
+            const double radiusKm =
+                a.radius_nm *
+                NM_TO_KM;
+
+            insideHoriz =
+                centerDistance <= radiusKm;
+
+            horizKm =
+                insideHoriz
+                    ? 0.0
+                    : centerDistance - radiusKm;
+        }
+        else {
+
+            if (a.numPoints < 3) {
+                continue;
+            }
+
+            const bool insideBoundingBox =
+                !(curLat < a.minLat ||
+                  curLat > a.maxLat ||
+                  curLon < a.minLon ||
+                  curLon > a.maxLon);
+
+            if (insideBoundingBox) {
+
+                insideHoriz =
+                    pointInPolygon(
+                        curLat,
+                        curLon,
+                        &pointPoolLat[a.pointStart],
+                        &pointPoolLon[a.pointStart],
+                        a.numPoints);
+            }
+
+            if (insideHoriz) {
+
+                horizKm = 0.0;
+            }
+            else if (atMyAltitude) {
+
+                // Only now is the (comparatively expensive) edge-by-edge
+                // distance worth computing -- and only if the cheap
+                // bounding-box lower bound says it could beat the best.
+                if (boundingBoxDistanceKm(curLat, curLon, a) <= bestHorizKm) {
+
+                    horizKm =
+                        polygonDistanceKm(
+                            curLat,
+                            curLon,
+                            a,
+                            bestHorizKm);
+                }
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // HORIZONTAL answer: nearest airspace at my altitude.
+        // -------------------------------------------------------------------
+
+        if (atMyAltitude &&
+            horizKm < bestHorizKm) {
+
+            bestHorizKm = horizKm;
+
+            out.horizValid = true;
+            out.horizDistance_km = (float)horizKm;
+
+            strncpy(out.horizName, a.name, OAS_MAX_NAME_LEN - 1);
+            out.horizName[OAS_MAX_NAME_LEN - 1] = '\0';
+
+            strncpy(out.horizClassId, a.classId, OAS_MAX_CLASS_LEN - 1);
+            out.horizClassId[OAS_MAX_CLASS_LEN - 1] = '\0';
+        }
+
+        // -------------------------------------------------------------------
+        // VERTICAL answer: nearest airspace I'm horizontally inside.
+        // -------------------------------------------------------------------
+
+        if (insideHoriz) {
+
+            if (!vertKnown) {
+
+                out.vertUnknown = true;
+            }
+            else {
+
+                const float vertFt =
+                    insideVert
+                        ? 0.0f
+                        : (curAlt_ft_msl < floorFt
+                            ? floorFt - curAlt_ft_msl
+                            : curAlt_ft_msl - ceilingFt);
+
+                if (vertFt < bestVertFt) {
+
+                    bestVertFt = vertFt;
+
+                    out.vertValid = true;
+                    out.vertDistance_ft = vertFt;
+                    out.vertAbove = (curAlt_ft_msl < floorFt);
+
+                    strncpy(out.vertName, a.name, OAS_MAX_NAME_LEN - 1);
+                    out.vertName[OAS_MAX_NAME_LEN - 1] = '\0';
+
+                    strncpy(out.vertClassId, a.classId, OAS_MAX_CLASS_LEN - 1);
+                    out.vertClassId[OAS_MAX_CLASS_LEN - 1] = '\0';
+                }
+            }
+        }
+    }
+
+    // A known vertical answer beats "unknown" -- only report unknown when
+    // there is nothing known to show.
+    if (out.vertValid) {
+        out.vertUnknown = false;
+    }
+
+    return true;
+}

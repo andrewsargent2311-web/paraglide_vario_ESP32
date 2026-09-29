@@ -212,6 +212,11 @@ bool getAirspaceSnapshot(AirspaceResult& out);
 // only drawAirspaceInfoBar() below.
 bool getAirspaceInfoSnapshot(AirspaceResult& out);
 
+// Latest horizontal-at-my-altitude / vertical-above-or-below-me clearances
+// (see findAirspaceClearances()). Feeds only the AIR SPACE box's VERT and
+// HORI rows -- the warning banner still uses getAirspaceSnapshot().
+bool getAirspaceClearanceSnapshot(AirspaceClearance& out);
+
 // "Airspace Info" bar -- ADS-B page only (Config > ADS-B Settings >
 // Airspace Info, settings.h's airspaceInfoBarEnabled). Shows whichever
 // charted airspace (controlled, MBZ, or CFZ) the pilot is currently

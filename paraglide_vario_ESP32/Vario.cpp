@@ -228,14 +228,14 @@ void updateVario() {
     currentClimbRateMS = computeClimbRateLeastSquares();
   }
 
-  if (debugNow) {
-    Serial.printf(
-      "[VARIO DEBUG] OK -- pressure=%.2f hPa, QNH=%.2f (calibrated=%d, fallback=%d), "
-      "altitude=%.1f m, windowCount=%d, climb=%.2f m/s\n",
-      bmp.pressure, currentQNH, qnhCalibrated, qnhIsFallback,
-      currentAltitudeM, windowCount, currentClimbRateMS);
-    lastVarioDebug = millis();
-  }
+  // if (debugNow) {
+  //   Serial.printf(
+  //     "[VARIO DEBUG] OK -- pressure=%.2f hPa, QNH=%.2f (calibrated=%d, fallback=%d), "
+  //     "altitude=%.1f m, windowCount=%d, climb=%.2f m/s\n",
+  //     bmp.pressure, currentQNH, qnhCalibrated, qnhIsFallback,
+  //     currentAltitudeM, windowCount, currentClimbRateMS);
+  //   lastVarioDebug = millis();
+  // }
 }
 
 float computeClimbRateLeastSquares() {
