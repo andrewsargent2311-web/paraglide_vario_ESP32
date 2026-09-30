@@ -18,26 +18,28 @@ unsigned long lastIgcFixWrite = 0;
 // =====================================================
 // IGC FLIGHT RECORDER
 // =====================================================
+
 void formatIgcLatLon(double lat, double lon, char* out, size_t outSize) {
+  /*
+    Structural guard only: keeps the B-record fixed-width whatever comes in.
+    Whether a fix is trustworthy is decided by the caller (A/V flag), not here.
+    Written as !(x <= limit) so NaN is caught too.
+  */
+ 
+  if (!(fabs(lat) <= 90.0))  lat = 0.0;
+  if (!(fabs(lon) <= 180.0)) lon = 0.0;
+
   char latHemi = (lat >= 0) ? 'N' : 'S';
   char lonHemi = (lon >= 0) ? 'E' : 'W';
 
-  double absLat = fabs(lat);
-  int latDeg = (int)absLat;
-  double latMinFull = (absLat - latDeg) * 60.0;
-  int latMinInt = (int)latMinFull;
-  int latMinFrac = (int)roundf((latMinFull - latMinInt) * 1000.0f);
+  long latMM = lround(fabs(lat) * 60000.0);   // thousandths of a minute
+  long lonMM = lround(fabs(lon) * 60000.0);
 
-  double absLon = fabs(lon);
-  int lonDeg = (int)absLon;
-  double lonMinFull = (absLon - lonDeg) * 60.0;
-  int lonMinInt = (int)lonMinFull;
-  int lonMinFrac = (int)roundf((lonMinFull - lonMinInt) * 1000.0f);
-
-  snprintf(out, outSize, "%02d%02d%03d%c%03d%02d%03d%c",
-           latDeg, latMinInt, latMinFrac, latHemi,
-           lonDeg, lonMinInt, lonMinFrac, lonHemi);
+  snprintf(out, outSize, "%02ld%02ld%03ld%c%03ld%02ld%03ld%c",
+           latMM / 60000, (latMM / 1000) % 60, latMM % 1000, latHemi,
+           lonMM / 60000, (lonMM / 1000) % 60, lonMM % 1000, lonHemi);
 }
+
 void writeIgcBRecord() {
   if (!igcFile) return;
 

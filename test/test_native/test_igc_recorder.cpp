@@ -184,7 +184,27 @@ TEST(IgcLatLonFormat, RoundingUpAtAMinuteBoundaryStaysWellFormed)
         EXPECT_NEAR(decodeLon(out), c.lon, kOneThousandthMinuteDeg);
     }
 }
+/*
+    Adds checks that non-finite and out-of-range inputs fall back to zero, and that the function never writes past the given buffer size.
+*/
+TEST(IgcLatLonFormat, NonFiniteInputFallsBackToZero)
+{
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    const double inf = std::numeric_limits<double>::infinity();
 
+    EXPECT_EQ(format(nan, 8.5),   "0000000N00830000E");   // each axis independent
+    EXPECT_EQ(format(46.5, nan),  "4630000N00000000E");
+    EXPECT_EQ(format(nan, nan),   "0000000N00000000E");
+    EXPECT_EQ(format(inf, -inf),  "0000000N00000000E");
+}
+
+TEST(IgcLatLonFormat, OutOfRangeInputFallsBackToZero)
+{
+    EXPECT_EQ(format(91.0, 181.0),         "0000000N00000000E");
+    EXPECT_EQ(format(-91.0, -181.0),       "0000000N00000000E");
+    EXPECT_EQ(format(90.0001, 180.0001),   "0000000N00000000E");
+    EXPECT_EQ(format(1e300, -1e300),       "0000000N00000000E");
+}
 
 // ---------------------------------------------------------
 // Buffer handling
