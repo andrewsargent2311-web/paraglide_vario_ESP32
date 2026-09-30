@@ -18,7 +18,7 @@ const unsigned long ADSB_INTERVAL_MS = 15000;  // Poll the server every 15 secon
 
 extern volatile bool adsbTaskRunning;
 extern volatile bool adsbNewThreat;
-extern DynamicJsonDocument adsbDoc;
+extern JsonDocument adsbDoc;
 extern bool conflictDetectedThisFrame;
 extern volatile bool hasAdsbData;
 extern unsigned long lastAdsbCheckTime;

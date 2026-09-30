@@ -3,6 +3,7 @@ secrets.h
 build/
 .vscode/
 .idea/
+.pio/
 
 *.elf
 *.hex

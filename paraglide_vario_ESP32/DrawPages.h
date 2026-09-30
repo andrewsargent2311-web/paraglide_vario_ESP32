@@ -145,7 +145,7 @@ extern bool windEstimateValid;
 extern TinyGPSPlus gps;
 
 extern SemaphoreHandle_t backgroundDataMutex;
-extern DynamicJsonDocument adsbDoc;
+extern JsonDocument adsbDoc;
 extern bool conflictDetectedThisFrame;
 extern volatile bool hasAdsbData;
 

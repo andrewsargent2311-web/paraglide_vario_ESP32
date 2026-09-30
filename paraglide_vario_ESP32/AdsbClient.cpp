@@ -14,7 +14,7 @@
 volatile bool adsbTaskRunning = false;
 volatile bool adsbNewThreat = false;
 
-DynamicJsonDocument adsbDoc(10000);  // Single shared ADS-B document; avoids a second JSON copy.
+JsonDocument adsbDoc;  // Single shared ADS-B document; avoids a second JSON copy.
 bool conflictDetectedThisFrame = false;
 volatile bool hasAdsbData = false;
 

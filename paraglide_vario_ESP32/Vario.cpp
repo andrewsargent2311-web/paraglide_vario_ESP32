@@ -1,8 +1,6 @@
 #include "Vario.h"
 #include "Gps.h"
-#include "AuxSensors.h"
 #include "settings.h"
-#include "DrawPages.h"
 #include <math.h>
 
 Adafruit_BMP5xx bmp;

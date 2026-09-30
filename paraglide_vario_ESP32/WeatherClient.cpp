@@ -320,7 +320,7 @@ void updateWeather() {
   // 2048 bytes is deliberately much smaller than the previous
   // 50000-byte document.
   // ---------------------------------------------------------
-  DynamicJsonDocument stationDoc(2048);
+  JsonDocument stationDoc;
 
   Serial.printf(
     "[Zephyr] Heap before station processing: %u | Min heap: %u\n",

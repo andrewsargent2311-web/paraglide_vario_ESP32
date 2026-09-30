@@ -64,7 +64,7 @@ void updateCloudBaseEstimate() {
 // =====================================================
 // CLOCK / PCF85063 HARDWARE RTC
 // =====================================================
-PCF85063A rtc(&Wire);
+PCF85063A rtc;
 unsigned long lastRtcPush = 0;
 bool rtcOK = false;
 bool clockSynced = false;
