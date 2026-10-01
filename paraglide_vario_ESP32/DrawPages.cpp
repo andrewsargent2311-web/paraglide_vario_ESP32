@@ -127,8 +127,9 @@ void drawTopBar() {
     snprintf(
       qnhBuf,
       sizeof(qnhBuf),
-      "Q%.0f",
-      currentQNH);
+      "Q%.0f%s",
+      currentQNH,
+      qnhIsFallback ? "*" : "");
   } else {
     snprintf(
       qnhBuf,

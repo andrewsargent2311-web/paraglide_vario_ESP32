@@ -163,7 +163,7 @@ extern float currentAltitudeM;
 extern float currentClimbRateMS;
 extern float currentQNH;
 extern bool qnhCalibrated;
-
+extern bool qnhIsFallback;
 extern uint8_t batteryPercent;
 extern bool battInitialized;
 extern bool clockSynced;
