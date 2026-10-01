@@ -14,6 +14,7 @@ int windowIndex = 0;
 unsigned long lastBaroSample = 0;
 float currentAltitudeM = 0.0f;
 float currentClimbRateMS = 0.0f;
+float currentClimbRateAvgMS = 0.0f;
 float currentQNH = SEA_LEVEL_QNH_DEFAULT;
 // QNH is usable from the very first loop: boot starts on standard
 // atmosphere (1013.25) so altitude/vario/AGL etc. run immediately and
@@ -182,7 +183,15 @@ void updateVario() {
     qnhAvgActive = false;
   }
 
-  float newAltitudeM = bmp.readAltitude(currentQNH);
+  // Altitude for the climb-rate window uses a FIXED reference (standard
+  // 1013.25 hPa), NOT currentQNH. QNH gets replaced by a GPS-derived value
+  // shortly after boot and again every QNH_RECALIBRATION_INTERVAL_MS; if the
+  // window held QNH-corrected altitude, each of those updates would add a
+  // tens-of-metres step to the samples and the regression would read it as
+  // a huge climb/sink spike. Climb RATE doesn't depend on the reference, so
+  // the window stays on the fixed one and only currentAltitudeM (display,
+  // AGL, logging) gets the QNH-corrected value.
+  float newAltitudeM = bmp.readAltitude(SEA_LEVEL_QNH_DEFAULT);
 
   // ------------------------------------------------------------------
   // Outlier rejection -- guards against a single corrupted I2C read
@@ -216,15 +225,17 @@ void updateVario() {
     }
   }
 
-  currentAltitudeM = newAltitudeM;
+  // QNH-corrected altitude for everything that shows or logs altitude.
+  currentAltitudeM = bmp.readAltitude(currentQNH);
 
-  altWindow[windowIndex] = currentAltitudeM;
+  altWindow[windowIndex] = newAltitudeM;  // fixed-reference altitude, see above
   timeWindow[windowIndex] = millis();
   windowIndex = (windowIndex + 1) % CLIMB_WINDOW_N;
   if (windowCount < CLIMB_WINDOW_N) windowCount++;
 
   if (windowCount >= 3) {
     currentClimbRateMS = computeClimbRateLeastSquares();
+    updateClimbRateAverage(currentClimbRateMS, millis());
   }
 
   // if (debugNow) {
@@ -235,6 +246,40 @@ void updateVario() {
   //     currentAltitudeM, windowCount, currentClimbRateMS);
   //   lastVarioDebug = millis();
   // }
+}
+
+// ---------------------------------------------------------------------
+// Averaged climb rate for display/glide ratio -- see DISPLAY_CLIMB_AVG_MS.
+// Time-stamped ring buffer so the average covers a fixed span of time even
+// if a sample or two was dropped by the outlier check.
+// ---------------------------------------------------------------------
+static float avgRate[DISPLAY_CLIMB_BUF_N];
+static unsigned long avgTimeMs[DISPLAY_CLIMB_BUF_N];
+static int avgHead = 0;   // next slot to write
+static int avgCount = 0;  // valid entries (<= DISPLAY_CLIMB_BUF_N)
+
+void resetClimbRateAverage() {
+  avgHead = 0;
+  avgCount = 0;
+  currentClimbRateAvgMS = 0.0f;
+}
+
+void updateClimbRateAverage(float rateMS, unsigned long nowMs) {
+  avgRate[avgHead] = rateMS;
+  avgTimeMs[avgHead] = nowMs;
+  avgHead = (avgHead + 1) % DISPLAY_CLIMB_BUF_N;
+  if (avgCount < DISPLAY_CLIMB_BUF_N) avgCount++;
+
+  float sum = 0.0f;
+  int used = 0;
+  for (int i = 0; i < avgCount; i++) {
+    int idx = (avgHead + DISPLAY_CLIMB_BUF_N - 1 - i) % DISPLAY_CLIMB_BUF_N;  // newest first
+    if (nowMs - avgTimeMs[idx] > DISPLAY_CLIMB_AVG_MS) break;                 // older than the window
+    sum += avgRate[idx];
+    used++;
+  }
+  // used >= 1 always: the sample just pushed has age 0.
+  currentClimbRateAvgMS = sum / used;
 }
 
 float computeClimbRateLeastSquares() {

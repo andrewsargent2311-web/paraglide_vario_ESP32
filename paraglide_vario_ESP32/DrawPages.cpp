@@ -553,7 +553,7 @@ void drawParagliderPage() {
       buffer,
       sizeof(buffer),
       "%+.1f",
-      currentClimbRateMS);
+      currentClimbRateAvgMS);
 
     drawLargeValueWithSmallUnit(
       colW / 2 - 3,
@@ -625,12 +625,12 @@ void drawParagliderPage() {
     "GLIDE RATIO");
 
   bool glideValid =
-    bmpOK && gps.speed.isValid() && currentClimbRateMS < -CLIMB_DEADBAND_MS && currentClimbRateMS > -20.0f;
+    bmpOK && gps.speed.isValid() && currentClimbRateAvgMS < -CLIMB_DEADBAND_MS && currentClimbRateAvgMS > -20.0f;
 
   if (glideValid) {
 
     float glideRatio =
-      gps.speed.mps() / (-currentClimbRateMS);
+      gps.speed.mps() / (-currentClimbRateAvgMS);
 
     snprintf(
       buffer,
@@ -1659,10 +1659,10 @@ void drawADSBPage() {
   u8g2.setFont(u8g2_font_helvB18_tf);  // True Helvetica Bold 14px — matches flight tags!
 
   char varioText[12];  // Buffer to store formatted layout text
-  if (currentClimbRateMS >= 0.0f) {
-    snprintf(varioText, sizeof(varioText), "+%.1f m/s", currentClimbRateMS);
+  if (currentClimbRateAvgMS >= 0.0f) {
+    snprintf(varioText, sizeof(varioText), "+%.1f m/s", currentClimbRateAvgMS);
   } else {
-    snprintf(varioText, sizeof(varioText), "%.1f m/s", currentClimbRateMS);
+    snprintf(varioText, sizeof(varioText), "%.1f m/s", currentClimbRateAvgMS);
   }
 
   // A. CALCULATE POSITION LOGIC
