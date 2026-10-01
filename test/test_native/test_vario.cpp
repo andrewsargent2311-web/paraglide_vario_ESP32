@@ -196,3 +196,94 @@ TEST_F(VarioClimbRate, FullWindowAfterWrapAroundUsesOnlyNewestSamples)
 
     EXPECT_NEAR(computeClimbRateLeastSquares(), 2.0f, 0.001f);
 }
+
+// ---------------------------------------------------------
+// Averaged display climb rate (updateClimbRateAverage)
+// ---------------------------------------------------------
+
+class VarioClimbRateAverage : public ::testing::Test
+{
+protected:
+    void SetUp() override { resetClimbRateAverage(); }
+};
+
+TEST_F(VarioClimbRateAverage, SingleSampleIsItself)
+{
+    updateClimbRateAverage(2.5f, 10000);
+
+    EXPECT_FLOAT_EQ(currentClimbRateAvgMS, 2.5f);
+}
+
+TEST_F(VarioClimbRateAverage, SteadyRateAveragesToThatRate)
+{
+    for (int i = 0; i < 30; ++i)
+    {
+        updateClimbRateAverage(1.2f, 10000UL + static_cast<unsigned long>(i) * BARO_SAMPLE_MS);
+    }
+
+    EXPECT_NEAR(currentClimbRateAvgMS, 1.2f, 0.001f);
+}
+
+TEST_F(VarioClimbRateAverage, AlternatingNoiseIsSmoothedOut)
+{
+    // Fast value flips between +1 and -1 every sample (a bouncing vario).
+    // The averaged value must stay close to zero.
+    for (int i = 0; i < 40; ++i)
+    {
+        updateClimbRateAverage((i % 2 == 0) ? 1.0f : -1.0f,
+                               10000UL + static_cast<unsigned long>(i) * BARO_SAMPLE_MS);
+    }
+
+    EXPECT_NEAR(currentClimbRateAvgMS, 0.0f, 0.1f);
+}
+
+TEST_F(VarioClimbRateAverage, SamplesOlderThanTheWindowAreIgnored)
+{
+    // 3 s of 0 m/s, then 1 s of 4 m/s at 100 ms spacing. With a 1.5 s
+    // window the old zeros must have dropped out of most of the average,
+    // so it should be well above the 1.0 m/s a 4 s mean would give.
+    unsigned long t = 10000;
+
+    for (int i = 0; i < 30; ++i, t += BARO_SAMPLE_MS)
+    {
+        updateClimbRateAverage(0.0f, t);
+    }
+    for (int i = 0; i < 10; ++i, t += BARO_SAMPLE_MS)
+    {
+        updateClimbRateAverage(4.0f, t);
+    }
+
+    EXPECT_GT(currentClimbRateAvgMS, 1.5f);
+    EXPECT_LT(currentClimbRateAvgMS, 4.0f);
+}
+
+TEST_F(VarioClimbRateAverage, StepResponseSettlesWithinTheWindow)
+{
+    // After DISPLAY_CLIMB_AVG_MS of a new steady rate, the average has
+    // fully moved to it.
+    unsigned long t = 10000;
+
+    for (int i = 0; i < 20; ++i, t += BARO_SAMPLE_MS)
+    {
+        updateClimbRateAverage(-1.0f, t);
+    }
+    for (unsigned long elapsed = 0; elapsed <= DISPLAY_CLIMB_AVG_MS; elapsed += BARO_SAMPLE_MS, t += BARO_SAMPLE_MS)
+    {
+        updateClimbRateAverage(3.0f, t);
+    }
+
+    EXPECT_NEAR(currentClimbRateAvgMS, 3.0f, 0.3f);
+}
+
+TEST_F(VarioClimbRateAverage, SurvivesMillisWrapAround)
+{
+    // millis() rolls over after ~49.7 days; unsigned subtraction must cope.
+    unsigned long t = 0xFFFFFFFFUL - 500UL;
+
+    for (int i = 0; i < 10; ++i, t += BARO_SAMPLE_MS)
+    {
+        updateClimbRateAverage(2.0f, t);
+    }
+
+    EXPECT_NEAR(currentClimbRateAvgMS, 2.0f, 0.001f);
+}
