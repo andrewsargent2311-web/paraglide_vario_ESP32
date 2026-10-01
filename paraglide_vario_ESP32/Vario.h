@@ -56,13 +56,24 @@ constexpr uint8_t BMP5XX_ALT_I2C_ADDR = 0x46;
 #define CLIMB_WINDOW_N 8
 #define BARO_SAMPLE_MS 100
 
+// The fast climb rate (currentClimbRateMS, a ~0.8 s regression) drives the
+// audio buzzer. For anything a human reads or that gets broadcast (the
+// on-screen vario, glide ratio) it is further averaged over this long so
+// the number stops flickering. 1000-2000 ms is a sensible range; longer =
+// steadier but laggier. Samples arrive every BARO_SAMPLE_MS, so
+// DISPLAY_CLIMB_BUF_N must be at least DISPLAY_CLIMB_AVG_MS / BARO_SAMPLE_MS
+// (plus some slack for jitter).
+#define DISPLAY_CLIMB_AVG_MS 1500UL
+#define DISPLAY_CLIMB_BUF_N 32
+
 extern float altWindow[CLIMB_WINDOW_N];
 extern unsigned long timeWindow[CLIMB_WINDOW_N];
 extern int windowCount;
 extern int windowIndex;
 extern unsigned long lastBaroSample;
 extern float currentAltitudeM;
-extern float currentClimbRateMS;
+extern float currentClimbRateMS;     // fast -- audio buzzer
+extern float currentClimbRateAvgMS;  // DISPLAY_CLIMB_AVG_MS average -- screen, glide ratio
 extern float currentQNH;
 extern bool qnhCalibrated;
 extern bool qnhIsFallback;
@@ -70,3 +81,9 @@ extern float currentPressureHpa;   // latest BMP580 pressure, hPa
 
 void updateVario();
 float computeClimbRateLeastSquares();
+
+// Push one fast climb-rate sample and refresh currentClimbRateAvgMS (mean of
+// every sample from the last DISPLAY_CLIMB_AVG_MS). resetClimbRateAverage()
+// clears the history; used by the unit tests.
+void updateClimbRateAverage(float rateMS, unsigned long nowMs);
+void resetClimbRateAverage();

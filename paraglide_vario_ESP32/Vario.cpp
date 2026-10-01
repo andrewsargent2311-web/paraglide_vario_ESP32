@@ -41,6 +41,7 @@ int windowIndex = 0;
 unsigned long lastBaroSample = 0;  // not used here; scheduling is the caller's
 float currentAltitudeM = 0.0f;
 float currentClimbRateMS = 0.0f;
+float currentClimbRateAvgMS = 0.0f;
 float currentQNH = SEA_LEVEL_QNH_DEFAULT;
 <<<<<<< HEAD
 bool qnhCalibrated = false;
@@ -467,89 +468,64 @@ void updateQnh(uint32_t now_ms, float pressure_hPa) {
     // already calibrated, since qnhAvgActive is already false between
     // recalibration windows.)
     qnhAvgActive = false;
->>>>>>> 399367e (QNH: start at 1013.25 on boot, update from GPS on first good fix, refresh every 15 min)
   }
-  applyFallbackQnhIfNeeded(now_ms, pressure_hPa);
-}
 
-// ---------------------------------------------------------------------
-// Sample acceptance and storage
-// ---------------------------------------------------------------------
-[[nodiscard]] bool isOutlier(uint32_t now_ms, float alt_m) {
-  if (windowCount == 0) return false;
+  float newAltitudeM = bmp.readAltitude(currentQNH);
 
-  const int lastIdx = (windowIndex + CLIMB_WINDOW_N - 1) % CLIMB_WINDOW_N;
-  const uint32_t dt_ms = static_cast<uint32_t>(now_ms - static_cast<uint32_t>(timeWindow[lastIdx]));
-  const float dt_s = static_cast<float>(dt_ms) / 1000.0f;
-  if (dt_s <= 0.001f) return false;
+  // ------------------------------------------------------------------
+  // Outlier rejection -- guards against a single corrupted I2C read
+  // (suspected cause: RF coupling into the SDA/SCL wiring from the
+  // FANET radio during a TX burst) poisoning the climb-rate window.
+  // A paraglider physically can't jump more than a few m/s between two
+  // consecutive ~BARO_SAMPLE_MS-apart samples, so anything wildly
+  // outside that is treated as a bad sample and dropped rather than
+  // fed into the regression. Tune REJECT_RATE_MS if this ever proves
+  // too tight/loose in practice.
+  // ------------------------------------------------------------------
+  static constexpr float REJECT_RATE_MS = 15.0f;  // m/s
 
-  const float rate_mps = (alt_m - altWindow[lastIdx]) / dt_s;
-  if (fabsf(rate_mps) <= kRejectRate_mps) return false;
+  if (windowCount > 0) {
+    int lastIdx = (windowIndex + CLIMB_WINDOW_N - 1) % CLIMB_WINDOW_N;
+    float dt = (millis() - timeWindow[lastIdx]) / 1000.0f;
 
-  if (diagDue(now_ms)) {
-    logLine("[VARIO DEBUG] outlier rejected: alt=%.1f implied=%.1f m/s last=%.1f dt=%.3f s\n",
-            static_cast<double>(alt_m), static_cast<double>(rate_mps),
-            static_cast<double>(altWindow[lastIdx]), static_cast<double>(dt_s));
+    if (dt > 0.001f) {
+      float impliedRateMS = (newAltitudeM - altWindow[lastIdx]) / dt;
+
+      if (fabsf(impliedRateMS) > REJECT_RATE_MS) {
+        if (debugNow) {
+          Serial.printf(
+            "[VARIO DEBUG] Rejected outlier sample: alt=%.1f m implied=%.1f m/s "
+            "(last alt=%.1f m, dt=%.3f s) -- keeping previous window\n",
+            newAltitudeM, impliedRateMS, altWindow[lastIdx], dt);
+          lastVarioDebug = millis();
+        }
+        return;
+      }
+    }
   }
-  return true;
-}
 
-void pushSample(uint32_t now_ms, float alt_m) {
-  currentAltitudeM = alt_m;
-  altWindow[windowIndex] = alt_m;
-  timeWindow[windowIndex] = now_ms;
+  currentAltitudeM = newAltitudeM;
+
+  altWindow[windowIndex] = currentAltitudeM;
+  timeWindow[windowIndex] = millis();
   windowIndex = (windowIndex + 1) % CLIMB_WINDOW_N;
   if (windowCount < CLIMB_WINDOW_N) ++windowCount;
 
   if (windowCount >= kMinRegressionPts) {
     currentClimbRateMS = computeClimbRateLeastSquares();
+    updateClimbRateAverage(currentClimbRateMS, millis());
   }
+
+  // if (debugNow) {
+  //   Serial.printf(
+  //     "[VARIO DEBUG] OK -- pressure=%.2f hPa, QNH=%.2f (calibrated=%d, fallback=%d), "
+  //     "altitude=%.1f m, windowCount=%d, climb=%.2f m/s\n",
+  //     bmp.pressure, currentQNH, qnhCalibrated, qnhIsFallback,
+  //     currentAltitudeM, windowCount, currentClimbRateMS);
+  //   lastVarioDebug = millis();
+  // }
 }
 
-[[nodiscard]] CycleResult runBaroCycle() {
-  float pressure_hPa = 0.0f;
-  if (!readPressure(pressure_hPa)) return CycleResult::ReadFailed;
-
-  const uint32_t now_ms = millis();  // stamped after the read completes
-  currentPressureHpa = pressure_hPa;
-
-  updateQnh(now_ms, pressure_hPa);
-
-  const float alt_m = pressureToAltitude_m(pressure_hPa, currentQNH);
-  if (!std::isfinite(alt_m)) return CycleResult::Rejected;
-  if (isOutlier(now_ms, alt_m)) return CycleResult::Rejected;
-
-  pushSample(now_ms, alt_m);
-  sState.lastGoodSample_ms = now_ms;
-  return CycleResult::Accepted;
-}
-
-}  // namespace
-
-//=====================================================
-// VARIO: sample baro, push into regression window, compute climb rate
-//=====================================================
-void updateVario() {
-  const uint32_t entry_ms = millis();
-  if (!sState.started) {
-    sState.started = true;
-    sState.start_ms = entry_ms;
-  }
-  repairWindowIfCorrupt(entry_ms);
-
-  const CycleResult result = runBaroCycle();
-  if (result == CycleResult::Accepted) return;
-
-  // No usable sample this cycle. Never update the published values; age
-  // them out if this has gone on too long.
-  const uint32_t now_ms = millis();
-  if (result == CycleResult::ReadFailed && diagDue(now_ms)) {
-    logLine("[VARIO DEBUG] baro read failed or implausible -- skipping this cycle\n");
-  }
-  expireStaleData(now_ms);
-}
-
-// Least-squares slope of altitude against time over the window, in m/s.
 float computeClimbRateLeastSquares() {
   if (!windowStateValid() || windowCount < 2) return 0.0f;
 
