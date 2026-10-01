@@ -18,12 +18,9 @@ constexpr uint8_t BMP5XX_ALT_I2C_ADDR = 0x46;
 // =====================================================
 // Tuning
 #define SEA_LEVEL_QNH_DEFAULT 1013.25f
-// If GPS hasn't produced a usable altitude fix (see gpsAltitudeGood in
-// updateVario()) within this long after boot -- no module wired, no sky
-// view, whatever the cause -- stop waiting on it and default QNH to
-// standard atmosphere so altitude/climb-rate keep running off the BMP580
-// alone instead of sitting "not calibrated" for the whole flight.
-#define GPS_QNH_FALLBACK_MS 60000UL
+// QNH starts at SEA_LEVEL_QNH_DEFAULT on boot (no waiting for GPS), is
+// replaced by a GPS-derived value on the first good fix, then refreshed
+// every QNH_RECALIBRATION_INTERVAL_MS. See updateVario().
 
 // How long a continuous run of good-quality GPS fixes (see
 // gpsAltitudeGood in updateVario()) is averaged over before calibrating

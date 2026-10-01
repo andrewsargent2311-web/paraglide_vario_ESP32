@@ -15,12 +15,15 @@ unsigned long lastBaroSample = 0;
 float currentAltitudeM = 0.0f;
 float currentClimbRateMS = 0.0f;
 float currentQNH = SEA_LEVEL_QNH_DEFAULT;
-bool qnhCalibrated = false;
-// True only while the current QNH came from the no-GPS timeout fallback
-// rather than a real GPS-derived calibration. Lets updateVario() upgrade
-// to a proper calibration the moment a good fix turns up later, without
-// reopening the (deliberately) one-shot calibration once it's genuine.
-bool qnhIsFallback = false;
+// QNH is usable from the very first loop: boot starts on standard
+// atmosphere (1013.25) so altitude/vario/AGL etc. run immediately and
+// nothing waits on GPS. qnhIsFallback stays true until a real GPS-derived
+// calibration replaces it, after which QNH is refreshed every
+// QNH_RECALIBRATION_INTERVAL_MS.
+bool qnhCalibrated = true;
+// True while the current QNH is the boot default (1013.25) rather than a
+// real GPS-derived value. Cleared by the first successful GPS calibration.
+bool qnhIsFallback = true;
 
 //=====================================================
 //VARIO: sample baro, push into regression window, compute climb rate
@@ -78,6 +81,9 @@ void updateVario() {
   static unsigned long qnhAvgStartMs = 0;
   static double qnhAvgAltSum = 0.0;
   static uint16_t qnhAvgCount = 0;
+  static uint32_t lastGpsAltAge = UINT32_MAX;
+  // Set when a real GPS calibration succeeds; the 15-minute refresh timer
+  // is measured from that moment (not from boot).
   static unsigned long lastQnhCalibrationMs = 0;
 
   bool qnhRecalibrationDue =
@@ -93,6 +99,7 @@ void updateVario() {
       qnhAvgStartMs = millis();
       qnhAvgAltSum = 0.0;
       qnhAvgCount = 0;
+      lastGpsAltAge = gps.altitude.age();  // don't count the fix already on hand twice
     }
 
     // Only bank a sample once per fresh GPS sentence. isUpdated() clears
@@ -101,10 +108,17 @@ void updateVario() {
     // actually reports a new position (typically 1Hz) -- without this
     // check, a single fix held between GPS updates would get counted
     // once per updateVario() call and dominate the average.
-    if (gps.altitude.isUpdated()) {
+    // NOTE: don't use gps.altitude.isUpdated() here. TinyGPSPlus clears
+    // that flag whenever ANYONE reads altitude.feet()/meters(), and
+    // loop() reads it every pass, so this function almost never saw it
+    // set and the window never filled. Instead detect a new fix by the
+    // altitude age() dropping back toward 0 (it resets on each new GGA).
+    uint32_t altAge = gps.altitude.age();
+    if (altAge < lastGpsAltAge) {
       qnhAvgAltSum += gps.altitude.meters();
       qnhAvgCount++;
     }
+    lastGpsAltAge = altAge;
 
     if (debugNow && qnhAvgActive) {
       Serial.printf("[VARIO DEBUG] QNH averaging: %u samples over %lus/%lus\n",
@@ -166,19 +180,6 @@ void updateVario() {
     // already calibrated, since qnhAvgActive is already false between
     // recalibration windows.)
     qnhAvgActive = false;
-
-    if (!qnhCalibrated && millis() >= GPS_QNH_FALLBACK_MS) {
-      // GPS never came good (missing/unwired module, or just no fix
-      // after a full minute) -- stop waiting on it. Default to standard
-      // atmosphere so the BMP580 alone can drive altitude/vario for the
-      // rest of the flight. Flagged as a fallback so a later good fix
-      // can still upgrade it, above.
-      currentQNH = SEA_LEVEL_QNH_DEFAULT;
-      qnhCalibrated = true;
-      qnhIsFallback = true;
-
-      Serial.println("GPS unavailable -- defaulting QNH to 1013.25, running altitude/vario off BMP580 only");
-    }
   }
 
   float newAltitudeM = bmp.readAltitude(currentQNH);
