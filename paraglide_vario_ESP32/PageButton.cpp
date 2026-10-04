@@ -46,6 +46,8 @@ void updatePageButton() {
   static unsigned long lastReleaseAt = 0;
   static bool longPressHandled = false;
   static bool awaitingSecondPress = false;  // true after a short release, until the double-press window closes
+  static bool immediateSelectionHandled = false;
+  static bool suppressPendingShortAction = false;
 
   unsigned long now = millis();
   bool reading = digitalRead(KEY_PIN);
@@ -61,6 +63,7 @@ void updatePageButton() {
         if (awaitingSecondPress && (now - lastReleaseAt) < MENU_DOUBLE_PRESS_MS) {
           // Second press landed inside the double-press window.
           awaitingSecondPress = false;
+          suppressPendingShortAction = false;
           longPressHandled = true;  // this press's own release does nothing
           if (!menuActive) {
             openMenu();
@@ -69,14 +72,21 @@ void updatePageButton() {
           }
         } else {
           longPressHandled = false;
+          if (menuActive && menuSelectionIsImmediate()) {
+            longPressHandled = true;
+            immediateSelectionHandled = true;
+            menuSelectCurrentItem();
+          }
         }
         pressStartedAt = now;
-      } else if (!longPressHandled) {  // released after a short press
+      } else if (!longPressHandled || immediateSelectionHandled) {  // released after a short press or immediate selection
         // Could be a lone short press, or the first half of a double
         // press -- don't act yet, wait out the double-press window
         // in case another press follows.
         lastReleaseAt = now;
         awaitingSecondPress = true;
+        suppressPendingShortAction = immediateSelectionHandled;
+        immediateSelectionHandled = false;
       }
     }
   }
@@ -85,11 +95,14 @@ void updatePageButton() {
   // pending release as an ordinary short press.
   if (awaitingSecondPress && stableState == HIGH && now - lastReleaseAt >= MENU_DOUBLE_PRESS_MS) {
     awaitingSecondPress = false;
-    if (menuActive) {
-      menuMoveDown();
-    } else {
-      advanceActivePage();
+    if (!suppressPendingShortAction) {
+      if (menuActive) {
+        menuMoveDown();
+      } else {
+        advanceActivePage();
+      }
     }
+    suppressPendingShortAction = false;
   }
 
   // Long-press handling while the button is still held down.

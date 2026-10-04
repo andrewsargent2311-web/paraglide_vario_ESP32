@@ -167,8 +167,8 @@ extern uint8_t menuSelectedIndex;
 
 // A "double press" is two presses with less than this many ms between the
 // first release and the second press-down; a 2s hold on an open menu
-// selects the highlighted item. Consumed by updatePageButton() in the
-// main .ino.
+// selects the highlighted item, except menuSelectionIsImmediate() items.
+// Consumed by updatePageButton() in PageButton.cpp.
 #define MENU_DOUBLE_PRESS_MS 800
 #define MENU_SELECT_HOLD_MS 2000
 
@@ -243,6 +243,7 @@ void openMenu();
 void closeMenu();
 void menuMoveDown();
 void menuSelectCurrentItem();
+bool menuSelectionIsImmediate();
 void menuGoBack();
 void drawMenu();
 

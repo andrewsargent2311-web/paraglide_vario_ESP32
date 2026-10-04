@@ -812,10 +812,8 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
 
     // Sets the level immediately and STAYS on the screen (like the vario
     // volume screens), but -- unlike those -- does NOT auto-play a
-    // preview on every selection: a full voice sentence is ~5s, and
-    // replaying that on every scroll through 11 levels would be
-    // exhausting. Press "Test" (the last item) when you actually want
-    // to hear it. Double-press to go back to ADS-B Settings.
+    // preview on every selection. Press "Test" (the last item) when you
+    // actually want to hear it. Double-press to go back to ADS-B Settings.
     case MENU_SCREEN_ADSB_ALERT_VOLUME:
       if (index == ADSB_ALERT_VOLUME_TEST_INDEX) {
         if (adsbAlarmMode == ADSB_ALARM_TONE) {
@@ -975,6 +973,11 @@ void menuMoveDown() {
 
 void menuSelectCurrentItem() {
   selectMenuItem(currentMenuScreen(), menuSelectedIndex);
+}
+
+bool menuSelectionIsImmediate() {
+  return currentMenuScreen() == MENU_SCREEN_ADSB_ALERT_VOLUME &&
+         menuSelectedIndex == ADSB_ALERT_VOLUME_TEST_INDEX;
 }
 
 // =====================================================
