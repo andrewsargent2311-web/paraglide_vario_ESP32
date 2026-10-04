@@ -215,6 +215,18 @@ TEST(IgcGpsFiltering, AcceptsPlausibleSpeedsAndRejectsInvalidValues)
     EXPECT_FALSE(igcSpeedIsPlausible(INFINITY));
 }
 
+TEST(IgcGpsFiltering, DetectsEachAgeResetAsNewData)
+{
+    uint32_t previousAge = UINT32_MAX;
+
+    EXPECT_TRUE(igcGpsAgeIndicatesNewData(0, previousAge));
+    EXPECT_FALSE(igcGpsAgeIndicatesNewData(1, previousAge));
+    EXPECT_FALSE(igcGpsAgeIndicatesNewData(1000, previousAge));
+    EXPECT_TRUE(igcGpsAgeIndicatesNewData(0, previousAge));
+    EXPECT_FALSE(igcGpsAgeIndicatesNewData(2, previousAge));
+    EXPECT_TRUE(igcGpsAgeIndicatesNewData(0, previousAge));
+}
+
 TEST(IgcGpsFiltering, PositionJumpUsesElapsedTimeAndRejectsBadCoordinates)
 {
     // About 33 metres in one second is below the 150 km/h ceiling.

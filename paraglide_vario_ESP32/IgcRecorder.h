@@ -35,6 +35,7 @@ extern unsigned long igcBelowThresholdSince;
 extern unsigned long lastIgcFixWrite;
 
 bool igcSpeedIsPlausible(float speedKph);
+bool igcGpsAgeIndicatesNewData(uint32_t currentAge, uint32_t& previousAge);
 bool igcPositionJumpIsPlausible(double fromLat, double fromLon,
                                 double toLat, double toLon,
                                 unsigned long elapsedMs);

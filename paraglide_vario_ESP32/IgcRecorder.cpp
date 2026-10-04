@@ -49,8 +49,7 @@ bool gpsQualityIsGood() {
 
 void updateAcceptedGpsFix(unsigned long now) {
   const uint32_t locationAge = gps.location.age();
-  if (locationAge < lastLocationAge) {
-    lastLocationAge = locationAge;
+  if (igcGpsAgeIndicatesNewData(locationAge, lastLocationAge)) {
     latestPositionAccepted = false;
 
     if (gpsQualityIsGood()) {
@@ -81,8 +80,7 @@ void updateAcceptedGpsFix(unsigned long now) {
   }
 
   const uint32_t altitudeAge = gps.altitude.age();
-  if (altitudeAge < lastAltitudeAge) {
-    lastAltitudeAge = altitudeAge;
+  if (igcGpsAgeIndicatesNewData(altitudeAge, lastAltitudeAge)) {
     if (gps.altitude.isValid() && altitudeAge < 2000) {
       const float altitudeM = gps.altitude.meters();
       const unsigned long elapsed = now - acceptedGpsAltitudeAt;
@@ -106,6 +104,12 @@ void updateAcceptedGpsFix(unsigned long now) {
 bool igcSpeedIsPlausible(float speedKph) {
   return isfinite(speedKph) && speedKph >= 0.0f &&
          speedKph <= IGC_MAX_GROUND_SPEED_KPH;
+}
+
+bool igcGpsAgeIndicatesNewData(uint32_t currentAge, uint32_t& previousAge) {
+  const bool isNewData = currentAge < previousAge;
+  previousAge = currentAge;
+  return isNewData;
 }
 
 bool igcPositionJumpIsPlausible(double fromLat, double fromLon,
