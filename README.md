@@ -18,9 +18,9 @@ A DIY flight computer for paragliding and paramotoring that costs about **$60 US
 4. [Step 1: Order the circuit board](#step-1-order-the-circuit-board)
 5. [Step 2: 3D print the case](#step-2-3d-print-the-case)
 6. [Step 3: Solder the circuit board](#step-3-solder-the-circuit-board)
-7. [Step 4: Install the software tools](#step-4-install-the-software-tools)
+7. [Step 4: Install VS Code and PlatformIO](#step-4-install-vs-code-and-platformio)
 8. [Step 5: Add your WiFi details](#step-5-add-your-wifi-details)
-9. [Step 6: Upload the code](#step-6-upload-the-code)
+9. [Step 6: Build and upload the code](#step-6-build-and-upload-the-code)
 10. [Step 7: Prepare the SD card](#step-7-prepare-the-sd-card)
 11. [Step 8: Assemble everything](#step-8-assemble-everything)
 12. [Step 9: First power-on check](#step-9-first-power-on-check)
@@ -84,7 +84,7 @@ You will also need some pin headers and/or sockets to connect the Waveshare boar
 - **Soldering iron** with a fine tip, solder and flux (for the tiny 0805 parts and the LoRa module). A hot-air station makes this easier but is not required.
 - **Tweezers** (for the small parts)
 - **A 3D printer**, or use a print service / friend with one
-- **A computer** (Windows, Mac or Linux) with a USB port
+- **A computer** (Windows, Mac or Linux) with a USB port and an internet connection (the first build downloads a few hundred MB of tools)
 - **A microSD card reader**
 - Small screwdrivers, and wire cutters
 
@@ -134,55 +134,55 @@ Work from the smallest parts to the biggest, and take your time. Solder joints s
 
 **Before going on, check:** with a magnifier, look at every solder joint for bridges (solder connecting two neighbouring pins) and for pins that missed the solder.
 
-## Step 4: Install the software tools
+## Step 4: Install VS Code and PlatformIO
 
-This is the same every time you set up an ESP32 board, and it's easier than it sounds.
+This project is built with **[PlatformIO](https://platformio.org/)** inside **Visual Studio Code** (VS Code). PlatformIO downloads the ESP32 tools and every library the project needs automatically, so there is nothing to install by hand except VS Code and one extension. All of the board settings (PSRAM, USB serial, etc.) are already saved in the project's `platformio.ini` file, so you don't need to set anything.
 
-### 4.1 Install the Arduino IDE
-Download **Arduino IDE 2** from [arduino.cc/en/software](https://www.arduino.cc/en/software) and install it.
+### 4.1 Install VS Code
+Download **Visual Studio Code** from [code.visualstudio.com](https://code.visualstudio.com/) and install it.
 
-### 4.2 Add ESP32 support
-1. Open the Arduino IDE → **File → Preferences**.
-2. In **Additional boards manager URLs**, paste: `https://espressif.github.io/arduino-esp32/package_esp32_index.json`
-3. Click **OK**, then open **Tools → Board → Boards Manager**.
-4. Search for **esp32** and install **"esp32 by Espressif Systems"**.
+### 4.2 Install the PlatformIO extension
+1. Open VS Code and click the **Extensions** icon in the left sidebar (it looks like four squares), or press `Ctrl+Shift+X` (`Cmd+Shift+X` on Mac).
+2. Search for **PlatformIO IDE** and click **Install**.
+3. Wait for it to finish (it can take a few minutes the first time, and a progress message appears at the bottom right), then **restart VS Code** when it asks.
+4. After the restart you should see a new **alien-head PlatformIO icon** in the left sidebar and a blue bar of icons along the bottom of the window.
 
 ### 4.3 Download this project
-On this GitHub page, click the green **Code** button → **Download ZIP**, then unzip it somewhere you can find it (for example your Documents folder).
+Either:
 
-### 4.4 Install the libraries
-Libraries are add-on code the project uses. Install these from **Sketch → Include Library → Manage Libraries…** by searching for each name:
+- On this GitHub page, click the green **Code** button → **Download ZIP**, then unzip it somewhere you can find it (for example your Documents folder), **or**
+- If you use Git: `git clone` this repository.
+
+### 4.4 Open the project
+1. In VS Code choose **File → Open Folder…**
+2. Select the **top-level project folder**, the one that contains `platformio.ini` (not the `paraglide_vario_ESP32` folder inside it).
+3. If VS Code asks *"Do you trust the authors of the files in this folder?"*, click **Yes, I trust the authors**.
+4. PlatformIO now sets itself up. In the bottom-right you'll see messages such as *"Configuring project"* and *"Installing platform / libraries"*. **Wait until they finish.** The first time this downloads the ESP32 platform and all the libraries listed below, so it can take 5–15 minutes depending on your internet.
+
+**Libraries installed for you automatically** (listed in `platformio.ini`; you never have to do this yourself):
 
 | Library | Author |
 |---|---|
 | Adafruit BMP5xx | Adafruit |
 | Adafruit SHTC3 | Adafruit |
 | Adafruit Unified Sensor | Adafruit |
-| TinyGPSPlus (shown as "TinyGPSPlus") | Mikal Hart |
 | ArduinoJson | Benoit Blanchon |
 | NimBLE-Arduino | h2zero |
 | RadioLib | Jan Gromeš |
-| PCF85063A (search "PCF85063A"; the clock library, by Soldered) | Soldered |
+| TinyGPSPlus | Mikal Hart |
+| U8g2 (screen) | olikraus |
+| Soldered PCF85063A RTC Library (clock) | Soldered |
 
-When the IDE asks *"Install all dependencies?"*, click **Install all**.
-
-**The screen library (U8g2) needs special handling.** This project uses a version that supports the Waveshare screen:
-
-1. Download Waveshare's repository as a ZIP: [github.com/waveshareteam/ESP32-S3-RLCD-4.2](https://github.com/waveshareteam/ESP32-S3-RLCD-4.2) → **Code → Download ZIP**.
-2. Unzip it and open the folder `01_Arduino_Libraries`.
-3. Copy the folder named **`U8g2`** into your Arduino libraries folder. On Windows this is `Documents\Arduino\libraries`; on Mac it's `Documents/Arduino/libraries`.
-4. If you previously installed "U8g2" from the Library Manager, delete or uninstall it first, so there's only one copy.
-5. Restart the Arduino IDE.
-
-> The other libraries in that Waveshare folder (SensorLib, LVGL) aren't needed for this project.
+> **Linux users:** to upload you need permission to use the USB serial port. Add yourself to the `dialout` group (`sudo usermod -aG dialout $USER`), then log out and back in. If it still can't see the board, install the PlatformIO udev rules (see the [PlatformIO docs](https://docs.platformio.org/en/latest/core/installation/udev-rules.html)).
 
 ## Step 5: Add your WiFi details
 
 The code expects a file called `secrets.h` containing your WiFi network names and passwords. It is deliberately not uploaded to GitHub (so passwords don't leak), so you have to create it.
 
-1. In the project folder, open `paraglide_vario_ESP32/` (the folder with `paraglide_vario_ESP32.ino` in it).
-2. Copy the file **`secrets.example.h`** and rename the copy to **`secrets.h`**.
-3. Open `secrets.h` in any text editor and put in your details, for example:
+1. In VS Code's **Explorer** (the file list on the left, top icon in the sidebar), open the **`paraglide_vario_ESP32`** folder.
+2. Right-click **`secrets.example.h`** → **Copy**, then right-click in an empty part of the same folder → **Paste**.
+3. Right-click the copy (it will be named something like `secrets.example copy.h`) → **Rename**, and call it exactly **`secrets.h`**.
+4. Open `secrets.h` and put in your details, for example:
 
 ```cpp
 static const WifiNetwork WIFI_NETWORKS[WIFI_NETWORK_COUNT] = {
@@ -192,31 +192,41 @@ static const WifiNetwork WIFI_NETWORKS[WIFI_NETWORK_COUNT] = {
 };
 ```
 
+5. Save the file (`Ctrl+S`).
+
 - Use a **2.4 GHz** network. The ESP32 can't connect to 5 GHz WiFi.
 - Leave unused slots as empty quotes `""`.
 - A **phone hotspot** is handy at the launch site, since that's how the ADS-B traffic and weather pages get their data in the field.
 
-## Step 6: Upload the code
+## Step 6: Build and upload the code
 
-1. In the Arduino IDE, open **`paraglide_vario_ESP32/paraglide_vario_ESP32.ino`**.
-2. Plug the Waveshare board into your computer with the USB-C cable.
-3. Go to **Tools** and set these exactly (they match Waveshare's own recommended settings):
+1. Plug the Waveshare board into your computer with the USB-C data cable.
+2. Look at the blue bar along the bottom of VS Code. The important icons are:
 
-| Setting | Value |
+| Icon (hover to see its name) | What it does |
 |---|---|
-| Board | **ESP32S3 Dev Module** |
-| USB CDC On Boot | **Enabled** |
-| Flash Mode | **QIO 80MHz** |
-| Flash Size | **16MB (128Mb)** |
-| Partition Scheme | **16M Flash (3MB APP/9.9MB FATFS)** |
-| PSRAM | **OPI PSRAM** |
-| Upload Speed | 921600 |
+| ✓ **PlatformIO: Build** | Compiles the code without uploading it |
+| → **PlatformIO: Upload** | Compiles and uploads to the board |
+| 🔌 **PlatformIO: Serial Monitor** | Shows the messages the board prints (see Step 9) |
 
-4. Under **Tools → Port**, choose the port that appeared when you plugged the board in (COM-something on Windows, `/dev/cu.usbmodem…` on Mac).
-5. Click the **Upload** button (the right-pointing arrow). The first build takes a few minutes.
-6. When it says **"Done uploading"**, the code is on your device.
+   You can also click the **PlatformIO (alien head) icon** in the left sidebar → **Project Tasks → esp32-s3 → General → Upload**.
 
-If the upload doesn't start, hold the **BOOT** button on the board, tap **RESET**, then release BOOT, and try again.
+3. Click **Upload** (the right-pointing arrow). The first build takes several minutes because it compiles every library.
+4. When the terminal at the bottom says **`[SUCCESS]`**, the code is on your device. The board restarts by itself.
+
+**What's already configured for you in `platformio.ini`** (you don't need to change any of this, but it's here in case you wonder):
+
+| Setting | Value | Why |
+|---|---|---|
+| Board | `esp32-s3-devkitc-1` (ESP32-S3) | Matches the Waveshare board's chip |
+| Platform | pioarduino (Arduino core 3.x for ESP32) | Required by the project's libraries |
+| PSRAM | OPI PSRAM (`qio_opi` + `BOARD_HAS_PSRAM`) | The voice-alert clips are loaded into PSRAM |
+| USB serial | `ARDUINO_USB_CDC_ON_BOOT=1` | Lets the Serial Monitor work over the USB-C port |
+| Monitor speed | 115200 | Matches the code |
+
+**If the upload doesn't start:** hold the **BOOT** button on the board, tap **RESET**, then release BOOT, and click Upload again. PlatformIO finds the port automatically. If you have several USB serial devices plugged in and it picks the wrong one, you can add a line such as `upload_port = COM5` (Windows) or `upload_port = /dev/ttyACM0` (Linux/Mac) under `[env:esp32-s3]` in `platformio.ini`.
+
+> **Ignore the `native` environment.** `platformio.ini` also contains an `[env:native]` section. That is only for running the code's unit tests on a PC (`pio test -e native`) and isn't used when building for the device. If PlatformIO asks which environment to use, choose **esp32-s3**.
 
 ## Step 7: Prepare the SD card
 
@@ -261,7 +271,7 @@ Do this indoors first, then repeat outside.
 2. Move the unit up and down by about a metre. You should hear the **vario beep** and see the altitude change.
 3. Take it **outside with a clear view of the sky**. The first GPS lock can take a few minutes. Once it locks, speed, heading and time appear.
 4. Look at the **AIR SPACE** box on the main screen. After the first temperature/humidity reading (about 10 seconds) and once the GPS has calibrated the altitude, the **CLD BASE** line shows a number. Until then it shows `--`. See [Cloud base estimate](#cloud-base-estimate) to calibrate it.
-5. To see what the device is doing while it boots, open **Tools → Serial Monitor** in the Arduino IDE (baud rate **115200**) while the unit is plugged into your computer. It prints messages showing whether the SD card, barometer, GPS and radio all started correctly. If the voice clips loaded you will see `[Voice] Loaded 60 voice clips into PSRAM`.
+5. To see what the device is doing while it boots, click the **Serial Monitor** (🔌 plug icon) in the blue bar at the bottom of VS Code while the unit is plugged into your computer. It runs at **115200** baud automatically. It prints messages showing whether the SD card, barometer, GPS and radio all started correctly. If the voice clips loaded you will see `[Voice] Loaded 60 voice clips into PSRAM`. Click the bin/trash or press `Ctrl+C` in the terminal to close the monitor, and **close it before you upload again** (the upload can't use the port while the monitor has it open).
 
 ---
 
@@ -273,18 +283,21 @@ The unit has **one button**:
 |---|---|---|
 | Closed | **Short press** | Switch to the next page (Glider → Wind → ADS-B) |
 | Closed | **Double press** | Open the menu |
-| Closed | **Hold ~3–4 seconds** | Mute / unmute the vario |
+| Closed | **Hold ~4 seconds** | Mute / unmute the vario |
 | Open | **Short press** | Move down to the next menu item |
 | Open | **Hold ~2 seconds** | Select the highlighted item |
+| Open | **Double press** | Go back one level (or close the menu from the top level) |
 
 **Menu contents**
 
-- **Config:** time zone, units (altitude / speed), vario pitch, volume, screen orientation
-- **Connections:** WiFi on/off and network choice, Bluetooth (engine meter), FANET on/off, FANET preset messages
+- **Main Page:** choose Paraglider or Paramotor as the first page
+- **Config:** time zone, units (altitude / speed), main volume, vario beep (climb and sink volume), screen orientation
+- **Connections:** WiFi on/off and network choice, Bluetooth (engine meter), FANET on/off
+- **FANET Messaging:** messaging on/off, and the preset messages you can broadcast
 - **Map:** choose which terrain map to use
 - **ADS-B settings:** alert radius and vertical threshold, auto-jump to the ADS-B page, **Alarm Sound** (Off / Alarm / Voice), **Alert Volume**, range rings, airspace bars
 - **Weather settings:** update interval, number of stations, data source
-- **Flight recordings:** recording on/off, **Export files** (see below)
+- **Flight recordings:** recording on/off, **Export files** (see below), auto-stop
 
 **Flight logs:** the unit automatically starts recording an `.IGC` file when you start moving (above about 10 km/h for 10 seconds). To download logs, open **Flight recordings → Export files**. Once the unit is connected to WiFi it shows a web address (something like `http://192.168.x.x/`). Open that in a browser on a phone or computer on the same network and click the file to download.
 
@@ -296,7 +309,7 @@ When ADS-B shows an aircraft close to you, the unit can **speak** the warning (o
 
 > *"Aircraft on your two o'clock, flying north west, at two thousand four hundred feet, one thousand two hundred feet above you, and is eight hundred meters away."*
 
-**Turning it on and setting it up** (all under **Config → ADSB Settings**):
+**Turning it on and setting it up** (all under **ADSB Settings** in the menu):
 
 | Item | What it does |
 |---|---|
@@ -322,7 +335,7 @@ When ADS-B shows an aircraft close to you, the unit can **speak** the warning (o
 
 **Good to know:**
 - **It needs a GPS fix and for you to be moving.** The clock position is worked out from your direction of travel, so with no valid GPS course (for example standing still on the ground, or before the first fix) the voice alert stays silent rather than guess. The siren does not have this limit.
-- **It needs the SD card with the `VOICE` folder** (see [Step 7](#step-7-prepare-the-sd-card)) and **PSRAM enabled** in the Tools settings (see [Step 6](#step-6-upload-the-code)). The clips are loaded into memory once at start-up, so nothing is read from the card while an alert is playing.
+- **It needs the SD card with the `VOICE` folder** (see [Step 7](#step-7-prepare-the-sd-card)) and **PSRAM enabled**, which the project's `platformio.ini` already does for you (see [Step 6](#step-6-build-and-upload-the-code)). The clips are loaded into memory once at start-up, so nothing is read from the card while an alert is playing.
 - ADS-B data arrives over WiFi, so the alert only works when the unit is connected (for example to your phone hotspot). See the notes on ADS-B in [Step 5](#step-5-add-your-wifi-details).
 - Like the rest of this project it is an aid, not a safety system. Keep looking around.
 
@@ -331,9 +344,9 @@ When ADS-B shows an aircraft close to you, the unit can **speak** the warning (o
 The **AIR SPACE** box on the Glider and Paramotor pages has a third line under the nearest-airspace distances:
 
 ```
-NR VERT: 3200ft
-NR HORI: 4.5km
-CLD BASE: 4200ft
+VERT: 3200ft
+HORI: 4.5km
+BASE: 4200ft
 ```
 
 **What it means:** a rough estimate of the height of the cloud base, shown as an altitude above sea level in your chosen units, so you can compare it directly with your altitude reading. It shows `--` until the altitude is calibrated, and `0` means you are at or inside cloud.
@@ -352,14 +365,14 @@ The temperature sensor sits next to the processor and battery, so it reads **war
 1. Switch the unit on and leave it for about **10 minutes** so it warms up to normal.
 2. Compare the temperature on the unit with a trusted thermometer (or a nearby weather station) in the same conditions. Ideally do this outdoors, in the shade.
 3. Work out the difference. For example, the unit says 24°C and the thermometer says 21°C, so the difference is **3.0**.
-4. In the Arduino IDE, open the **`AuxSensors.h`** tab and use **Edit → Find** to search for `SHT_SELF_HEAT_OFFSET_C`.
+4. In VS Code, press `Ctrl+P` (`Cmd+P` on Mac), type **`AuxSensors.h`** and press Enter to open it. Then press `Ctrl+F` and search for `SHT_SELF_HEAT_OFFSET_C`.
 5. Change the number after it (the default is `0.0f`), for example:
 
 ```cpp
 #define SHT_SELF_HEAT_OFFSET_C 3.0f
 ```
 
-6. Click **Upload** again (see [Step 6](#step-6-upload-the-code)).
+6. Save the file (`Ctrl+S`) and click **Upload** again (see [Step 6](#step-6-build-and-upload-the-code)).
 
 The dew point is not affected by the self-heating, so only this one number needs adjusting. If you can, compare the estimate against real cloud bases on a few flights and adjust the offset until it looks right.
 
@@ -388,23 +401,26 @@ The [`Engine_meter/`](Engine_meter/) folder contains a separate project (nRF5284
 
 | Problem | Try this |
 |---|---|
-| **Can't find a COM port / upload won't start** | Use a USB cable that carries data (many are charge-only). Hold BOOT, tap RESET, release BOOT, then upload again. |
-| **Error: `secrets.h: No such file or directory`** | You skipped [Step 5](#step-5-add-your-wifi-details). Copy `secrets.example.h` to `secrets.h`. |
-| **Error about `PCF85063A.h`, `U8g2` or another missing file** | A library isn't installed. Go back to [Step 4.4](#44-install-the-libraries). |
-| **Error mentioning `U8G2_ST7305_300X400…`** | The wrong U8g2 is installed. Use the copy from Waveshare's repo (see Step 4.4). |
-| **Screen stays blank or code crashes on boot** | Check the Tools settings in Step 6, especially **PSRAM: OPI PSRAM** and **Flash Size: 16MB**. |
-| **No sound** | Check the speaker is plugged in and the vario isn't muted (hold the button ~3 s). Check volume in **Config → Volume**. Traffic alerts have their own level in **ADSB Settings → Alert Volume**. |
+| **The PlatformIO icon / blue bar doesn't appear** | Make sure the **PlatformIO IDE** extension is installed, then restart VS Code. Also make sure you opened the **top-level folder** that contains `platformio.ini` (File → Open Folder). |
+| **"Installing platform/libraries" fails or hangs** | You need a working internet connection, and GitHub must be reachable (the ESP32 platform is downloaded from there). Check your connection or VPN/firewall, then run **PlatformIO → Project Tasks → esp32-s3 → General → Clean** and build again. |
+| **Can't find a COM port / upload won't start** | Use a USB cable that carries data (many are charge-only). Hold BOOT, tap RESET, release BOOT, then upload again. Close the Serial Monitor before uploading. On Linux, check the `dialout` group note in [Step 4](#step-4-install-vs-code-and-platformio). |
+| **Error: `secrets.h: No such file or directory`** | You skipped [Step 5](#step-5-add-your-wifi-details). Copy `secrets.example.h` to `secrets.h` inside the `paraglide_vario_ESP32` folder. |
+| **Error about `PCF85063A.h`, `U8g2` or another missing file** | A library didn't install properly. Run **PlatformIO → Project Tasks → esp32-s3 → General → Clean**, then **Build** again. If it still fails, delete the hidden `.pio` folder in the project and build again so every library is downloaded fresh. |
+| **Error mentioning `U8G2_ST7305_300X400…`** | The screen library didn't download correctly or is an old version. Delete the `.pio` folder and build again (this forces a fresh download of the latest U8g2). |
+| **Screen stays blank or code crashes on boot** | Check that `platformio.ini` still contains `board_build.arduino.memory_type = qio_opi` and `-DBOARD_HAS_PSRAM`. Open the Serial Monitor to see the error message. |
+| **No sound** | Check the speaker is plugged in and the vario isn't muted (hold the button ~4 s). Check volume in **Config → Volume**. Traffic alerts have their own level in **ADSB Settings → Alert Volume**. |
 | **No GPS fix** | Go outside with a clear view of the sky and wait a few minutes. Check the GPS module's soldering and that the case doesn't block it. |
-| **No voice alert (siren works, or nothing plays)** | Check **Config → ADSB Settings → Alarm Sound** is set to **Voice** (not Alarm or Off) and the Alert Volume isn't 0%. Then check the Serial Monitor at boot for `[Voice] Loaded 60 voice clips into PSRAM`. |
+| **No voice alert (siren works, or nothing plays)** | Check **ADSB Settings → Alarm Sound** is set to **Voice** (not Alarm or Off) and the Alert Volume isn't 0%. Then check the Serial Monitor at boot for `[Voice] Loaded 60 voice clips into PSRAM`. |
 | **Serial Monitor says `[Voice] /VOICE folder not found` or `Missing clip file`** | The `VOICE` folder must sit in the root of the SD card with all 60 clips in it (`V000.PCM` to `V059.PCM`). Copy the whole folder again. |
-| **Serial Monitor says `[Voice] PSRAM allocation failed`** | Set **Tools → PSRAM → OPI PSRAM** and upload again (see [Step 6](#step-6-upload-the-code)). |
+| **Serial Monitor says `[Voice] PSRAM allocation failed`** | PSRAM isn't enabled in the build. Check the PSRAM lines in `platformio.ini` (see [Step 6](#step-6-build-and-upload-the-code)) and upload again. |
+| **Serial Monitor shows nothing** | Make sure the unit is plugged in with a data cable, that you've clicked the plug icon, and that `-DARDUINO_USB_CDC_ON_BOOT=1` is still in `platformio.ini`. Try unplugging and replugging the USB cable. |
 | **Voice alert works in the menu Test but never speaks in flight** | It stays silent until the GPS has a valid course, so you need a fix and to be moving. It also needs WiFi for the ADS-B data, and the aircraft must be inside your Alert Radius and Vertical Threshold. |
 | **Altitude doesn't change / vario silent** | The BMP580 isn't being detected. Check its soldering and orientation. The Serial Monitor will report this on boot. |
 | **SD card not detected** | Make sure it's FAT32, and files are in the root, not inside a folder. Try a different (smaller) card. |
 | **WiFi won't connect** | 2.4 GHz only. Check the name and password in `secrets.h` match exactly (they're case-sensitive), then re-upload. |
 | **CLD BASE shows `--`** | It needs a calibrated altitude (wait for a GPS fix) and a working barometer and temperature/humidity sensor. Give it about 10–20 seconds after start-up. |
 | **CLD BASE reads much too high** | The temperature sensor is reading warm from the board's heat. Set `SHT_SELF_HEAT_OFFSET_C`; see [Cloud base estimate](#cloud-base-estimate). |
-| **Menu doesn't open with a double press** | Press twice more quickly, or adjust the double-press timing in the code. |
+| **Menu doesn't open with a double press** | Press twice more quickly, or adjust `MENU_DOUBLE_PRESS_MS` in `menu.h`. |
 | **No FANET / radio not working** | Check the HT-RA62 soldering and antenna. |
 
 Still stuck? Open an **Issue** on this GitHub page, include what you were doing, what you expected and what happened, and copy in the messages from the Serial Monitor.
@@ -415,7 +431,7 @@ Still stuck? Open an **Issue** on this GitHub page, include what you were doing,
 
 The code is set up for New Zealand, so a few things need changing elsewhere:
 
-- **FANET radio frequency** is set to 868.2 MHz (NZ). Other regions differ (for example Australia uses the 915–928 MHz band). It's set where `fanetRadio.begin(` is called, which appears in both `paraglide_vario_ESP32.ino` and `FanetHandlers.cpp`, so change both. **Check your local rules before changing it.**
+- **FANET radio frequency** is set to 868.2 MHz (NZ). Other regions differ (for example Australia uses the 915–928 MHz band). It's set where `fanetRadio.begin(` is called, which appears in both `FlightComputer.cpp` and `FanetHandlers.cpp`, so change both. In VS Code, press `Ctrl+Shift+F` and search for `fanetRadio.begin(` to find them. **Check your local rules before changing it.**
 - **Weather stations** come from Zephyr (`api.zephyrapp.nz`), which only covers NZ. FANET weather still works anywhere.
 - **Terrain maps** are built from NZ LINZ data. The conversion script would need different source data elsewhere.
 - **Time zone** defaults to NZ (with daylight saving); you can set a fixed offset in **Config → Time**.
@@ -426,10 +442,11 @@ The code is set up for New Zealand, so a few things need changing elsewhere:
 
 ## Code layout
 
-The firmware is split into one `.h`/`.cpp` pair per subsystem, all inside `paraglide_vario_ESP32/`. `paraglide_vario_ESP32.ino` holds only the includes, `setup()` and `loop()`. You don't need any of this to build the project, but it helps if you want to change something.
+The firmware lives in `paraglide_vario_ESP32/` and is split into one `.h`/`.cpp` pair per subsystem. `FlightComputer.cpp` holds only the includes, `setup()` and `loop()`. You don't need any of this to build the project, but it helps if you want to change something. In VS Code, `Ctrl+P` lets you jump to any file by name, and `Ctrl+Shift+F` searches across all files.
 
 | File | What it does |
 |---|---|
+| `FlightComputer.cpp` | The start-up (`setup()`) and main loop (`loop()`) |
 | `Buzzer` | Speaker and audio chip: vario beeps, sink tone, siren, mute jingle, and the voice alert trigger (`triggerAdsbAlert()`) |
 | `VoiceAlert`, `VoiceClips.h` | Voice alerts: loads the 60 clips from the SD card into PSRAM at start-up, builds the spoken sentence and plays it |
 | `AdsbClient` | Fetches and parses ADS-B traffic and works out which aircraft are threats |

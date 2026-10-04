@@ -12,6 +12,7 @@ unsigned long timeWindow[CLIMB_WINDOW_N];
 int windowCount = 0;
 int windowIndex = 0;
 unsigned long lastBaroSample = 0;
+unsigned long lastSuccessfulBaroSample = 0;
 float currentAltitudeM = 0.0f;
 float currentClimbRateMS = 0.0f;
 float currentClimbRateAvgMS = 0.0f;
@@ -48,6 +49,7 @@ void updateVario() {
     return;
   }
 
+  lastSuccessfulBaroSample = millis();
   currentPressureHpa = bmp.pressure;
 
   // Thresholds relaxed from the original (satellites >= 6, HDOP <= 2.5)

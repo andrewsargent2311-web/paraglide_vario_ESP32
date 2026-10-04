@@ -204,3 +204,31 @@ TEST(IgcLatLonFormat, NeverWritesPastTheGivenBufferSize)
         EXPECT_EQ(buf[i], 'X') << "byte " << i << " was overwritten";
     }
 }
+
+TEST(IgcGpsFiltering, AcceptsPlausibleSpeedsAndRejectsInvalidValues)
+{
+    EXPECT_TRUE(igcSpeedIsPlausible(0.0f));
+    EXPECT_TRUE(igcSpeedIsPlausible(IGC_MAX_GROUND_SPEED_KPH));
+    EXPECT_FALSE(igcSpeedIsPlausible(-1.0f));
+    EXPECT_FALSE(igcSpeedIsPlausible(IGC_MAX_GROUND_SPEED_KPH + 0.1f));
+    EXPECT_FALSE(igcSpeedIsPlausible(NAN));
+    EXPECT_FALSE(igcSpeedIsPlausible(INFINITY));
+}
+
+TEST(IgcGpsFiltering, PositionJumpUsesElapsedTimeAndRejectsBadCoordinates)
+{
+    // About 33 metres in one second is below the 150 km/h ceiling.
+    EXPECT_TRUE(igcPositionJumpIsPlausible(0.0, 0.0, 0.0003, 0.0, 1000));
+    // The same jump over 100 ms is well beyond the ceiling.
+    EXPECT_FALSE(igcPositionJumpIsPlausible(0.0, 0.0, 0.0003, 0.0, 100));
+    EXPECT_TRUE(igcPositionJumpIsPlausible(0.0, 0.0, 0.0, 0.0, 0));
+    EXPECT_FALSE(igcPositionJumpIsPlausible(0.0, 0.0, 0.001, 0.0, 0));
+    EXPECT_FALSE(igcPositionJumpIsPlausible(91.0, 0.0, 0.0, 0.0, 1000));
+}
+
+TEST(IgcGpsFiltering, AltitudeJumpAllowsNormalMotionAndRejectsSpikes)
+{
+    EXPECT_TRUE(igcAltitudeJumpIsPlausible(1000.0f, 1060.0f, 1000));
+    EXPECT_FALSE(igcAltitudeJumpIsPlausible(1000.0f, 1100.0f, 1000));
+    EXPECT_FALSE(igcAltitudeJumpIsPlausible(1000.0f, NAN, 1000));
+}

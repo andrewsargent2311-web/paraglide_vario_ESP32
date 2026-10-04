@@ -15,9 +15,123 @@ unsigned long igcAboveThresholdSince = 0;
 unsigned long igcBelowThresholdSince = 0;
 unsigned long lastIgcFixWrite = 0;
 
+namespace {
+double acceptedLat = 0.0;
+double acceptedLon = 0.0;
+bool haveAcceptedPosition = false;
+unsigned long acceptedPositionAt = 0;
+uint32_t lastLocationAge = UINT32_MAX;
+bool latestPositionAccepted = false;
+
+float acceptedGpsAltitudeM = 0.0f;
+bool haveAcceptedGpsAltitude = false;
+unsigned long acceptedGpsAltitudeAt = 0;
+uint32_t lastAltitudeAge = UINT32_MAX;
+
+double distanceMeters(double lat1, double lon1, double lat2, double lon2) {
+  const double lat1Rad = radians(lat1);
+  const double lat2Rad = radians(lat2);
+  const double deltaLat = radians(lat2 - lat1);
+  const double deltaLon = radians(lon2 - lon1);
+  const double a = sin(deltaLat / 2.0) * sin(deltaLat / 2.0) +
+                   cos(lat1Rad) * cos(lat2Rad) *
+                   sin(deltaLon / 2.0) * sin(deltaLon / 2.0);
+  return 6371000.0 * 2.0 * atan2(sqrt(a), sqrt(1.0 - a));
+}
+
+bool gpsQualityIsGood() {
+  return gps.location.isValid() && gps.location.age() < 2000 &&
+         gps.satellites.isValid() && gps.satellites.age() < 2000 &&
+         gps.satellites.value() >= IGC_MIN_SATELLITES &&
+         gps.hdop.isValid() && gps.hdop.age() < 2000 &&
+         gps.hdop.hdop() <= IGC_MAX_HDOP;
+}
+
+void updateAcceptedGpsFix(unsigned long now) {
+  const uint32_t locationAge = gps.location.age();
+  if (locationAge < lastLocationAge) {
+    lastLocationAge = locationAge;
+    latestPositionAccepted = false;
+
+    if (gpsQualityIsGood()) {
+      const double lat = gps.location.lat();
+      const double lon = gps.location.lng();
+      const bool coordinatesInRange =
+        isfinite(lat) && isfinite(lon) && lat >= -90.0 && lat <= 90.0 &&
+        lon >= -180.0 && lon <= 180.0;
+      const unsigned long elapsed = now - acceptedPositionAt;
+      if (coordinatesInRange &&
+          (!haveAcceptedPosition ||
+           igcPositionJumpIsPlausible(acceptedLat, acceptedLon, lat, lon, elapsed))) {
+        acceptedLat = lat;
+        acceptedLon = lon;
+        acceptedPositionAt = now;
+        haveAcceptedPosition = true;
+        latestPositionAccepted = true;
+      } else if (coordinatesInRange) {
+        Serial.println("[IGC] GPS position jump rejected");
+      } else {
+        Serial.println("[IGC] GPS coordinates out of range");
+      }
+    } else {
+      Serial.println("[IGC] GPS fix rejected: stale or poor quality");
+    }
+  } else if (!gps.location.isValid() || locationAge >= 2000) {
+    latestPositionAccepted = false;
+  }
+
+  const uint32_t altitudeAge = gps.altitude.age();
+  if (altitudeAge < lastAltitudeAge) {
+    lastAltitudeAge = altitudeAge;
+    if (gps.altitude.isValid() && altitudeAge < 2000) {
+      const float altitudeM = gps.altitude.meters();
+      const unsigned long elapsed = now - acceptedGpsAltitudeAt;
+      if (isfinite(altitudeM) &&
+          (!haveAcceptedGpsAltitude ||
+           igcAltitudeJumpIsPlausible(acceptedGpsAltitudeM, altitudeM, elapsed))) {
+        acceptedGpsAltitudeM = altitudeM;
+        acceptedGpsAltitudeAt = now;
+        haveAcceptedGpsAltitude = true;
+      } else if (isfinite(altitudeM)) {
+        Serial.println("[IGC] GPS altitude jump rejected");
+      }
+    }
+  }
+}
+}  // namespace
+
 // =====================================================
 // IGC FLIGHT RECORDER
 // =====================================================
+bool igcSpeedIsPlausible(float speedKph) {
+  return isfinite(speedKph) && speedKph >= 0.0f &&
+         speedKph <= IGC_MAX_GROUND_SPEED_KPH;
+}
+
+bool igcPositionJumpIsPlausible(double fromLat, double fromLon,
+                                double toLat, double toLon,
+                                unsigned long elapsedMs) {
+  if (!isfinite(fromLat) || !isfinite(fromLon) ||
+      !isfinite(toLat) || !isfinite(toLon) ||
+      fromLat < -90.0 || fromLat > 90.0 || toLat < -90.0 || toLat > 90.0 ||
+      fromLon < -180.0 || fromLon > 180.0 || toLon < -180.0 || toLon > 180.0) {
+    return false;
+  }
+  if (elapsedMs == 0) return fromLat == toLat && fromLon == toLon;
+  const double speedKph =
+    distanceMeters(fromLat, fromLon, toLat, toLon) * 3600.0 / elapsedMs;
+  return isfinite(speedKph) && speedKph <= IGC_MAX_GROUND_SPEED_KPH;
+}
+
+bool igcAltitudeJumpIsPlausible(float fromAltitudeM, float toAltitudeM,
+                                unsigned long elapsedMs) {
+  if (!isfinite(fromAltitudeM) || !isfinite(toAltitudeM)) return false;
+  const float allowedChangeM =
+    IGC_ALTITUDE_JUMP_ALLOWANCE_M +
+    IGC_MAX_VERTICAL_SPEED_MPS * (elapsedMs / 1000.0f);
+  return fabsf(toAltitudeM - fromAltitudeM) <= allowedChangeM;
+}
+
 void formatIgcLatLon(double lat, double lon, char* out, size_t outSize) {
   char latHemi = (lat >= 0) ? 'N' : 'S';
   char lonHemi = (lon >= 0) ? 'E' : 'W';
@@ -47,12 +161,14 @@ void writeIgcBRecord() {
   gmtime_r(&nowEpoch, &utcTm);
 
   char latLonBuf[24];
-  formatIgcLatLon(gps.location.lat(), gps.location.lng(), latLonBuf, sizeof(latLonBuf));
+  formatIgcLatLon(haveAcceptedPosition ? acceptedLat : 0.0,
+                  haveAcceptedPosition ? acceptedLon : 0.0,
+                  latLonBuf, sizeof(latLonBuf));
 
-  bool fixValid = gps.location.isValid() && gps.location.age() < 2000 && gps.satellites.isValid() && gps.satellites.value() >= 4;
+  bool fixValid = latestPositionAccepted && gpsQualityIsGood();
 
   int pressureAltM = bmpOK ? (int)roundf(currentAltitudeM) : 0;
-  int gpsAltM = gps.altitude.isValid() ? (int)roundf(gps.altitude.meters()) : 0;
+  int gpsAltM = haveAcceptedGpsAltitude ? (int)roundf(acceptedGpsAltitudeM) : 0;
 
   char bRecord[64];
   snprintf(bRecord, sizeof(bRecord), "B%02d%02d%02d%s%c%05d%05d",
@@ -125,10 +241,18 @@ void stopIgcRecording() {
 }
 void updateIgcRecorder() {
   if (!flightRecorderEnabled) return;
-  if (!gps.speed.isValid()) return;
 
-  float speedKph = gps.speed.kmph();
   unsigned long now = millis();
+  updateAcceptedGpsFix(now);
+  bool speedValid = latestPositionAccepted && gpsQualityIsGood() &&
+                    gps.speed.isValid() && gps.speed.age() < 2000 &&
+                    igcSpeedIsPlausible(gps.speed.kmph());
+  if (!speedValid) {
+    igcAboveThresholdSince = 0;
+    igcBelowThresholdSince = 0;
+    if (!igcRecording) return;
+  }
+  float speedKph = speedValid ? gps.speed.kmph() : 0.0f;
 
   if (!igcRecording) {
     if (speedKph >= IGC_START_SPEED_KPH) {
@@ -148,7 +272,7 @@ void updateIgcRecorder() {
   // default, settings.h) -- when off, recording only ever stops via
   // flightRecorderEnabled being switched off or power loss, same as
   // before this feature existed.
-  if (igcAutoStopEnabled) {
+  if (igcAutoStopEnabled && speedValid) {
     if (speedKph < IGC_AUTOSTOP_SPEED_KPH) {
       if (igcBelowThresholdSince == 0) {
         igcBelowThresholdSince = now;

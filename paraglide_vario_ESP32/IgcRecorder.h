@@ -19,6 +19,14 @@
 
 #define IGC_FIX_INTERVAL_MS 4000UL
 
+// Recorder-side GPS sanity limits. A bad fix is logged as invalid using the
+// last accepted position instead of adding a jump to the flight track.
+#define IGC_MIN_SATELLITES 4
+#define IGC_MAX_HDOP 5.0f
+#define IGC_MAX_GROUND_SPEED_KPH 150.0f
+#define IGC_MAX_VERTICAL_SPEED_MPS 30.0f
+#define IGC_ALTITUDE_JUMP_ALLOWANCE_M 30.0f
+
 extern File igcFile;
 extern bool igcRecording;
 extern char igcFilename[32];
@@ -26,6 +34,12 @@ extern unsigned long igcAboveThresholdSince;
 extern unsigned long igcBelowThresholdSince;
 extern unsigned long lastIgcFixWrite;
 
+bool igcSpeedIsPlausible(float speedKph);
+bool igcPositionJumpIsPlausible(double fromLat, double fromLon,
+                                double toLat, double toLon,
+                                unsigned long elapsedMs);
+bool igcAltitudeJumpIsPlausible(float fromAltitudeM, float toAltitudeM,
+                                unsigned long elapsedMs);
 void formatIgcLatLon(double lat, double lon, char* out, size_t outSize);
 void writeIgcBRecord();
 void startIgcRecording();

@@ -8,6 +8,18 @@
 // =====================================================
 #include "DrawPages.h"
 #include "AirspaceProximity.h" 
+#include "AglDisplay.h"
+
+static AglDisplayBuffer aglDisplayBuffer;
+
+static bool getDisplayAglM(float& aglM) {
+  const bool baroFresh = millis() - lastSuccessfulBaroSample < 1000UL;
+  const bool gpsFresh = gps.location.isValid() && gps.location.age() < 2000;
+  const bool sourcesValid = bmpOK && windowCount > 0 && qnhCalibrated &&
+                            baroFresh && gpsFresh && groundElevationValid;
+  const float currentAglM = currentAltitudeM - (groundElevationFt / 3.28084f);
+  return aglDisplayBuffer.update(sourcesValid, currentAglM, millis(), aglM);
+}
 
 // Used only by drawADSBPage() below to snapshot the shared adsbDoc JSON
 // into a plain array before drawing -- not needed anywhere else, so it
@@ -475,9 +487,8 @@ void drawParagliderPage() {
   // this box (6px up from the box's bottom edge, same margin used
   // elsewhere on this page for a bottom-anchored line).
   char aglLineBuf[16];
-  bool aglOk = bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid;
-  if (aglOk) {
-    float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
+  float aglM;
+  if (getDisplayAglM(aglM)) {
     snprintf(aglLineBuf, sizeof(aglLineBuf), "%d%s", (int)roundf(altitudeToDisplay(aglM)), altitudeUnitLabel());
   } else {
     snprintf(aglLineBuf, sizeof(aglLineBuf), "--%s", altitudeUnitLabel());
@@ -1846,9 +1857,8 @@ void drawParamotorPage() {
   // this box (6px up from the box's bottom edge, same margin used
   // elsewhere on this page for a bottom-anchored line).
   char aglLineBuf[16];
-  bool aglOk = bmpOK && windowCount > 0 && qnhCalibrated && groundElevationValid;
-  if (aglOk) {
-    float aglM = currentAltitudeM - (groundElevationFt / 3.28084f);
+  float aglM;
+  if (getDisplayAglM(aglM)) {
     snprintf(aglLineBuf, sizeof(aglLineBuf), "%d%s", (int)roundf(altitudeToDisplay(aglM)), altitudeUnitLabel());
   } else {
     snprintf(aglLineBuf, sizeof(aglLineBuf), "--%s", altitudeUnitLabel());
