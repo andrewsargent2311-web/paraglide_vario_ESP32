@@ -16,10 +16,7 @@ unsigned long igcBelowThresholdSince = 0;
 unsigned long lastIgcFixWrite = 0;
 
 namespace {
-double acceptedLat = 0.0;
-double acceptedLon = 0.0;
-bool haveAcceptedPosition = false;
-unsigned long acceptedPositionAt = 0;
+IgcPositionFilter positionFilter;
 uint32_t lastLocationAge = UINT32_MAX;
 bool latestPositionAccepted = false;
 
@@ -37,6 +34,12 @@ double distanceMeters(double lat1, double lon1, double lat2, double lon2) {
                    cos(lat1Rad) * cos(lat2Rad) *
                    sin(deltaLon / 2.0) * sin(deltaLon / 2.0);
   return 6371000.0 * 2.0 * atan2(sqrt(a), sqrt(1.0 - a));
+}
+
+unsigned long cappedPositionInterval(unsigned long elapsedMs) {
+  return elapsedMs > IGC_MAX_POSITION_INTERVAL_MS
+           ? IGC_MAX_POSITION_INTERVAL_MS
+           : elapsedMs;
 }
 
 bool gpsQualityIsGood() {
@@ -58,21 +61,21 @@ void updateAcceptedGpsFix(unsigned long now) {
       const bool coordinatesInRange =
         isfinite(lat) && isfinite(lon) && lat >= -90.0 && lat <= 90.0 &&
         lon >= -180.0 && lon <= 180.0;
-      const unsigned long elapsed = now - acceptedPositionAt;
-      if (coordinatesInRange &&
-          (!haveAcceptedPosition ||
-           igcPositionJumpIsPlausible(acceptedLat, acceptedLon, lat, lon, elapsed))) {
-        acceptedLat = lat;
-        acceptedLon = lon;
-        acceptedPositionAt = now;
-        haveAcceptedPosition = true;
-        latestPositionAccepted = true;
-      } else if (coordinatesInRange) {
-        Serial.println("[IGC] GPS position jump rejected");
+      if (coordinatesInRange) {
+        latestPositionAccepted = positionFilter.update(lat, lon, now);
+        if (!latestPositionAccepted) {
+          Serial.println(positionFilter.hasAcceptedPosition()
+                           ? "[IGC] GPS position jump rejected"
+                           : "[IGC] GPS position awaiting consistent fixes");
+        }
       } else {
+        positionFilter.resetCandidate();
+        latestPositionAccepted = false;
         Serial.println("[IGC] GPS coordinates out of range");
       }
     } else {
+      positionFilter.resetCandidate();
+      latestPositionAccepted = false;
       Serial.println("[IGC] GPS fix rejected: stale or poor quality");
     }
   } else if (!gps.location.isValid() || locationAge >= 2000) {
@@ -97,6 +100,81 @@ void updateAcceptedGpsFix(unsigned long now) {
   }
 }
 }  // namespace
+
+IgcPositionFilter::IgcPositionFilter()
+  : acceptedLat_(0.0),
+    acceptedLon_(0.0),
+    haveAcceptedPosition_(false),
+    acceptedPositionAt_(0),
+    candidateLat_(0.0),
+    candidateLon_(0.0),
+    candidatePositionAt_(0),
+    candidateCount_(0) {}
+
+bool IgcPositionFilter::update(double lat, double lon, unsigned long now) {
+  if (!isfinite(lat) || !isfinite(lon) ||
+      lat < -90.0 || lat > 90.0 || lon < -180.0 || lon > 180.0) {
+    resetCandidate();
+    return false;
+  }
+
+  if (!haveAcceptedPosition_) {
+    if (addCandidate(lat, lon, now)) {
+      accept(lat, lon, now);
+      return true;
+    }
+    return false;
+  }
+
+  const unsigned long elapsed = cappedPositionInterval(now - acceptedPositionAt_);
+  if (igcPositionJumpIsPlausible(acceptedLat_, acceptedLon_, lat, lon, elapsed)) {
+    accept(lat, lon, now);
+    return true;
+  }
+
+  if (addCandidate(lat, lon, now)) {
+    accept(lat, lon, now);
+    return true;
+  }
+  return false;
+}
+
+bool IgcPositionFilter::addCandidate(double lat, double lon,
+                                     unsigned long now) {
+  const unsigned long elapsed = cappedPositionInterval(now - candidatePositionAt_);
+  const bool consistent =
+    candidateCount_ > 0 &&
+    igcPositionJumpIsPlausible(candidateLat_, candidateLon_, lat, lon, elapsed);
+  candidateCount_ = consistent ? candidateCount_ + 1 : 1;
+  candidateLat_ = lat;
+  candidateLon_ = lon;
+  candidatePositionAt_ = now;
+  return candidateCount_ >= IGC_POSITION_REANCHOR_FIXES;
+}
+
+void IgcPositionFilter::accept(double lat, double lon, unsigned long now) {
+  acceptedLat_ = lat;
+  acceptedLon_ = lon;
+  acceptedPositionAt_ = now;
+  haveAcceptedPosition_ = true;
+  resetCandidate();
+}
+
+void IgcPositionFilter::resetCandidate() {
+  candidateCount_ = 0;
+}
+
+bool IgcPositionFilter::hasAcceptedPosition() const {
+  return haveAcceptedPosition_;
+}
+
+double IgcPositionFilter::acceptedLatitude() const {
+  return acceptedLat_;
+}
+
+double IgcPositionFilter::acceptedLongitude() const {
+  return acceptedLon_;
+}
 
 // =====================================================
 // IGC FLIGHT RECORDER
@@ -165,8 +243,10 @@ void writeIgcBRecord() {
   gmtime_r(&nowEpoch, &utcTm);
 
   char latLonBuf[24];
-  formatIgcLatLon(haveAcceptedPosition ? acceptedLat : 0.0,
-                  haveAcceptedPosition ? acceptedLon : 0.0,
+  formatIgcLatLon(positionFilter.hasAcceptedPosition()
+                    ? positionFilter.acceptedLatitude() : 0.0,
+                  positionFilter.hasAcceptedPosition()
+                    ? positionFilter.acceptedLongitude() : 0.0,
                   latLonBuf, sizeof(latLonBuf));
 
   bool fixValid = latestPositionAccepted && gpsQualityIsGood();

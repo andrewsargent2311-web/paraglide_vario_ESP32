@@ -21,11 +21,38 @@
 
 // Recorder-side GPS sanity limits. A bad fix is logged as invalid using the
 // last accepted position instead of adding a jump to the flight track.
+// Position-check intervals are capped so a long GPS gap cannot legitimize a
+// large jump.
 #define IGC_MIN_SATELLITES 4
 #define IGC_MAX_HDOP 5.0f
 #define IGC_MAX_GROUND_SPEED_KPH 150.0f
+#define IGC_POSITION_REANCHOR_FIXES 3
+#define IGC_MAX_POSITION_INTERVAL_MS 10000UL
 #define IGC_MAX_VERTICAL_SPEED_MPS 30.0f
 #define IGC_ALTITUDE_JUMP_ALLOWANCE_M 30.0f
+
+class IgcPositionFilter {
+public:
+  IgcPositionFilter();
+  bool update(double lat, double lon, unsigned long now);
+  void resetCandidate();
+  bool hasAcceptedPosition() const;
+  double acceptedLatitude() const;
+  double acceptedLongitude() const;
+
+private:
+  bool addCandidate(double lat, double lon, unsigned long now);
+  void accept(double lat, double lon, unsigned long now);
+
+  double acceptedLat_;
+  double acceptedLon_;
+  bool haveAcceptedPosition_;
+  unsigned long acceptedPositionAt_;
+  double candidateLat_;
+  double candidateLon_;
+  unsigned long candidatePositionAt_;
+  uint8_t candidateCount_;
+};
 
 extern File igcFile;
 extern bool igcRecording;
