@@ -507,7 +507,7 @@ void drawParagliderPage() {
     top + 14,
     "V GROUND");
 
-  if (gps.speed.isValid()) {
+  if (gps.speed.isValid() && gps.speed.age() < 2000) {
 
     snprintf(
       buffer,
@@ -636,7 +636,8 @@ void drawParagliderPage() {
     "GLIDE RATIO");
 
   bool glideValid =
-    bmpOK && gps.speed.isValid() && currentClimbRateAvgMS < -CLIMB_DEADBAND_MS && currentClimbRateAvgMS > -20.0f;
+    bmpOK && gps.speed.isValid() && gps.speed.age() < 2000 &&
+    currentClimbRateAvgMS < -CLIMB_DEADBAND_MS && currentClimbRateAvgMS > -20.0f;
 
   if (glideValid) {
 
@@ -1601,7 +1602,7 @@ void drawADSBPage() {
   // =========================================================
 
   char gsText[16];
-  if (gps.speed.isValid()) {
+  if (gps.speed.isValid() && gps.speed.age() < 2000) {
     snprintf(gsText, sizeof(gsText), "%d %s", (int)roundf(speedKphToDisplay(gps.speed.kmph())), speedUnitLabel());
   } else {
     snprintf(gsText, sizeof(gsText), "-- %s", speedUnitLabel());
@@ -1871,7 +1872,7 @@ void drawParamotorPage() {
   u8g2.setFont(u8g2_font_helvB10_tf);
   u8g2.drawStr(colW + 5, top + 14, "V GROUND");
 
-  if (gps.speed.isValid()) {
+  if (gps.speed.isValid() && gps.speed.age() < 2000) {
     snprintf(buffer, sizeof(buffer), "%d", (int)roundf(speedKphToDisplay(gps.speed.kmph())));
     drawLargeValueWithSmallUnit(colW + colW / 2, top + rowH / 2 + 20, colW - 10, buffer, speedUnitLabel());
   } else {
