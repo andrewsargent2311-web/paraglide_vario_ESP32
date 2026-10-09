@@ -8,9 +8,9 @@
 // Declares formatIgcLatLon(). Also pulls in SdCard.h and settings.h.
 #include "IgcRecorder.h"
 
-// SCOPE: formatIgcLatLon() only. writeIgcBRecord(), start/stopIgcRecording(),
-// updateIgcRecorder() and setFlightRecorderEnabled() depend on SD_MMC, a
-// FreeRTOS semaphore, the system clock and millis(), and have no seam.
+// SCOPE: formatIgcLatLon() and IgcPositionFilter. The recording lifecycle
+// functions depend on SD_MMC, a FreeRTOS semaphore, the system clock and
+// millis(), and have no seam.
 //
 // IGC position fields (B-record columns):
 //     latitude   DDMMmmmN|S     7 digits + hemisphere      (8 chars)
@@ -203,4 +203,111 @@ TEST(IgcLatLonFormat, NeverWritesPastTheGivenBufferSize)
     {
         EXPECT_EQ(buf[i], 'X') << "byte " << i << " was overwritten";
     }
+}
+
+TEST(IgcGpsFiltering, AcceptsPlausibleSpeedsAndRejectsInvalidValues)
+{
+    EXPECT_TRUE(igcSpeedIsPlausible(0.0f));
+    EXPECT_TRUE(igcSpeedIsPlausible(IGC_MAX_GROUND_SPEED_KPH));
+    EXPECT_FALSE(igcSpeedIsPlausible(-1.0f));
+    EXPECT_FALSE(igcSpeedIsPlausible(IGC_MAX_GROUND_SPEED_KPH + 0.1f));
+    EXPECT_FALSE(igcSpeedIsPlausible(NAN));
+    EXPECT_FALSE(igcSpeedIsPlausible(INFINITY));
+}
+
+TEST(IgcGpsFiltering, DetectsEachAgeResetAsNewData)
+{
+    uint32_t previousAge = UINT32_MAX;
+
+    EXPECT_TRUE(igcGpsAgeIndicatesNewData(0, previousAge));
+    EXPECT_FALSE(igcGpsAgeIndicatesNewData(1, previousAge));
+    EXPECT_FALSE(igcGpsAgeIndicatesNewData(1000, previousAge));
+    EXPECT_TRUE(igcGpsAgeIndicatesNewData(0, previousAge));
+    EXPECT_FALSE(igcGpsAgeIndicatesNewData(2, previousAge));
+    EXPECT_TRUE(igcGpsAgeIndicatesNewData(0, previousAge));
+}
+
+TEST(IgcGpsFiltering, PositionJumpUsesElapsedTimeAndRejectsBadCoordinates)
+{
+    // About 33 metres in one second is below the 150 km/h ceiling.
+    EXPECT_TRUE(igcPositionJumpIsPlausible(0.0, 0.0, 0.0003, 0.0, 1000));
+    // The same jump over 100 ms is well beyond the ceiling.
+    EXPECT_FALSE(igcPositionJumpIsPlausible(0.0, 0.0, 0.0003, 0.0, 100));
+    EXPECT_TRUE(igcPositionJumpIsPlausible(0.0, 0.0, 0.0, 0.0, 0));
+    EXPECT_FALSE(igcPositionJumpIsPlausible(0.0, 0.0, 0.001, 0.0, 0));
+    EXPECT_FALSE(igcPositionJumpIsPlausible(91.0, 0.0, 0.0, 0.0, 1000));
+}
+
+TEST(IgcGpsFiltering, RequiresConsistentFixesBeforeSettingInitialAnchor)
+{
+    IgcPositionFilter filter;
+
+    EXPECT_FALSE(filter.update(-41.0, 174.0, 1000));
+    EXPECT_FALSE(filter.hasAcceptedPosition());
+    EXPECT_FALSE(filter.update(-40.9999, 174.0, 2000));
+    EXPECT_TRUE(filter.update(-40.9998, 174.0, 3000));
+    EXPECT_TRUE(filter.hasAcceptedPosition());
+    EXPECT_DOUBLE_EQ(filter.acceptedLatitude(), -40.9998);
+}
+
+TEST(IgcGpsFiltering, ReanchorsAfterThreeConsistentRejectedFixes)
+{
+    IgcPositionFilter filter;
+    ASSERT_FALSE(filter.update(0.0, 0.0, 1000));
+    ASSERT_FALSE(filter.update(0.0, 0.0, 2000));
+    ASSERT_TRUE(filter.update(0.0, 0.0, 3000));
+
+    EXPECT_FALSE(filter.update(1.0, 0.0, 4000));
+    EXPECT_DOUBLE_EQ(filter.acceptedLatitude(), 0.0);
+    EXPECT_FALSE(filter.update(1.0001, 0.0, 5000));
+    EXPECT_DOUBLE_EQ(filter.acceptedLatitude(), 0.0);
+    EXPECT_TRUE(filter.update(1.0002, 0.0, 6000));
+    EXPECT_DOUBLE_EQ(filter.acceptedLatitude(), 1.0002);
+}
+
+TEST(IgcGpsFiltering, ReanchorRequiresConsecutiveConsistentCandidates)
+{
+    IgcPositionFilter filter;
+    ASSERT_FALSE(filter.update(0.0, 0.0, 1000));
+    ASSERT_FALSE(filter.update(0.0, 0.0, 2000));
+    ASSERT_TRUE(filter.update(0.0, 0.0, 3000));
+
+    EXPECT_FALSE(filter.update(1.0, 0.0, 4000));
+    EXPECT_FALSE(filter.update(2.0, 0.0, 5000));
+    EXPECT_FALSE(filter.update(1.0001, 0.0, 6000));
+    EXPECT_FALSE(filter.update(1.0002, 0.0, 7000));
+    EXPECT_TRUE(filter.update(1.0003, 0.0, 8000));
+    EXPECT_DOUBLE_EQ(filter.acceptedLatitude(), 1.0003);
+}
+
+TEST(IgcGpsFiltering, PlausibleFixClearsAnIsolatedJumpCandidate)
+{
+    IgcPositionFilter filter;
+    ASSERT_FALSE(filter.update(0.0, 0.0, 1000));
+    ASSERT_FALSE(filter.update(0.0, 0.0, 2000));
+    ASSERT_TRUE(filter.update(0.0, 0.0, 3000));
+
+    EXPECT_FALSE(filter.update(1.0, 0.0, 4000));
+    EXPECT_TRUE(filter.update(0.0001, 0.0, 5000));
+    EXPECT_FALSE(filter.update(1.0001, 0.0, 6000));
+    EXPECT_DOUBLE_EQ(filter.acceptedLatitude(), 0.0001);
+}
+
+TEST(IgcGpsFiltering, CapsElapsedTimeForPositionJumpChecks)
+{
+    IgcPositionFilter filter;
+    ASSERT_FALSE(filter.update(0.0, 0.0, 1000));
+    ASSERT_FALSE(filter.update(0.0, 0.0, 2000));
+    ASSERT_TRUE(filter.update(0.0, 0.0, 3000));
+
+    // This would pass at 150 km/h if the full 10-minute gap were used.
+    EXPECT_FALSE(filter.update(0.01, 0.0, 603000));
+    EXPECT_DOUBLE_EQ(filter.acceptedLatitude(), 0.0);
+}
+
+TEST(IgcGpsFiltering, AltitudeJumpAllowsNormalMotionAndRejectsSpikes)
+{
+    EXPECT_TRUE(igcAltitudeJumpIsPlausible(1000.0f, 1060.0f, 1000));
+    EXPECT_FALSE(igcAltitudeJumpIsPlausible(1000.0f, 1100.0f, 1000));
+    EXPECT_FALSE(igcAltitudeJumpIsPlausible(1000.0f, NAN, 1000));
 }

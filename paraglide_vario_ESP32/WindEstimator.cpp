@@ -2,6 +2,10 @@
 #include "Gps.h"
 #include <math.h>
 
+namespace {
+const uint32_t GPS_WIND_SAMPLE_MAX_AGE_MS = 2000;
+}
+
 // ============================================================
 // 360° WIND / AIRSPEED ESTIMATOR
 // ============================================================
@@ -29,11 +33,23 @@ bool windEstimatorInitialized = false;
 void updateWindEstimator() {
 
   // ---------------------------------------------------------
-  // Need valid GPS speed and course
+  // Only consume complete, fresh GPS updates. Reusing the same sample on
+  // every loop pass biases the speed extrema and turn accumulation.
   // ---------------------------------------------------------
-  if (!gps.speed.isValid() || !gps.course.isValid()) {
+  const bool speedFresh = gps.speed.isValid() &&
+                          gps.speed.age() < GPS_WIND_SAMPLE_MAX_AGE_MS;
+  const bool courseFresh = gps.course.isValid() &&
+                           gps.course.age() < GPS_WIND_SAMPLE_MAX_AGE_MS;
+  if (!speedFresh || !courseFresh) {
+    windEstimatorInitialized = false;
+    windCircleActive = false;
+    windCircleAccumulatedDeg = 0.0f;
     return;
   }
+
+  const bool speedUpdated = gps.speed.isUpdated();
+  const bool courseUpdated = gps.course.isUpdated();
+  if (!speedUpdated || !courseUpdated) return;
 
   float groundSpeedKph = gps.speed.kmph();
   float trackDeg = gps.course.deg();

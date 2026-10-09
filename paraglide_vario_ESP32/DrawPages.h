@@ -160,6 +160,7 @@ extern FanetWeatherStation fanetWeatherStations[MAX_FANET_WEATHER_STATIONS];
 
 extern int windowCount;
 extern float currentAltitudeM;
+extern unsigned long lastSuccessfulBaroSample;
 extern float currentClimbRateMS;
 extern float currentClimbRateAvgMS;
 extern float currentQNH;
