@@ -2,6 +2,7 @@
 #define BLE_MANAGER_H
 
 #include <Arduino.h>
+#include <atomic>
 
 // =====================================================
 // BLUETOOTH (BLE CENTRAL) MANAGER -- NimBLE-Arduino port
@@ -48,10 +49,10 @@ struct BleScanResult {
 // boot unless a device was remembered from a previous session (see
 // loadBleSettings()), in which case it's turned on automatically so the
 // vario can go looking for it.
-extern bool bleEnabled;
+extern std::atomic<bool> bleEnabled;
 
 // True while actually connected to a peripheral right now.
-extern volatile bool bleConnected;
+extern std::atomic<bool> bleConnected;
 
 // Name/address of whichever device is currently connected, or was last
 // remembered (persisted to flash) -- "" if none. Shown on the Bluetooth
@@ -111,11 +112,11 @@ size_t bleReadLatestEngineData(uint8_t* outBuf, size_t outBufLen, bool* outIsNew
 // =====================================================
 // DECODED ENGINE TELEMETRY
 //
-// bleManagerLoop() decodes the nRF52840 engine meter's 9-byte NUS packet
-// (see the layout comment above decodeEnginePacket() in ble_manager.cpp)
-// into these fields every time a new, checksum-valid notification
-// arrives. Pages/menus should read these rather than touching
-// bleReadLatestEngineData()'s raw bytes directly.
+// bleManagerLoop() decodes either the legacy 9-byte or battery-extended
+// 10-byte nRF52840 engine meter NUS packet (see the layout comment above
+// decodeEnginePacket() in ble_manager.cpp) into these fields every time a
+// new, checksum-valid notification arrives. Pages/menus should read these
+// rather than touching bleReadLatestEngineData()'s raw bytes directly.
 //
 // engineDataValid is automatically cleared ~2s after the last good
 // packet (engine meter out of range, powered off, or disconnected) so a
