@@ -557,7 +557,13 @@ static void decodeEnginePacket(const uint8_t* buf, size_t len) {
   engineChtC = chtRaw / 10.0f;
   engineEgtFault = (flags & 0x01) != 0;
   engineChtFault = (flags & 0x02) != 0;
-
+  static unsigned long lastDbg = 0;
+  if (millis() - lastDbg > 1000) {
+  lastDbg = millis();
+  Serial.printf("[ENG] len=%u rpm=%u cht=%.1f flags=0x%02X (egtFault=%d chtFault=%d)\n",
+                (unsigned)len, rpmRaw, chtRaw / 10.0f, flags,
+                (flags & 0x01) != 0, (flags & 0x02) != 0);
+}
   engineDataValid = true;
   lastEngineDataMillis = millis();
 }
