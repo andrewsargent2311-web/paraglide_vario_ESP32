@@ -56,6 +56,10 @@ static NimBLEClient* pClient = nullptr;
 // survive past the burst has to be copied out into plain fields while
 // still inside onResult()).
 static std::atomic<bool> connectPending(false);
+// Set by onScanComplete() once the scan that found the saved device has
+// fully stopped. bleManagerLoop() then does the (blocking) connect on its
+// own task -- never on the NimBLE host task, which would deadlock.
+static std::atomic<bool> connectScanDone(false);
 static char pendingConnectAddress[18] = "";
 static uint8_t pendingConnectAddressType = 0;
 static char pendingConnectName[BLE_DEVICE_NAME_MAX_LEN] = "";
@@ -107,6 +111,11 @@ static unsigned long lastEngineDataMillis = 0;
 // has a long-standing open bug against, which is why this port is here.
 // =====================================================
 class VarioScanCallbacks : public NimBLEScanCallbacks {
+  // NimBLE-Arduino 2.x reports "scan finished" ONLY through this callback.
+  void onScanEnd(const NimBLEScanResults& results, int reason) override {
+    onScanComplete(results, reason);
+  }
+
   void onResult(const NimBLEAdvertisedDevice* advertisedDevice) override {
     String addr = advertisedDevice->getAddress().toString().c_str();
     String name = advertisedDevice->haveName() ? advertisedDevice->getName().c_str() : "";
@@ -235,23 +244,15 @@ static void startScanBurst() {
   pScan->setActiveScan(true);
   pScan->setInterval(100);
   pScan->setWindow(99);
-  pScan->start(BLE_SCAN_WINDOW_S * 1000, onScanComplete, false);  // NimBLEScan::start() takes ms, not seconds
+  pScan->start(BLE_SCAN_WINDOW_S * 1000, /*isContinue=*/false, /*restart=*/true);  // ms; completion arrives via onScanEnd()
 }
 
 static void onScanComplete(const NimBLEScanResults& results, int reason) {
   NimBLEDevice::getScan()->clearResults();  // free the stack's own cache -- we keep our own list in scanResults[]
 
   if (connectPending.load()) {
-    connectPending.store(false);
-    if (!bleEnabled ||
-        (bleRememberedAddress[0] == '\0' && bleRememberedName[0] == '\0') ||
-        pendingConnectGeneration != connectGeneration.load()) {
-      Serial.println("[BLE] Pending engine-meter reconnect cancelled");
-      return;
-    }
-    NimBLEAddress addr(std::string(pendingConnectAddress), pendingConnectAddressType);
-    tryConnect(addr, pendingConnectName, pendingConnectGeneration);
-    return;  // don't immediately restart scanning right after a connect attempt
+    connectScanDone.store(true);  // bleManagerLoop() performs the connect
+    return;  // don't immediately restart scanning right after a match
   }
 
   if (bleEnabled && !bleConnected &&
@@ -445,6 +446,7 @@ bool bleConnectToScanResult(uint8_t index) {
 
   uint32_t generation = connectGeneration.fetch_add(1) + 1;
   connectPending.store(false);
+  connectScanDone.store(false);
   bleStopScan();
   return tryConnect(NimBLEAddress(std::string(r.address), r.addressType), r.name,
                     generation);
@@ -453,6 +455,7 @@ bool bleConnectToScanResult(uint8_t index) {
 void bleForgetDevice() {
   connectGeneration.fetch_add(1);
   connectPending.store(false);
+  connectScanDone.store(false);
   bleStopScan();
   if (pClient != nullptr && pClient->isConnected()) {
     pClient->disconnect();
@@ -486,6 +489,7 @@ void bleSetEnabled(bool enabled) {
   if (!enabled) {
     connectGeneration.fetch_add(1);
     connectPending.store(false);
+    connectScanDone.store(false);
     bleStopScan();
     if (pClient != nullptr && pClient->isConnected()) {
       pClient->disconnect();
@@ -510,6 +514,21 @@ void bleManagerLoop() {
   }
   if (engineDataValid && millis() - lastEngineDataMillis > ENGINE_DATA_TIMEOUT_MS) {
     engineDataValid = false;  // engine meter went quiet -- out of range, off, or disconnected
+  }
+
+  if (connectPending.load() && connectScanDone.load()) {
+    connectScanDone.store(false);
+    connectPending.store(false);
+    lastReconnectAttempt = millis();
+    if (!bleEnabled || bleConnected ||
+        (bleRememberedAddress[0] == '\0' && bleRememberedName[0] == '\0') ||
+        pendingConnectGeneration != connectGeneration.load()) {
+      Serial.println("[BLE] Pending engine-meter reconnect cancelled");
+    } else {
+      NimBLEAddress addr(std::string(pendingConnectAddress), pendingConnectAddressType);
+      tryConnect(addr, pendingConnectName, pendingConnectGeneration);
+    }
+    return;
   }
 
   if (!bleEnabled || bleConnected || connectPending.load()) return;
