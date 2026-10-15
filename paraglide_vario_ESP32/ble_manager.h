@@ -127,6 +127,8 @@ extern volatile bool engineDataValid;
 extern volatile float engineRpm;     // RPM
 extern volatile float engineEgtC;    // Exhaust gas temp, deg C
 extern volatile float engineChtC;    // Cylinder head temp, deg C
+extern volatile uint8_t engineBatteryPercent;  // 0-100; present in extended packets only
+extern volatile bool engineBatteryPercentValid;
 extern volatile bool engineEgtFault; // true if the EGT thermocouple amp reported a fault (open/short circuit)
 extern volatile bool engineChtFault; // same, for the CHT channel
 

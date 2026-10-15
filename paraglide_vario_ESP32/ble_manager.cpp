@@ -90,6 +90,8 @@ volatile bool engineDataValid = false;
 volatile float engineRpm = 0.0f;
 volatile float engineEgtC = 0.0f;
 volatile float engineChtC = 0.0f;
+volatile uint8_t engineBatteryPercent = 0;
+volatile bool engineBatteryPercentValid = false;
 volatile bool engineEgtFault = false;
 volatile bool engineChtFault = false;
 
@@ -555,6 +557,11 @@ static void decodeEnginePacket(const uint8_t* buf, size_t len) {
   engineRpm = (float)rpmRaw;
   engineEgtC = egtRaw / 10.0f;
   engineChtC = chtRaw / 10.0f;
+  engineBatteryPercentValid =
+      len == ENGINE_PKT_LEN_WITH_BATTERY && buf[8] <= 100;
+  if (engineBatteryPercentValid) {
+    engineBatteryPercent = buf[8];
+  }
   engineEgtFault = (flags & 0x01) != 0;
   engineChtFault = (flags & 0x02) != 0;
   static unsigned long lastDbg = 0;
