@@ -1,20 +1,13 @@
 #include "ble_manager.h"
+#include "EngineNmea.h"
 #include <NimBLEDevice.h>
 #include <Preferences.h>
 #include <atomic>
 
 // =====================================================
-// ASSUMED ENGINE-METER PROTOCOL -- see the note at the top of
-// ble_manager.h. This is the Nordic UART Service (NUS): a de facto
-// standard "just stream bytes" pattern many nRF5 projects use, NOT
-// something this vario invented. NUS_CHAR_TX_UUID is the characteristic
-// the nRF52840 (as a GATT *server*) notifies on -- i.e. what we, as the
-// central, subscribe to in order to receive engine data.
-//
-// If the real firmware differs, these two lines are the only thing that
-// needs to change for the connection itself to work -- update them to
-// match, then adjust how bleReadLatestEngineData()'s bytes get decoded
-// wherever you display them.
+// ENGINE-METER PROTOCOL: the Nordic UART Service TX characteristic sends
+// ASCII NMEA-style EMS and PEMBAT sentences. MTU-sized notifications are
+// treated as arbitrary stream fragments and reassembled into lines.
 // =====================================================
 static const char* NUS_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
 static const char* NUS_CHAR_TX_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";  // notify: peripheral -> us
@@ -26,11 +19,6 @@ static const char* NUS_CHAR_TX_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";  /
 // How often bleManagerLoop() starts a fresh scan burst to look for the
 // remembered device when we're not currently connected to it.
 #define BLE_RECONNECT_RETRY_MS 15000UL
-// Max bytes kept from a single engine-meter notification. NUS payloads
-// are capped by the BLE MTU anyway (typically <=20 bytes on a default
-// MTU); 64 leaves headroom without the buffer being unreasonably large.
-#define BLE_ENGINE_DATA_MAX_LEN 64
-
 static const char* NVS_NAMESPACE = "conn";  // shared with wifi_manager.cpp
 static const char* NVS_KEY_BLE_ADDR = "bleAddr";
 static const char* NVS_KEY_BLE_NAME = "bleName";
@@ -67,9 +55,19 @@ static uint32_t pendingConnectGeneration = 0;
 static std::atomic<uint32_t> connectGeneration(0);
 static std::atomic<bool> connectInProgress(false);
 
-static uint8_t engineDataBuf[BLE_ENGINE_DATA_MAX_LEN];
-static size_t engineDataLen = 0;
-static bool engineDataIsNew = false;
+static constexpr size_t kEngineFifoCapacity = 256U;
+static constexpr size_t kLegacyPacketCapacity = 10U;
+static constexpr TickType_t kEngineDataMutexTimeout = pdMS_TO_TICKS(20);
+static uint8_t engineNmeaFifo[kEngineFifoCapacity];
+static size_t engineNmeaHead = 0U;
+static size_t engineNmeaTail = 0U;
+static size_t engineNmeaCount = 0U;
+static uint8_t legacyEnginePacket[kLegacyPacketCapacity];
+static size_t legacyEnginePacketLen = 0U;
+static bool legacyEnginePacketIsNew = false;
+static std::atomic<uint32_t> engineNotificationDrops(0U);
+static EngineNmeaLineAssembler engineLineAssembler;
+static EngineNmeaCounters engineNmeaCounters = {};
 
 static unsigned long lastReconnectAttempt = 0;
 
@@ -78,12 +76,23 @@ static void onScanComplete(const NimBLEScanResults& results, int reason);
 static bool tryConnect(NimBLEAddress address, const char* name, uint32_t generation);
 static bool rememberDevice(const char* address, const char* name, uint32_t generation);
 static void decodeEnginePacket(const uint8_t* buf, size_t len);
+static void handleEngineNmeaLine(const char* line, size_t len, void* context);
+static void printEngineDebug();
+
+struct EngineDataBatch {
+  uint8_t nmea[kEngineFifoCapacity];
+  size_t nmeaLen;
+  uint8_t legacy[kLegacyPacketCapacity];
+  size_t legacyLen;
+  bool legacyIsNew;
+};
+
+[[nodiscard]] static bool takeEngineData(EngineDataBatch& batch);
 
 // =====================================================
 // DECODED ENGINE TELEMETRY -- see ble_manager.h for field docs. Written
-// only from decodeEnginePacket(), called from bleManagerLoop() (main/UI
-// core), so no separate mutex needed the way engineDataBuf's raw bytes
-// have one -- there's no BLE-stack-task writer to race against here.
+// only from bleManagerLoop() (main/UI core), so no separate mutex is
+// needed; notification bytes are passed over the mutex-protected FIFO.
 // =====================================================
 #define ENGINE_DATA_TIMEOUT_MS 2000UL
 #define ENGINE_PKT_HEADER 0xAE
@@ -176,20 +185,40 @@ class VarioScanCallbacks : public NimBLEScanCallbacks {
 static VarioScanCallbacks scanCallbacks;
 
 // =====================================================
-// NOTIFY CALLBACK: fires on the BLE stack's task whenever the engine
-// meter's TX characteristic notifies. Just stashes the raw bytes --
-// decoding them into actual RPM/EGT/etc. fields is a job for whichever
-// page ends up displaying them, once the data format is settled.
+// NOTIFY CALLBACK: runs on the BLE stack task and only copies bytes into
+// the legacy slot or fixed NMEA FIFO under a bounded mutex wait.
 // =====================================================
 static void engineNotifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
-  if (engineDataMutex == nullptr || xSemaphoreTake(engineDataMutex, pdMS_TO_TICKS(20)) != pdTRUE) return;
+  (void)pChar;
+  (void)isNotify;
+  if (engineDataMutex == nullptr || pData == nullptr || length == 0U) {
+    engineNotificationDrops.fetch_add(1U);
+    return;
+  }
+  if (xSemaphoreTake(engineDataMutex, kEngineDataMutexTimeout) != pdTRUE) {
+    engineNotificationDrops.fetch_add(1U);
+    return;
+  }
 
-  size_t n = length < sizeof(engineDataBuf) ? length : sizeof(engineDataBuf);
-  memcpy(engineDataBuf, pData, n);
-  engineDataLen = n;
-  engineDataIsNew = true;
+  // TRANSITIONAL: remove once all engine meters run the NMEA firmware
+  if ((length == ENGINE_PKT_LEN_LEGACY || length == ENGINE_PKT_LEN_WITH_BATTERY) &&
+      pData[0] == ENGINE_PKT_HEADER) {
+    memcpy(legacyEnginePacket, pData, length);
+    legacyEnginePacketLen = length;
+    legacyEnginePacketIsNew = true;
+  } else if (length <= kEngineFifoCapacity - engineNmeaCount) {
+    for (size_t i = 0U; i < length; ++i) {
+      engineNmeaFifo[engineNmeaTail] = pData[i];
+      engineNmeaTail = (engineNmeaTail + 1U) % kEngineFifoCapacity;
+    }
+    engineNmeaCount += length;
+  } else {
+    engineNotificationDrops.fetch_add(1U);
+  }
 
-  xSemaphoreGive(engineDataMutex);
+  if (xSemaphoreGive(engineDataMutex) != pdTRUE) {
+    engineNotificationDrops.fetch_add(1U);
+  }
 }
 
 // =====================================================
@@ -226,6 +255,9 @@ void loadBleSettings() {
   bleRememberedName[BLE_DEVICE_NAME_MAX_LEN - 1] = '\0';
 
   NimBLEDevice::init("ParaVario");
+  if (!NimBLEDevice::setMTU(247U)) {
+    Serial.println("[BLE] Could not set preferred MTU to 247");
+  }
 
   if (bleRememberedAddress[0] != '\0' || bleRememberedName[0] != '\0') {
     Serial.println("[BLE] Remembered device found in flash -- turning Bluetooth on to look for it");
@@ -436,6 +468,7 @@ static bool tryConnect(NimBLEAddress address, const char* name, uint32_t generat
     return false;
   }
   bleConnected = true;
+  Serial.printf("[BLE] Negotiated MTU: %u\n", static_cast<unsigned>(pClient->getMTU()));
   Serial.println("[BLE] Connected and subscribed to engine data");
   return true;
 }
@@ -504,13 +537,13 @@ void bleSetEnabled(bool enabled) {
 }
 
 void bleManagerLoop() {
-  // ---- Engine telemetry: decode any new notification, and time out a
-  // stale reading, regardless of connect/reconnect state below. ----
-  uint8_t rawBuf[BLE_ENGINE_DATA_MAX_LEN];
-  bool isNew = false;
-  size_t n = bleReadLatestEngineData(rawBuf, sizeof(rawBuf), &isNew);
-  if (isNew) {
-    decodeEnginePacket(rawBuf, n);
+  EngineDataBatch batch = {};
+  if (takeEngineData(batch)) {
+    if (batch.legacyIsNew) decodeEnginePacket(batch.legacy, batch.legacyLen);
+    if (batch.nmeaLen > 0U) {
+      engineLineAssembler.feed(batch.nmea, batch.nmeaLen, handleEngineNmeaLine, nullptr);
+    }
+    if (batch.legacyIsNew || batch.nmeaLen > 0U) printEngineDebug();
   }
   if (engineDataValid && millis() - lastEngineDataMillis > ENGINE_DATA_TIMEOUT_MS) {
     engineDataValid = false;  // engine meter went quiet -- out of range, off, or disconnected
@@ -542,29 +575,18 @@ void bleManagerLoop() {
 }
 
 // =====================================================
-// ENGINE PACKET DECODE -- supports both the legacy and battery-extended
-// nice!nano engine meter layouts:
-//   byte 0    : 0xAE header
-//   byte 1-2  : uint16_t RPM, little-endian
-//   byte 3-4  : int16_t  EGT, little-endian, 0.1 degC units
-//   byte 5-6  : int16_t  CHT, little-endian, 0.1 degC units
-//   byte 7    : flags (bit0 = EGT fault, bit1 = CHT fault)
-//   byte 8    : legacy checksum = XOR of bytes 0..7
-//               or battery percentage in the extended layout
-//   byte 9    : extended checksum = XOR of bytes 0..8
-// Silently drops anything that doesn't match length/header/checksum --
-// a garbled or torn notification just gets skipped rather than shown.
+// TRANSITIONAL LEGACY PACKET DECODE -- supports old meter firmware only.
+// New meter firmware uses the NMEA parser in EngineNmea.cpp.
 // =====================================================
 static void decodeEnginePacket(const uint8_t* buf, size_t len) {
   if ((len != ENGINE_PKT_LEN_LEGACY && len != ENGINE_PKT_LEN_WITH_BATTERY) ||
-      buf[0] != ENGINE_PKT_HEADER) {
+      buf == nullptr || buf[0] != ENGINE_PKT_HEADER) {
     return;
   }
 
   uint8_t chk = 0;
   for (size_t i = 0; i < len - 1; i++) chk ^= buf[i];
   if (chk != buf[len - 1]) {
-    Serial.println("[BLE] Engine packet checksum mismatch -- dropped");
     return;
   }
 
@@ -583,32 +605,74 @@ static void decodeEnginePacket(const uint8_t* buf, size_t len) {
   }
   engineEgtFault = (flags & 0x01) != 0;
   engineChtFault = (flags & 0x02) != 0;
-  static unsigned long lastDbg = 0;
-  if (millis() - lastDbg > 1000) {
-  lastDbg = millis();
-  Serial.printf("[ENG] len=%u rpm=%u cht=%.1f flags=0x%02X (egtFault=%d chtFault=%d)\n",
-                (unsigned)len, rpmRaw, chtRaw / 10.0f, flags,
-                (flags & 0x01) != 0, (flags & 0x02) != 0);
-}
   engineDataValid = true;
   lastEngineDataMillis = millis();
 }
 
-// =====================================================
-// ENGINE DATA READOUT
-// =====================================================
-size_t bleReadLatestEngineData(uint8_t* outBuf, size_t outBufLen, bool* outIsNew) {
-  size_t n = 0;
-  if (engineDataMutex == nullptr || xSemaphoreTake(engineDataMutex, pdMS_TO_TICKS(20)) != pdTRUE) {
-    if (outIsNew) *outIsNew = false;
-    return 0;
+[[nodiscard]] static bool takeEngineData(EngineDataBatch& batch) {
+  if (engineDataMutex == nullptr ||
+      xSemaphoreTake(engineDataMutex, kEngineDataMutexTimeout) != pdTRUE) {
+    return false;
   }
 
-  n = engineDataLen < outBufLen ? engineDataLen : outBufLen;
-  memcpy(outBuf, engineDataBuf, n);
-  if (outIsNew) *outIsNew = engineDataIsNew;
-  engineDataIsNew = false;
+  batch.nmeaLen = engineNmeaCount;
+  for (size_t i = 0U; i < batch.nmeaLen; ++i) {
+    batch.nmea[i] = engineNmeaFifo[engineNmeaHead];
+    engineNmeaHead = (engineNmeaHead + 1U) % kEngineFifoCapacity;
+  }
+  engineNmeaCount = 0U;
+  engineNmeaTail = engineNmeaHead;
+  batch.legacyLen = legacyEnginePacketLen;
+  batch.legacyIsNew = legacyEnginePacketIsNew;
+  if (legacyEnginePacketIsNew) {
+    memcpy(batch.legacy, legacyEnginePacket, legacyEnginePacketLen);
+  }
+  legacyEnginePacketLen = 0U;
+  legacyEnginePacketIsNew = false;
 
-  xSemaphoreGive(engineDataMutex);
-  return n;
+  if (xSemaphoreGive(engineDataMutex) != pdTRUE) {
+    engineNotificationDrops.fetch_add(1U);
+    return false;
+  }
+  return true;
+}
+
+static void handleEngineNmeaLine(const char* line, size_t len, void* context) {
+  (void)context;
+  EngineReading reading = {};
+  if (!parseEngineSentence(line, len, reading, engineNmeaCounters)) return;
+
+  if (reading.rpmUpdated) engineRpm = reading.rpm;
+  if (reading.egtUpdated) {
+    engineEgtC = reading.egtC;
+    engineEgtFault = reading.egtFault;
+  }
+  if (reading.chtUpdated) {
+    engineChtC = reading.chtC;
+    engineChtFault = reading.chtFault;
+  }
+  if (reading.batteryUpdated) {
+    engineBatteryPercent = reading.batteryPercent;
+    engineBatteryPercentValid = true;
+  }
+  if (reading.rpmUpdated || reading.egtUpdated || reading.chtUpdated) {
+    engineDataValid = true;
+    lastEngineDataMillis = millis();
+  }
+}
+
+static void printEngineDebug() {
+  static unsigned long lastDebugMillis = 0U;
+  const unsigned long now = millis();
+  if (now - lastDebugMillis < 1000UL) return;
+  lastDebugMillis = now;
+  const uint32_t rejected = engineNmeaCounters.checksumRejected +
+                            engineNmeaCounters.malformedRejected +
+                            engineLineAssembler.overflowCount() +
+                            engineNotificationDrops.load();
+  Serial.printf("[ENG] rpm=%.1f cht=%.1f egt=%.1f faults=%d/%d battery=%u%% valid=%d reject=%lu\n",
+                engineRpm, engineChtC, engineEgtC, engineChtFault ? 1 : 0,
+                engineEgtFault ? 1 : 0, static_cast<unsigned>(engineBatteryPercent),
+                engineDataValid ? 1 : 0,
+                static_cast<unsigned long>(rejected));
 }
