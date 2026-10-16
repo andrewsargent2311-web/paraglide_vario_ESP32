@@ -214,25 +214,35 @@ bool igcAltitudeJumpIsPlausible(float fromAltitudeM, float toAltitudeM,
   return fabsf(toAltitudeM - fromAltitudeM) <= allowedChangeM;
 }
 
+namespace {
+struct IgcCoordinate {
+  long degrees;
+  long minutes;
+  long thousandths;
+};
+
+IgcCoordinate toIgcCoordinate(double value) {
+  // DEVIATION(P2-14): double preserves thousandth-minute precision; float does not.
+  // Coordinates in [-180, 180] need at most 10,800,000 thousandths, within 32-bit long.
+  const long totalThousandths = lround(fabs(value) * 60000.0);
+  return {
+    totalThousandths / 60000,
+    (totalThousandths % 60000) / 1000,
+    totalThousandths % 1000
+  };
+}
+}  // namespace
+
 void formatIgcLatLon(double lat, double lon, char* out, size_t outSize) {
   char latHemi = (lat >= 0) ? 'N' : 'S';
   char lonHemi = (lon >= 0) ? 'E' : 'W';
 
-  double absLat = fabs(lat);
-  int latDeg = (int)absLat;
-  double latMinFull = (absLat - latDeg) * 60.0;
-  int latMinInt = (int)latMinFull;
-  int latMinFrac = (int)roundf((latMinFull - latMinInt) * 1000.0f);
+  const IgcCoordinate latitude = toIgcCoordinate(lat);
+  const IgcCoordinate longitude = toIgcCoordinate(lon);
 
-  double absLon = fabs(lon);
-  int lonDeg = (int)absLon;
-  double lonMinFull = (absLon - lonDeg) * 60.0;
-  int lonMinInt = (int)lonMinFull;
-  int lonMinFrac = (int)roundf((lonMinFull - lonMinInt) * 1000.0f);
-
-  snprintf(out, outSize, "%02d%02d%03d%c%03d%02d%03d%c",
-           latDeg, latMinInt, latMinFrac, latHemi,
-           lonDeg, lonMinInt, lonMinFrac, lonHemi);
+  snprintf(out, outSize, "%02ld%02ld%03ld%c%03ld%02ld%03ld%c",
+           latitude.degrees, latitude.minutes, latitude.thousandths, latHemi,
+           longitude.degrees, longitude.minutes, longitude.thousandths, lonHemi);
 }
 void writeIgcBRecord() {
   if (!igcFile) return;
