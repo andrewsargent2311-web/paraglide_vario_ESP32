@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <random>
 #include <string>
 
 // Declares formatIgcLatLon(). Also pulls in SdCard.h and settings.h.
@@ -182,6 +183,44 @@ TEST(IgcLatLonFormat, RoundingUpAtAMinuteBoundaryStaysWellFormed)
 
         EXPECT_NEAR(decodeLat(out), c.lat, kOneThousandthMinuteDeg);
         EXPECT_NEAR(decodeLon(out), c.lon, kOneThousandthMinuteDeg);
+    }
+}
+
+TEST(IgcLatLonFormat, MinuteBoundaryRoundingCarriesIntoDegrees)
+{
+    const double latitudeAtMinuteBoundary = 47.0 + 59.9996 / 60.0;
+    const double longitudeAtMinuteBoundary = 8.0 + 59.9996 / 60.0;
+
+    EXPECT_EQ(format(latitudeAtMinuteBoundary, 8.5), "4800000N00830000E");
+    EXPECT_EQ(format(46.5, longitudeAtMinuteBoundary), "4630000N00900000E");
+    EXPECT_EQ(format(-latitudeAtMinuteBoundary, -8.5), "4800000S00830000W");
+    EXPECT_EQ(format(-46.5, -longitudeAtMinuteBoundary), "4630000S00900000W");
+}
+
+TEST(IgcLatLonFormat, ValuesJustBelowDegreeBoundaryRoundUp)
+{
+    EXPECT_EQ(format(46.99999999, 8.99999999), "4700000N00900000E");
+    EXPECT_EQ(format(-46.99999999, -8.99999999), "4700000S00900000W");
+}
+
+TEST(IgcLatLonFormat, DeterministicPositionsStayWellFormedAndAccurate)
+{
+    std::mt19937 generator(0x1A2B3C4D);
+    std::uniform_real_distribution<double> latitudeDistribution(-90.0, 90.0);
+    std::uniform_real_distribution<double> longitudeDistribution(-180.0, 180.0);
+
+    for (int i = 0; i < 4096; ++i)
+    {
+        const double lat = latitudeDistribution(generator);
+        const double lon = longitudeDistribution(generator);
+        const std::string out = format(lat, lon);
+        const bool wellFormed = isWellFormed(out);
+
+        EXPECT_TRUE(wellFormed) << "position " << i << ": \"" << out << "\"";
+        if (!wellFormed) continue;
+
+        EXPECT_NEAR(decodeLat(out), lat, kOneThousandthMinuteDeg) << "position " << i;
+        EXPECT_NEAR(decodeLon(out), lon, kOneThousandthMinuteDeg) << "position " << i;
     }
 }
 

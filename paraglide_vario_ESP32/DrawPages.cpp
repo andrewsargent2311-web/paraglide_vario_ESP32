@@ -1968,6 +1968,14 @@ void drawParamotorPage() {
   // =========================================================
   u8g2.setFont(u8g2_font_helvB10_tf);
   u8g2.drawStr(colW + 5, top + 2 * rowH + 14, "CHT");
+  if (engineDataValid && engineBatteryPercentValid) {
+    char batteryBuf[12];
+    snprintf(batteryBuf, sizeof(batteryBuf), "BAT %u%%", engineBatteryPercent);
+    u8g2.drawStr(
+      SCREEN_W - 10 - u8g2.getStrWidth(batteryBuf),
+      top + 2 * rowH + 14,
+      batteryBuf);
+  }
   if (engineDataValid && !engineChtFault) {
     snprintf(buffer, sizeof(buffer), "%.0f", engineChtC);
   } else {

@@ -1,19 +1,13 @@
 #include "ble_manager.h"
+#include "EngineNmea.h"
 #include <NimBLEDevice.h>
 #include <Preferences.h>
+#include <atomic>
 
 // =====================================================
-// ASSUMED ENGINE-METER PROTOCOL -- see the note at the top of
-// ble_manager.h. This is the Nordic UART Service (NUS): a de facto
-// standard "just stream bytes" pattern many nRF5 projects use, NOT
-// something this vario invented. NUS_CHAR_TX_UUID is the characteristic
-// the nRF52840 (as a GATT *server*) notifies on -- i.e. what we, as the
-// central, subscribe to in order to receive engine data.
-//
-// If the real firmware differs, these two lines are the only thing that
-// needs to change for the connection itself to work -- update them to
-// match, then adjust how bleReadLatestEngineData()'s bytes get decoded
-// wherever you display them.
+// ENGINE-METER PROTOCOL: the Nordic UART Service TX characteristic sends
+// ASCII NMEA-style EMS and PEMBAT sentences. MTU-sized notifications are
+// treated as arbitrary stream fragments and reassembled into lines.
 // =====================================================
 static const char* NUS_SERVICE_UUID = "6E400001-B5A3-F393-E0A9-E50E24DCCA9E";
 static const char* NUS_CHAR_TX_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";  // notify: peripheral -> us
@@ -25,26 +19,22 @@ static const char* NUS_CHAR_TX_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";  /
 // How often bleManagerLoop() starts a fresh scan burst to look for the
 // remembered device when we're not currently connected to it.
 #define BLE_RECONNECT_RETRY_MS 15000UL
-// Max bytes kept from a single engine-meter notification. NUS payloads
-// are capped by the BLE MTU anyway (typically <=20 bytes on a default
-// MTU); 64 leaves headroom without the buffer being unreasonably large.
-#define BLE_ENGINE_DATA_MAX_LEN 64
-
 static const char* NVS_NAMESPACE = "conn";  // shared with wifi_manager.cpp
 static const char* NVS_KEY_BLE_ADDR = "bleAddr";
 static const char* NVS_KEY_BLE_NAME = "bleName";
 
-bool bleEnabled = false;
-volatile bool bleConnected = false;
+std::atomic<bool> bleEnabled(false);
+std::atomic<bool> bleConnected(false);
 char bleRememberedName[BLE_DEVICE_NAME_MAX_LEN] = "";
 char bleRememberedAddress[18] = "";
 
 static SemaphoreHandle_t bleStateMutex = nullptr;
 static SemaphoreHandle_t engineDataMutex = nullptr;
+static SemaphoreHandle_t bleDeviceMutex = nullptr;
 
 static BleScanResult scanResults[BLE_MAX_SCAN_RESULTS];
 static uint8_t scanResultCount = 0;
-static bool scanWanted = false;  // true while the Bluetooth Scan menu screen is open
+static std::atomic<bool> scanWanted(false);  // true while the Bluetooth Scan menu screen is open
 
 static NimBLEClient* pClient = nullptr;
 
@@ -53,37 +43,68 @@ static NimBLEClient* pClient = nullptr;
 // onScanComplete() right after the burst ends, so anything we want to
 // survive past the burst has to be copied out into plain fields while
 // still inside onResult()).
-static volatile bool connectPending = false;
+static std::atomic<bool> connectPending(false);
+// Set by onScanComplete() once the scan that found the saved device has
+// fully stopped. bleManagerLoop() then does the (blocking) connect on its
+// own task -- never on the NimBLE host task, which would deadlock.
+static std::atomic<bool> connectScanDone(false);
 static char pendingConnectAddress[18] = "";
 static uint8_t pendingConnectAddressType = 0;
 static char pendingConnectName[BLE_DEVICE_NAME_MAX_LEN] = "";
+static uint32_t pendingConnectGeneration = 0;
+static std::atomic<uint32_t> connectGeneration(0);
+static std::atomic<bool> connectInProgress(false);
 
-static uint8_t engineDataBuf[BLE_ENGINE_DATA_MAX_LEN];
-static size_t engineDataLen = 0;
-static bool engineDataIsNew = false;
+static constexpr size_t kEngineFifoCapacity = 256U;
+static constexpr size_t kLegacyPacketCapacity = 10U;
+static constexpr TickType_t kEngineDataMutexTimeout = pdMS_TO_TICKS(20);
+static uint8_t engineNmeaFifo[kEngineFifoCapacity];
+static size_t engineNmeaHead = 0U;
+static size_t engineNmeaTail = 0U;
+static size_t engineNmeaCount = 0U;
+static uint8_t legacyEnginePacket[kLegacyPacketCapacity];
+static size_t legacyEnginePacketLen = 0U;
+static bool legacyEnginePacketIsNew = false;
+static std::atomic<uint32_t> engineNotificationDrops(0U);
+static EngineNmeaLineAssembler engineLineAssembler;
+static EngineNmeaCounters engineNmeaCounters = {};
 
 static unsigned long lastReconnectAttempt = 0;
 
 static void startScanBurst();
 static void onScanComplete(const NimBLEScanResults& results, int reason);
-static bool tryConnect(NimBLEAddress address, const char* name);
-static void rememberDevice(const char* address, const char* name);
+static bool tryConnect(NimBLEAddress address, const char* name, uint32_t generation);
+static bool rememberDevice(const char* address, const char* name, uint32_t generation);
 static void decodeEnginePacket(const uint8_t* buf, size_t len);
+static void handleEngineNmeaLine(const char* line, size_t len, void* context);
+static void printEngineDebug();
+
+struct EngineDataBatch {
+  uint8_t nmea[kEngineFifoCapacity];
+  size_t nmeaLen;
+  uint8_t legacy[kLegacyPacketCapacity];
+  size_t legacyLen;
+  bool legacyIsNew;
+};
+
+[[nodiscard]] static bool takeEngineData(EngineDataBatch& batch);
 
 // =====================================================
 // DECODED ENGINE TELEMETRY -- see ble_manager.h for field docs. Written
-// only from decodeEnginePacket(), called from bleManagerLoop() (main/UI
-// core), so no separate mutex needed the way engineDataBuf's raw bytes
-// have one -- there's no BLE-stack-task writer to race against here.
+// only from bleManagerLoop() (main/UI core), so no separate mutex is
+// needed; notification bytes are passed over the mutex-protected FIFO.
 // =====================================================
 #define ENGINE_DATA_TIMEOUT_MS 2000UL
 #define ENGINE_PKT_HEADER 0xAE
-#define ENGINE_PKT_LEN 9
+#define ENGINE_PKT_LEN_LEGACY 9
+#define ENGINE_PKT_LEN_WITH_BATTERY 10
 
 volatile bool engineDataValid = false;
 volatile float engineRpm = 0.0f;
 volatile float engineEgtC = 0.0f;
 volatile float engineChtC = 0.0f;
+volatile uint8_t engineBatteryPercent = 0;
+volatile bool engineBatteryPercentValid = false;
 volatile bool engineEgtFault = false;
 volatile bool engineChtFault = false;
 
@@ -99,18 +120,16 @@ static unsigned long lastEngineDataMillis = 0;
 // has a long-standing open bug against, which is why this port is here.
 // =====================================================
 class VarioScanCallbacks : public NimBLEScanCallbacks {
+  // NimBLE-Arduino 2.x reports "scan finished" ONLY through this callback.
+  void onScanEnd(const NimBLEScanResults& results, int reason) override {
+    onScanComplete(results, reason);
+  }
+
   void onResult(const NimBLEAdvertisedDevice* advertisedDevice) override {
     String addr = advertisedDevice->getAddress().toString().c_str();
     String name = advertisedDevice->haveName() ? advertisedDevice->getName().c_str() : "";
     int rssi = advertisedDevice->getRSSI();
     uint8_t addrType = advertisedDevice->getAddress().getType();
-
-    Serial.printf("[BLE SCAN] Address: %s (type=%d) | Name: %s | RSSI: %d\n",
-              addr.c_str(), addrType, name.length() ? name.c_str() : "(none)", rssi);
-    Serial.printf("[BLE SCAN] hasName=%d hasServiceUUID=%d hasManufacturerData=%d\n",
-              advertisedDevice->haveName(),
-              advertisedDevice->haveServiceUUID(),
-              advertisedDevice->haveManufacturerData());
 
     if (bleStateMutex != nullptr && xSemaphoreTake(bleStateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
       int slot = -1;
@@ -143,8 +162,10 @@ class VarioScanCallbacks : public NimBLEScanCallbacks {
     // Auto-reconnect match -- only while not already connected/mid-attempt.
     // Copy everything we need out to plain fields now: the scan's own
     // device cache doesn't survive past onScanComplete()'s clearResults().
-    if (!bleConnected && !connectPending && bleRememberedAddress[0] != '\0') {
-      bool addressMatch = addr.equalsIgnoreCase(bleRememberedAddress);
+    if (!bleConnected && !connectPending.load() &&
+        (bleRememberedAddress[0] != '\0' || bleRememberedName[0] != '\0')) {
+      bool addressMatch = bleRememberedAddress[0] != '\0' &&
+                          addr.equalsIgnoreCase(bleRememberedAddress);
       bool nameMatch = !addressMatch && bleRememberedName[0] != '\0' && name.equals(bleRememberedName);
       if (addressMatch || nameMatch) {
         strncpy(pendingConnectAddress, addr.c_str(), sizeof(pendingConnectAddress) - 1);
@@ -152,7 +173,10 @@ class VarioScanCallbacks : public NimBLEScanCallbacks {
         pendingConnectAddressType = addrType;
         strncpy(pendingConnectName, name.c_str(), BLE_DEVICE_NAME_MAX_LEN - 1);
         pendingConnectName[BLE_DEVICE_NAME_MAX_LEN - 1] = '\0';
-        connectPending = true;
+        pendingConnectGeneration = connectGeneration.load();
+        connectPending.store(true);
+        Serial.printf("[BLE] Found saved engine meter: %s (%s)\n",
+                      name.length() ? name.c_str() : "unnamed", addr.c_str());
         NimBLEDevice::getScan()->stop();  // onScanComplete() does the actual connect once this settles
       }
     }
@@ -161,20 +185,40 @@ class VarioScanCallbacks : public NimBLEScanCallbacks {
 static VarioScanCallbacks scanCallbacks;
 
 // =====================================================
-// NOTIFY CALLBACK: fires on the BLE stack's task whenever the engine
-// meter's TX characteristic notifies. Just stashes the raw bytes --
-// decoding them into actual RPM/EGT/etc. fields is a job for whichever
-// page ends up displaying them, once the data format is settled.
+// NOTIFY CALLBACK: runs on the BLE stack task and only copies bytes into
+// the legacy slot or fixed NMEA FIFO under a bounded mutex wait.
 // =====================================================
 static void engineNotifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
-  if (engineDataMutex == nullptr || xSemaphoreTake(engineDataMutex, pdMS_TO_TICKS(20)) != pdTRUE) return;
+  (void)pChar;
+  (void)isNotify;
+  if (engineDataMutex == nullptr || pData == nullptr || length == 0U) {
+    engineNotificationDrops.fetch_add(1U);
+    return;
+  }
+  if (xSemaphoreTake(engineDataMutex, kEngineDataMutexTimeout) != pdTRUE) {
+    engineNotificationDrops.fetch_add(1U);
+    return;
+  }
 
-  size_t n = length < sizeof(engineDataBuf) ? length : sizeof(engineDataBuf);
-  memcpy(engineDataBuf, pData, n);
-  engineDataLen = n;
-  engineDataIsNew = true;
+  // TRANSITIONAL: remove once all engine meters run the NMEA firmware
+  if ((length == ENGINE_PKT_LEN_LEGACY || length == ENGINE_PKT_LEN_WITH_BATTERY) &&
+      pData[0] == ENGINE_PKT_HEADER) {
+    memcpy(legacyEnginePacket, pData, length);
+    legacyEnginePacketLen = length;
+    legacyEnginePacketIsNew = true;
+  } else if (length <= kEngineFifoCapacity - engineNmeaCount) {
+    for (size_t i = 0U; i < length; ++i) {
+      engineNmeaFifo[engineNmeaTail] = pData[i];
+      engineNmeaTail = (engineNmeaTail + 1U) % kEngineFifoCapacity;
+    }
+    engineNmeaCount += length;
+  } else {
+    engineNotificationDrops.fetch_add(1U);
+  }
 
-  xSemaphoreGive(engineDataMutex);
+  if (xSemaphoreGive(engineDataMutex) != pdTRUE) {
+    engineNotificationDrops.fetch_add(1U);
+  }
 }
 
 // =====================================================
@@ -183,9 +227,7 @@ static void engineNotifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pDa
 // still claiming to be connected.
 // =====================================================
 class VarioClientCallbacks : public NimBLEClientCallbacks {
-  void onConnect(NimBLEClient* client) override {
-    bleConnected = true;
-  }
+  void onConnect(NimBLEClient* client) override { (void)client; }
   void onDisconnect(NimBLEClient* client, int reason) override {
     Serial.printf("[BLE] Disconnected, reason=%d\n", reason);
     bleConnected = false;
@@ -199,6 +241,7 @@ static VarioClientCallbacks clientCallbacks;
 void loadBleSettings() {
   if (bleStateMutex == nullptr) bleStateMutex = xSemaphoreCreateMutex();
   if (engineDataMutex == nullptr) engineDataMutex = xSemaphoreCreateMutex();
+  if (bleDeviceMutex == nullptr) bleDeviceMutex = xSemaphoreCreateMutex();
 
   Preferences prefs;
   prefs.begin(NVS_NAMESPACE, /*readOnly=*/true);
@@ -212,6 +255,9 @@ void loadBleSettings() {
   bleRememberedName[BLE_DEVICE_NAME_MAX_LEN - 1] = '\0';
 
   NimBLEDevice::init("ParaVario");
+  if (!NimBLEDevice::setMTU(247U)) {
+    Serial.println("[BLE] Could not set preferred MTU to 247");
+  }
 
   if (bleRememberedAddress[0] != '\0' || bleRememberedName[0] != '\0') {
     Serial.println("[BLE] Remembered device found in flash -- turning Bluetooth on to look for it");
@@ -230,17 +276,21 @@ static void startScanBurst() {
   pScan->setActiveScan(true);
   pScan->setInterval(100);
   pScan->setWindow(99);
-  pScan->start(BLE_SCAN_WINDOW_S * 1000, onScanComplete, false);  // NimBLEScan::start() takes ms, not seconds
+  pScan->start(BLE_SCAN_WINDOW_S * 1000, /*isContinue=*/false, /*restart=*/true);  // ms; completion arrives via onScanEnd()
 }
 
 static void onScanComplete(const NimBLEScanResults& results, int reason) {
   NimBLEDevice::getScan()->clearResults();  // free the stack's own cache -- we keep our own list in scanResults[]
 
-  if (connectPending) {
-    connectPending = false;
-    NimBLEAddress addr(std::string(pendingConnectAddress), pendingConnectAddressType);
-    tryConnect(addr, pendingConnectName);
-    return;  // don't immediately restart scanning right after a connect attempt
+  if (connectPending.load()) {
+    connectScanDone.store(true);  // bleManagerLoop() performs the connect
+    return;  // don't immediately restart scanning right after a match
+  }
+
+  if (bleEnabled && !bleConnected &&
+      (bleRememberedAddress[0] != '\0' || bleRememberedName[0] != '\0') &&
+      !scanWanted) {
+    Serial.println("[BLE] Saved engine meter not found in this scan; will retry");
   }
 
   if (scanWanted) {
@@ -286,23 +336,74 @@ BleScanResult bleScanResultAt(uint8_t index) {
 // =====================================================
 // CONNECTING
 // =====================================================
-static void rememberDevice(const char* address, const char* name) {
-  strncpy(bleRememberedAddress, address, sizeof(bleRememberedAddress) - 1);
-  bleRememberedAddress[sizeof(bleRememberedAddress) - 1] = '\0';
-  strncpy(bleRememberedName, name, BLE_DEVICE_NAME_MAX_LEN - 1);
-  bleRememberedName[BLE_DEVICE_NAME_MAX_LEN - 1] = '\0';
+static bool rememberDevice(const char* address, const char* name, uint32_t generation) {
+  if (bleDeviceMutex == nullptr ||
+      xSemaphoreTake(bleDeviceMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+    Serial.println("[BLE] Could not lock saved-device settings");
+    return false;
+  }
+
+  if (!bleEnabled || generation != connectGeneration.load()) {
+    xSemaphoreGive(bleDeviceMutex);
+    return false;
+  }
 
   Preferences prefs;
-  prefs.begin(NVS_NAMESPACE, /*readOnly=*/false);
-  prefs.putString(NVS_KEY_BLE_ADDR, bleRememberedAddress);
-  prefs.putString(NVS_KEY_BLE_NAME, bleRememberedName);
+  if (!prefs.begin(NVS_NAMESPACE, /*readOnly=*/false)) {
+    xSemaphoreGive(bleDeviceMutex);
+    Serial.println("[BLE] Could not open saved-device settings");
+    return false;
+  }
+  size_t addressBytes = prefs.putString(NVS_KEY_BLE_ADDR, address);
+  size_t nameBytes = 0;
+  if (name[0] != '\0') {
+    nameBytes = prefs.putString(NVS_KEY_BLE_NAME, name);
+  }
+  if (addressBytes == 0 || name[0] == '\0' || nameBytes == 0) {
+    prefs.remove(NVS_KEY_BLE_NAME);
+  }
   prefs.end();
+  if (addressBytes == 0) {
+    xSemaphoreGive(bleDeviceMutex);
+    Serial.println("[BLE] Could not save engine-meter address");
+    return false;
+  }
+
+  strncpy(bleRememberedAddress, address, sizeof(bleRememberedAddress) - 1);
+  bleRememberedAddress[sizeof(bleRememberedAddress) - 1] = '\0';
+  const char* savedName = nameBytes > 0 ? name : "";
+  strncpy(bleRememberedName, savedName, BLE_DEVICE_NAME_MAX_LEN - 1);
+  bleRememberedName[BLE_DEVICE_NAME_MAX_LEN - 1] = '\0';
+  xSemaphoreGive(bleDeviceMutex);
+  if (name[0] != '\0' && nameBytes == 0) {
+    Serial.println("[BLE] Saved engine-meter address, but could not save its name");
+  }
+  return true;
 }
 
 // Returns true if the connection AND the NUS TX subscription both succeeded.
-static bool tryConnect(NimBLEAddress address, const char* name) {
+static bool tryConnect(NimBLEAddress address, const char* name, uint32_t generation) {
+  bool expected = false;
+  if (!connectInProgress.compare_exchange_strong(expected, true)) {
+    Serial.println("[BLE] Connection attempt already in progress");
+    return false;
+  }
+
+  struct ConnectAttemptGuard {
+    ~ConnectAttemptGuard() { connectInProgress.store(false); }
+  } connectAttemptGuard;
+
+  if (!bleEnabled || generation != connectGeneration.load()) {
+    Serial.println("[BLE] Connection attempt cancelled before connecting");
+    return false;
+  }
+
   if (pClient == nullptr) {
     pClient = NimBLEDevice::createClient();
+    if (pClient == nullptr) {
+      Serial.println("[BLE] Failed to create BLE client");
+      return false;
+    }
     pClient->setClientCallbacks(&clientCallbacks, /*deleteOnDisconnect=*/false);
   }
   if (pClient->isConnected()) {
@@ -319,11 +420,21 @@ static bool tryConnect(NimBLEAddress address, const char* name) {
     Serial.println("[BLE] Connect failed");
     return false;
   }
+  if (!bleEnabled || generation != connectGeneration.load()) {
+    Serial.println("[BLE] Connection cancelled while connecting");
+    pClient->disconnect();
+    return false;
+  }
 
   NimBLERemoteService* pService = pClient->getService(NUS_SERVICE_UUID);
   if (pService == nullptr) {
     Serial.println("[BLE] Connected, but the NUS service wasn't found -- check "
                     "NUS_SERVICE_UUID in ble_manager.cpp against your nRF52840 firmware");
+    pClient->disconnect();
+    return false;
+  }
+  if (!bleEnabled || generation != connectGeneration.load()) {
+    Serial.println("[BLE] Connection cancelled during service discovery");
     pClient->disconnect();
     return false;
   }
@@ -335,9 +446,29 @@ static bool tryConnect(NimBLEAddress address, const char* name) {
     pClient->disconnect();
     return false;
   }
-  pChar->subscribe(true, engineNotifyCallback);
+  if (!pChar->subscribe(true, engineNotifyCallback)) {
+    Serial.println("[BLE] Failed to subscribe to engine data notifications");
+    pClient->disconnect();
+    return false;
+  }
+  if (!bleEnabled || generation != connectGeneration.load()) {
+    Serial.println("[BLE] Connection cancelled during notification setup");
+    pClient->disconnect();
+    return false;
+  }
 
-  rememberDevice(address.toString().c_str(), name);
+  if (!rememberDevice(address.toString().c_str(), name, generation)) {
+    Serial.println("[BLE] Connected, but could not save engine-meter settings");
+    pClient->disconnect();
+    return false;
+  }
+  if (!bleEnabled || generation != connectGeneration.load()) {
+    Serial.println("[BLE] Connection cancelled while saving device settings");
+    pClient->disconnect();
+    return false;
+  }
+  bleConnected = true;
+  Serial.printf("[BLE] Negotiated MTU: %u\n", static_cast<unsigned>(pClient->getMTU()));
   Serial.println("[BLE] Connected and subscribed to engine data");
   return true;
 }
@@ -346,23 +477,40 @@ bool bleConnectToScanResult(uint8_t index) {
   BleScanResult r = bleScanResultAt(index);
   if (r.address[0] == '\0') return false;
 
+  uint32_t generation = connectGeneration.fetch_add(1) + 1;
+  connectPending.store(false);
+  connectScanDone.store(false);
   bleStopScan();
-  return tryConnect(NimBLEAddress(std::string(r.address), r.addressType), r.name);
+  return tryConnect(NimBLEAddress(std::string(r.address), r.addressType), r.name,
+                    generation);
 }
 
 void bleForgetDevice() {
+  connectGeneration.fetch_add(1);
+  connectPending.store(false);
+  connectScanDone.store(false);
+  bleStopScan();
   if (pClient != nullptr && pClient->isConnected()) {
     pClient->disconnect();
   }
   bleConnected = false;
+
+  if (bleDeviceMutex == nullptr ||
+      xSemaphoreTake(bleDeviceMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+    Serial.println("[BLE] Could not lock saved-device settings to forget device");
+    return;
+  }
   bleRememberedAddress[0] = '\0';
   bleRememberedName[0] = '\0';
-
   Preferences prefs;
-  prefs.begin(NVS_NAMESPACE, /*readOnly=*/false);
-  prefs.remove(NVS_KEY_BLE_ADDR);
-  prefs.remove(NVS_KEY_BLE_NAME);
-  prefs.end();
+  if (prefs.begin(NVS_NAMESPACE, /*readOnly=*/false)) {
+    prefs.remove(NVS_KEY_BLE_ADDR);
+    prefs.remove(NVS_KEY_BLE_NAME);
+    prefs.end();
+  } else {
+    Serial.println("[BLE] Could not open saved-device settings to forget device");
+  }
+  xSemaphoreGive(bleDeviceMutex);
 }
 
 // =====================================================
@@ -372,6 +520,9 @@ void bleSetEnabled(bool enabled) {
   bleEnabled = enabled;
 
   if (!enabled) {
+    connectGeneration.fetch_add(1);
+    connectPending.store(false);
+    connectScanDone.store(false);
     bleStopScan();
     if (pClient != nullptr && pClient->isConnected()) {
       pClient->disconnect();
@@ -386,20 +537,35 @@ void bleSetEnabled(bool enabled) {
 }
 
 void bleManagerLoop() {
-  // ---- Engine telemetry: decode any new notification, and time out a
-  // stale reading, regardless of connect/reconnect state below. ----
-  uint8_t rawBuf[BLE_ENGINE_DATA_MAX_LEN];
-  bool isNew = false;
-  size_t n = bleReadLatestEngineData(rawBuf, sizeof(rawBuf), &isNew);
-  if (isNew) {
-    decodeEnginePacket(rawBuf, n);
+  EngineDataBatch batch = {};
+  if (takeEngineData(batch)) {
+    if (batch.legacyIsNew) decodeEnginePacket(batch.legacy, batch.legacyLen);
+    if (batch.nmeaLen > 0U) {
+      engineLineAssembler.feed(batch.nmea, batch.nmeaLen, handleEngineNmeaLine, nullptr);
+    }
+    if (batch.legacyIsNew || batch.nmeaLen > 0U) printEngineDebug();
   }
   if (engineDataValid && millis() - lastEngineDataMillis > ENGINE_DATA_TIMEOUT_MS) {
     engineDataValid = false;  // engine meter went quiet -- out of range, off, or disconnected
   }
 
-  if (!bleEnabled || bleConnected || connectPending) return;
-  if (bleRememberedAddress[0] == '\0') return;  // nothing to look for
+  if (connectPending.load() && connectScanDone.load()) {
+    connectScanDone.store(false);
+    connectPending.store(false);
+    lastReconnectAttempt = millis();
+    if (!bleEnabled || bleConnected ||
+        (bleRememberedAddress[0] == '\0' && bleRememberedName[0] == '\0') ||
+        pendingConnectGeneration != connectGeneration.load()) {
+      Serial.println("[BLE] Pending engine-meter reconnect cancelled");
+    } else {
+      NimBLEAddress addr(std::string(pendingConnectAddress), pendingConnectAddressType);
+      tryConnect(addr, pendingConnectName, pendingConnectGeneration);
+    }
+    return;
+  }
+
+  if (!bleEnabled || bleConnected || connectPending.load()) return;
+  if (bleRememberedAddress[0] == '\0' && bleRememberedName[0] == '\0') return;
 
   unsigned long now = millis();
   if (now - lastReconnectAttempt < BLE_RECONNECT_RETRY_MS) return;
@@ -409,24 +575,18 @@ void bleManagerLoop() {
 }
 
 // =====================================================
-// ENGINE PACKET DECODE -- matches the nice!nano engine meter's fixed
-// 9-byte layout (see sendEnginePacket() in the engine meter's firmware):
-//   byte 0    : 0xAE header
-//   byte 1-2  : uint16_t RPM, little-endian
-//   byte 3-4  : int16_t  EGT, little-endian, 0.1 degC units
-//   byte 5-6  : int16_t  CHT, little-endian, 0.1 degC units
-//   byte 7    : flags (bit0 = EGT fault, bit1 = CHT fault)
-//   byte 8    : checksum = XOR of bytes 0..7
-// Silently drops anything that doesn't match length/header/checksum --
-// a garbled or torn notification just gets skipped rather than shown.
+// TRANSITIONAL LEGACY PACKET DECODE -- supports old meter firmware only.
+// New meter firmware uses the NMEA parser in EngineNmea.cpp.
 // =====================================================
 static void decodeEnginePacket(const uint8_t* buf, size_t len) {
-  if (len != ENGINE_PKT_LEN || buf[0] != ENGINE_PKT_HEADER) return;
+  if ((len != ENGINE_PKT_LEN_LEGACY && len != ENGINE_PKT_LEN_WITH_BATTERY) ||
+      buf == nullptr || buf[0] != ENGINE_PKT_HEADER) {
+    return;
+  }
 
   uint8_t chk = 0;
-  for (int i = 0; i < 8; i++) chk ^= buf[i];
-  if (chk != buf[8]) {
-    Serial.println("[BLE] Engine packet checksum mismatch -- dropped");
+  for (size_t i = 0; i < len - 1; i++) chk ^= buf[i];
+  if (chk != buf[len - 1]) {
     return;
   }
 
@@ -438,28 +598,81 @@ static void decodeEnginePacket(const uint8_t* buf, size_t len) {
   engineRpm = (float)rpmRaw;
   engineEgtC = egtRaw / 10.0f;
   engineChtC = chtRaw / 10.0f;
+  engineBatteryPercentValid =
+      len == ENGINE_PKT_LEN_WITH_BATTERY && buf[8] <= 100;
+  if (engineBatteryPercentValid) {
+    engineBatteryPercent = buf[8];
+  }
   engineEgtFault = (flags & 0x01) != 0;
   engineChtFault = (flags & 0x02) != 0;
-
   engineDataValid = true;
   lastEngineDataMillis = millis();
 }
 
-// =====================================================
-// ENGINE DATA READOUT
-// =====================================================
-size_t bleReadLatestEngineData(uint8_t* outBuf, size_t outBufLen, bool* outIsNew) {
-  size_t n = 0;
-  if (engineDataMutex == nullptr || xSemaphoreTake(engineDataMutex, pdMS_TO_TICKS(20)) != pdTRUE) {
-    if (outIsNew) *outIsNew = false;
-    return 0;
+[[nodiscard]] static bool takeEngineData(EngineDataBatch& batch) {
+  if (engineDataMutex == nullptr ||
+      xSemaphoreTake(engineDataMutex, kEngineDataMutexTimeout) != pdTRUE) {
+    return false;
   }
 
-  n = engineDataLen < outBufLen ? engineDataLen : outBufLen;
-  memcpy(outBuf, engineDataBuf, n);
-  if (outIsNew) *outIsNew = engineDataIsNew;
-  engineDataIsNew = false;
+  batch.nmeaLen = engineNmeaCount;
+  for (size_t i = 0U; i < batch.nmeaLen; ++i) {
+    batch.nmea[i] = engineNmeaFifo[engineNmeaHead];
+    engineNmeaHead = (engineNmeaHead + 1U) % kEngineFifoCapacity;
+  }
+  engineNmeaCount = 0U;
+  engineNmeaTail = engineNmeaHead;
+  batch.legacyLen = legacyEnginePacketLen;
+  batch.legacyIsNew = legacyEnginePacketIsNew;
+  if (legacyEnginePacketIsNew) {
+    memcpy(batch.legacy, legacyEnginePacket, legacyEnginePacketLen);
+  }
+  legacyEnginePacketLen = 0U;
+  legacyEnginePacketIsNew = false;
 
-  xSemaphoreGive(engineDataMutex);
-  return n;
+  if (xSemaphoreGive(engineDataMutex) != pdTRUE) {
+    engineNotificationDrops.fetch_add(1U);
+    return false;
+  }
+  return true;
+}
+
+static void handleEngineNmeaLine(const char* line, size_t len, void* context) {
+  (void)context;
+  EngineReading reading = {};
+  if (!parseEngineSentence(line, len, reading, engineNmeaCounters)) return;
+
+  if (reading.rpmUpdated) engineRpm = reading.rpm;
+  if (reading.egtUpdated) {
+    engineEgtC = reading.egtC;
+    engineEgtFault = reading.egtFault;
+  }
+  if (reading.chtUpdated) {
+    engineChtC = reading.chtC;
+    engineChtFault = reading.chtFault;
+  }
+  if (reading.batteryUpdated) {
+    engineBatteryPercent = reading.batteryPercent;
+    engineBatteryPercentValid = true;
+  }
+  if (reading.rpmUpdated || reading.egtUpdated || reading.chtUpdated) {
+    engineDataValid = true;
+    lastEngineDataMillis = millis();
+  }
+}
+
+static void printEngineDebug() {
+  static unsigned long lastDebugMillis = 0U;
+  const unsigned long now = millis();
+  if (now - lastDebugMillis < 1000UL) return;
+  lastDebugMillis = now;
+  const uint32_t rejected = engineNmeaCounters.checksumRejected +
+                            engineNmeaCounters.malformedRejected +
+                            engineLineAssembler.overflowCount() +
+                            engineNotificationDrops.load();
+  Serial.printf("[ENG] rpm=%.1f cht=%.1f egt=%.1f faults=%d/%d battery=%u%% valid=%d reject=%lu\n",
+                engineRpm, engineChtC, engineEgtC, engineChtFault ? 1 : 0,
+                engineEgtFault ? 1 : 0, static_cast<unsigned>(engineBatteryPercent),
+                engineDataValid ? 1 : 0,
+                static_cast<unsigned long>(rejected));
 }

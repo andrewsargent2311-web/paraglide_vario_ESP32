@@ -2,6 +2,7 @@
 #define BLE_MANAGER_H
 
 #include <Arduino.h>
+#include <atomic>
 
 // =====================================================
 // BLUETOOTH (BLE CENTRAL) MANAGER -- NimBLE-Arduino port
@@ -12,18 +13,10 @@
 // but it can never see or pair with phones/headsets/etc. using Classic
 // BT profiles the way a phone's Bluetooth settings screen does.
 //
-// PROTOCOL ASSUMPTION: built around the nRF52840 engine meter advertising
-// the Nordic UART Service (NUS) and notifying raw bytes on its TX
-// characteristic -- see NUS_SERVICE_UUID/NUS_CHAR_TX_UUID at the top of
-// ble_manager.cpp. That's the common simple pattern for a custom nRF52
-// peripheral, but if your engine meter's firmware actually uses different
-// UUIDs (or a GATT layout entirely), update those two lines to match --
-// everything else here (scanning, connecting, persistence, the menu)
-// doesn't care what service the far end exposes. Once you've settled on
-// the actual byte format the engine meter sends, decode
-// bleReadLatestEngineData()'s output wherever you want to display it
-// (e.g. the Paramotor page) rather than reaching into the raw bytes from
-// multiple places.
+// PROTOCOL: the nRF52840 engine meter advertises the Nordic UART Service
+// (NUS) and notifies ASCII NMEA-style EMS and PEMBAT sentences on its TX
+// characteristic. Notifications are reassembled into CRLF/LF-delimited
+// lines before validation and decoded updates are exposed below.
 //
 // This file requires the "NimBLE-Arduino" library (h2zero) instead of the
 // arduino-esp32 core's bundled classic BLE library -- install it via
@@ -48,10 +41,10 @@ struct BleScanResult {
 // boot unless a device was remembered from a previous session (see
 // loadBleSettings()), in which case it's turned on automatically so the
 // vario can go looking for it.
-extern bool bleEnabled;
+extern std::atomic<bool> bleEnabled;
 
 // True while actually connected to a peripheral right now.
-extern volatile bool bleConnected;
+extern std::atomic<bool> bleConnected;
 
 // Name/address of whichever device is currently connected, or was last
 // remembered (persisted to flash) -- "" if none. Shown on the Bluetooth
@@ -100,25 +93,15 @@ bool bleConnectToScanResult(uint8_t index);
 // boots won't try to auto-reconnect until a new one is picked.
 void bleForgetDevice();
 
-// Copies out the raw bytes most recently notified by the engine meter's
-// NUS TX characteristic (up to outBufLen), and reports via *outIsNew
-// whether they're new since the last call. Format is whatever the
-// nRF52840 firmware actually sends -- see the note at the top of this
-// file. Mutex-protected internally; safe to call from anywhere. Returns
-// the number of bytes copied.
-size_t bleReadLatestEngineData(uint8_t* outBuf, size_t outBufLen, bool* outIsNew);
-
 // =====================================================
 // DECODED ENGINE TELEMETRY
 //
-// bleManagerLoop() decodes the nRF52840 engine meter's 9-byte NUS packet
-// (see the layout comment above decodeEnginePacket() in ble_manager.cpp)
-// into these fields every time a new, checksum-valid notification
-// arrives. Pages/menus should read these rather than touching
-// bleReadLatestEngineData()'s raw bytes directly.
+// bleManagerLoop() validates NMEA EMS and PEMBAT sentences and updates
+// these values. Pages/menus should read these fields rather than consume
+// the NUS notification stream directly.
 //
-// engineDataValid is automatically cleared ~2s after the last good
-// packet (engine meter out of range, powered off, or disconnected) so a
+// engineDataValid is automatically cleared ~2s after the last valid EMS
+// sentence (engine meter out of range, powered off, or disconnected) so a
 // stale reading doesn't sit on screen looking current -- always check it
 // before displaying engineRpm/engineEgtC/engineChtC.
 // =====================================================
@@ -126,6 +109,8 @@ extern volatile bool engineDataValid;
 extern volatile float engineRpm;     // RPM
 extern volatile float engineEgtC;    // Exhaust gas temp, deg C
 extern volatile float engineChtC;    // Cylinder head temp, deg C
+extern volatile uint8_t engineBatteryPercent;  // 0-100 from PEMBAT sentences
+extern volatile bool engineBatteryPercentValid;
 extern volatile bool engineEgtFault; // true if the EGT thermocouple amp reported a fault (open/short circuit)
 extern volatile bool engineChtFault; // same, for the CHT channel
 
