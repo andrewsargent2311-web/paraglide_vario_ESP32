@@ -1,6 +1,6 @@
 # Paraglide Vario / Flight Computer (ESP32-S3)
 
-A DIY flight computer for paragliding and paramotoring that costs about **$60 USD** in parts. It has a sunlight-readable screen, a climb/sink beeper (vario), GPS, a barometer, airspace warnings, live ADS-B traffic with spoken voice alerts, weather stations, FANET radio and IGC flight logging.
+A DIY flight computer for paragliding and paramotoring that costs about **$60 USD** in parts. It has a sunlight-readable screen, a climb/sink beeper (vario), GPS, a barometer, airspace warnings, live ADS-B traffic with spoken voice alerts, weather stations, FANET radio and IGC flight logging. Note the RLCD screen does not work well with polarized glasses (found that out on my first paragliding flight, use ski goggles on the paramotor).
 
 ![The finished flight computer](Photos/20260919_101505.jpg)
 
