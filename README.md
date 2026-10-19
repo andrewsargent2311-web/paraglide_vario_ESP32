@@ -60,7 +60,7 @@ A DIY flight computer for paragliding and paramotoring that costs about **$60 US
 | Custom circuit board (PCB) from PCBWay | $5 | See [Step 1](#step-1-order-the-circuit-board) |
 | 3D printer filament (PLA) | $5 | Orange in the photos, any colour works |
 | microSD card, 8–16 GB | a few $ | Doesn't need to be bigger |
-| **HT-RA62 LoRa radio module** | check price | Soldered directly onto the PCB, used for FANET. *Not included in the original $60 estimate.* |
+| **HT-RA62 LoRa radio module** | $4 | [HT-RA62] (https://heltec.org/project/ht-ra62/) Soldered directly onto the PCB, used for FANET. *Not included in the original $60 estimate.* |
 | **18650 lithium battery** | check price | Fits in the holder on the Waveshare board. Use a good-quality protected cell. |
 | **Small speaker** with an MX1.25 2-pin plug | a few $ | Plugs into the Waveshare board's speaker header. Without it there is no vario sound. |
 | **USB-C data cable** | | Must carry data, not just charge |
