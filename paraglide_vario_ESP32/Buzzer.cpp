@@ -485,12 +485,10 @@ void updateI2sAudioBuzzer(){
   if (!climbAudioActive) {
 
     climbAudioActive = true;
-    climbToneOn = false;
+    climbToneOn = true;
 
     // Start the first beep immediately.
     climbPulseStart = now;
-
-    setToneFrequency(0);
   }
 
 

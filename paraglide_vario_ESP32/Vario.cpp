@@ -27,8 +27,185 @@ bool qnhCalibrated = true;
 // real GPS-derived value. Cleared by the first successful GPS calibration.
 bool qnhIsFallback = true;
 
+// =====================================================
+// KALMAN CLIMB-RATE ESTIMATOR (see Vario.h for the rationale and tuning)
+// =====================================================
+void VarioKalman::reset() {
+  initialised_ = false;
+  altM_ = 0.0f;
+  vsMS_ = 0.0f;
+  p00_ = p01_ = p11_ = 0.0f;
+  lastMs_ = 0;
+  consecutiveRejects_ = 0;
+  rejectedTotal_ = 0;
+}
+
+// (Re)start the altitude estimate on this sample. The vertical speed is
+// deliberately left alone: the caller zeroes it when a stale value would
+// be wrong (first sample, long gap). The wide vertical-speed variance makes
+// the filter converge quickly on whatever the next samples say.
+void VarioKalman::seed(float altM, uint32_t sampleMs) {
+  initialised_ = true;
+  altM_ = altM;
+  p00_ = cfg_.altSigmaM * cfg_.altSigmaM;
+  p01_ = 0.0f;
+  p11_ = cfg_.initVsSigmaMS * cfg_.initVsSigmaMS;
+  lastMs_ = sampleMs;
+  consecutiveRejects_ = 0;
+}
+
+bool VarioKalman::update(float altM, uint32_t sampleMs) {
+  if (!isfinite(altM)) return false;  // never let a bad read into the state
+
+  if (!initialised_) {
+    vsMS_ = 0.0f;
+    seed(altM, sampleMs);
+    return true;
+  }
+
+  const uint32_t dtMs = sampleMs - lastMs_;  // unsigned: safe across millis() wrap
+  if (dtMs == 0) return false;
+  if (dtMs > cfg_.maxGapMs) {  // also catches a clock that went backwards
+    vsMS_ = 0.0f;
+    seed(altM, sampleMs);
+    return true;
+  }
+
+  // ---- Predict: constant vertical speed, white-noise acceleration ----
+  const float dt = (float)dtMs * 0.001f;
+  const float dt2 = dt * dt;
+  const float q = cfg_.accelSigmaMS2 * cfg_.accelSigmaMS2;
+
+  const float altPred = altM_ + vsMS_ * dt;
+  const float p00 = p00_ + dt * (2.0f * p01_ + dt * p11_) + q * dt2 * dt2 * 0.25f;
+  const float p01 = p01_ + dt * p11_ + q * dt2 * dt * 0.5f;
+  const float p11 = p11_ + q * dt2;
+
+  // ---- Gate: is this sample plausible given the prediction? ----
+  const float s = p00 + cfg_.altSigmaM * cfg_.altSigmaM;  // innovation variance
+  const float innovation = altM - altPred;
+
+  const float sigmaGateM2 = cfg_.gateSigmas * cfg_.gateSigmas * s;
+  const float gateM2 = (sigmaGateM2 > cfg_.minGateM * cfg_.minGateM) ? sigmaGateM2 : cfg_.minGateM * cfg_.minGateM;
+
+  if (innovation * innovation > gateM2) {
+    rejectedTotal_++;
+    altM_ = altPred;  // keep coasting on the prediction
+    p00_ = p00;
+    p01_ = p01;
+    p11_ = p11;
+    lastMs_ = sampleMs;
+    if (++consecutiveRejects_ > cfg_.maxConsecutiveRejects) {
+      seed(altM, sampleMs);  // it kept saying the same thing: the altitude really moved
+      return true;
+    }
+    return false;
+  }
+  consecutiveRejects_ = 0;
+
+  // ---- Update ----
+  const float k0 = p00 / s;
+  const float k1 = p01 / s;
+  altM_ = altPred + k0 * innovation;
+  vsMS_ += k1 * innovation;
+  p00_ = (1.0f - k0) * p00;
+  p01_ = (1.0f - k0) * p01;
+  p11_ = p11 - k1 * p01;
+  if (p11_ < 0.0f) p11_ = 0.0f;  // float rounding guard; true value is >= 0
+  lastMs_ = sampleMs;
+  return true;
+}
+
+// ---------------------------------------------------------------------
+// File-local state. Everything here is touched only from updateVario()
+// (loop task); the rest of the firmware reads the published
+// currentClimbRateMS / currentClimbRateAvgMS globals as before.
+// ---------------------------------------------------------------------
+static VarioKalman varioKalman;
+static VarioDiagnostics varioDiag = {};
+static bool haveRead = false;               // a successful baro read has happened
+static uint32_t lastReadMs = 0;             // timestamp of the previous successful read
+static bool haveAcceptedSample = false;     // an estimator has taken a sample
+static uint32_t lastAcceptedSampleMs = 0;
+
+const VarioDiagnostics& varioDiagnostics() { return varioDiag; }
+
+void resetVarioDiagnostics() {
+  varioDiag = VarioDiagnostics{};
+  haveRead = false;
+}
+
+// Gap between consecutive successful baro reads. A late sample means
+// loop() was held up (display redraw, SD flush, I2C retry...).
+static void recordReadTiming(uint32_t sampleMs) {
+  if (haveRead) {
+    const uint32_t gapMs = sampleMs - lastReadMs;
+    if (gapMs > varioDiag.maxGapMs) varioDiag.maxGapMs = gapMs;
+    if (gapMs > VARIO_LATE_SAMPLE_MS) varioDiag.lateSamples++;
+  }
+  varioDiag.samples++;
+  lastReadMs = sampleMs;
+  haveRead = true;
+}
+
+static void printVarioDiagnosticsIfDue(uint32_t nowMs) {
+  if (!VARIO_DIAG_PRINT) return;
+  static uint32_t lastPrintMs = 0;
+  if ((uint32_t)(nowMs - lastPrintMs) < VARIO_DIAG_PRINT_MS) return;
+  lastPrintMs = nowMs;
+  Serial.printf("[VARIO DIAG] samples=%lu late=%lu maxGap=%lums readFail=%lu gateRej=%lu kfRej=%lu\n",
+                (unsigned long)varioDiag.samples, (unsigned long)varioDiag.lateSamples,
+                (unsigned long)varioDiag.maxGapMs, (unsigned long)varioDiag.readFailures,
+                (unsigned long)varioDiag.gateRejects, (unsigned long)varioDiag.kalmanRejects);
+}
+
+// If nothing has been accepted for VARIO_STALE_TIMEOUT_MS, stop publishing
+// the last climb rate: left alone it would keep the buzzer playing the same
+// beep for as long as the sensor stayed silent.
+static void expireStaleClimbRate(uint32_t nowMs) {
+  if (!haveAcceptedSample) return;
+  if ((uint32_t)(nowMs - lastAcceptedSampleMs) < VARIO_STALE_TIMEOUT_MS) return;
+
+  currentClimbRateMS = 0.0f;
+  resetClimbRateAverage();
+  varioKalman.reset();
+  windowCount = 0;
+  windowIndex = 0;
+  haveAcceptedSample = false;  // once per stall, not on every call
+}
+
+// Push one accepted altitude sample (fixed 1013.25 hPa reference) into both
+// estimators and publish the climb rate. The least-squares window is kept
+// running even when the Kalman filter is selected, so the two can be
+// compared by flipping VARIO_USE_KALMAN.
+static void feedClimbEstimators(float fixedRefAltM, uint32_t sampleMs) {
+  const bool kalmanAccepted = varioKalman.update(fixedRefAltM, sampleMs);
+  if (!kalmanAccepted) {
+    varioDiag.kalmanRejects++;
+    expireStaleClimbRate(sampleMs);
+    if (VARIO_USE_KALMAN) return;
+  }
+
+  altWindow[windowIndex] = fixedRefAltM;
+  timeWindow[windowIndex] = sampleMs;
+  windowIndex = (windowIndex + 1) % CLIMB_WINDOW_N;
+  if (windowCount < CLIMB_WINDOW_N) windowCount++;
+
+  float rateMS = currentClimbRateMS;  // unchanged if no estimator is ready yet
+  if (VARIO_USE_KALMAN) {
+    if (varioKalman.initialised()) rateMS = varioKalman.climbRateMS();
+  } else if (windowCount >= 3) {
+    rateMS = computeClimbRateLeastSquares();
+  }
+
+  currentClimbRateMS = rateMS;
+  updateClimbRateAverage(rateMS, sampleMs);
+  lastAcceptedSampleMs = sampleMs;
+  haveAcceptedSample = true;
+}
+
 //=====================================================
-//VARIO: sample baro, push into regression window, compute climb rate
+//VARIO: sample baro, update the climb-rate estimator
 //=====================================================
 void updateVario() {
   // Temporary throttled diagnostics -- ALTITUDE/CLIMB RATE only need
@@ -42,6 +219,8 @@ void updateVario() {
 
 
   if (!bmp.performReading()) {
+    varioDiag.readFailures++;
+    expireStaleClimbRate(millis());
     if (debugNow) {
       Serial.println("[VARIO DEBUG] bmp.performReading() FAILED -- skipping this cycle");
       lastVarioDebug = millis();
@@ -49,7 +228,13 @@ void updateVario() {
     return;
   }
 
+  // One timestamp for this sample, taken right after the read. Everything
+  // below (outlier gate, window, Kalman filter) uses it, instead of each
+  // calling millis() again after QNH work and Serial prints have run.
   lastSuccessfulBaroSample = millis();
+  const uint32_t sampleMs = (uint32_t)lastSuccessfulBaroSample;
+  recordReadTiming(sampleMs);
+  printVarioDiagnosticsIfDue(sampleMs);
   currentPressureHpa = bmp.pressure;
 
   // Thresholds relaxed from the original (satellites >= 6, HDOP <= 2.5)
@@ -209,12 +394,14 @@ void updateVario() {
 
   if (windowCount > 0) {
     int lastIdx = (windowIndex + CLIMB_WINDOW_N - 1) % CLIMB_WINDOW_N;
-    float dt = (millis() - timeWindow[lastIdx]) / 1000.0f;
+    float dt = (uint32_t)(sampleMs - (uint32_t)timeWindow[lastIdx]) / 1000.0f;
 
     if (dt > 0.001f) {
       float impliedRateMS = (newAltitudeM - altWindow[lastIdx]) / dt;
 
       if (fabsf(impliedRateMS) > REJECT_RATE_MS) {
+        varioDiag.gateRejects++;
+        expireStaleClimbRate(sampleMs);
         if (debugNow) {
           Serial.printf(
             "[VARIO DEBUG] Rejected outlier sample: alt=%.1f m implied=%.1f m/s "
@@ -230,15 +417,8 @@ void updateVario() {
   // QNH-corrected altitude for everything that shows or logs altitude.
   currentAltitudeM = bmp.readAltitude(currentQNH);
 
-  altWindow[windowIndex] = newAltitudeM;  // fixed-reference altitude, see above
-  timeWindow[windowIndex] = millis();
-  windowIndex = (windowIndex + 1) % CLIMB_WINDOW_N;
-  if (windowCount < CLIMB_WINDOW_N) windowCount++;
-
-  if (windowCount >= 3) {
-    currentClimbRateMS = computeClimbRateLeastSquares();
-    updateClimbRateAverage(currentClimbRateMS, millis());
-  }
+  // Fixed-reference altitude into the estimators, see above.
+  feedClimbEstimators(newAltitudeM, sampleMs);
 
   // if (debugNow) {
   //   Serial.printf(
