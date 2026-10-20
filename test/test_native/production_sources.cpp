@@ -19,3 +19,4 @@
 #include "SdCard.cpp"
 #include "settings.cpp"
 #include "IgcRecorder.cpp"
+#include "EngineNmea.cpp"

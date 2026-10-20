@@ -9,7 +9,8 @@
 //   Menu closed: short press cycles the 3 active pages; double press opens
 //                the menu; holding 3s toggles the vario mute.
 //   Menu open:   short press moves the selection down (wraps); holding 2s
-//                selects the highlighted item and closes the menu.
+//                selects the highlighted item, except the alert-volume
+//                Test item, which starts immediately on press.
 // =====================================================
 #define KEY_PIN 18  
 #define KEY_DEBOUNCE_MS 10

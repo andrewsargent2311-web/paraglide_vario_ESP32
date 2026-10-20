@@ -71,6 +71,7 @@ extern unsigned long timeWindow[CLIMB_WINDOW_N];
 extern int windowCount;
 extern int windowIndex;
 extern unsigned long lastBaroSample;
+extern unsigned long lastSuccessfulBaroSample;
 extern float currentAltitudeM;
 extern float currentClimbRateMS;     // fast -- audio buzzer
 extern float currentClimbRateAvgMS;  // DISPLAY_CLIMB_AVG_MS average -- screen, glide ratio

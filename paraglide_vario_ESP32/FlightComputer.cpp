@@ -111,6 +111,8 @@ void setup() {
   setenv("TZ", NZ_TIMEZONE, 1);
   tzset();
 
+  // Allow for short loop stalls without overflowing the GPS UART receive ring.
+  Serial1.setRxBufferSize(2048);
   Serial1.begin(GPS_BAUD, SERIAL_8N1, GPS_RX_PIN, GPS_TX_PIN);
   Serial.println("GPS UART INITIALIZED");
 
