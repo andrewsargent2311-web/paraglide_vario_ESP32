@@ -54,13 +54,13 @@ A DIY flight computer for paragliding and paramotoring that costs about **$60 US
 
 | Part | Approx. cost | Notes |
 |---|---|---|
-| [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/esp32-s3-rlcd-4.2.htm) | $27 | The "brain", screen, speaker driver, SD slot and battery holder all in one |
-| [Adafruit BMP580](https://www.adafruit.com/product/6411) | $8 | Barometer, measures altitude change for the vario |
+| [Waveshare ESP32-S3-RLCD-4.2](https://www.waveshare.com/esp32-s3-rlcd-4.2.htm) | $35 USD (includes shipping, buy on Aliexpress) | The "brain", screen, speaker driver, SD slot and battery holder all in one |
+| [Adafruit BMP580](https://www.adafruit.com/product/6411) | $10 USD | Barometer, measures altitude change for the vario |
 | [Waveshare LC76G GNSS module](https://www.waveshare.com/lc76g-gnss-module.htm) | $15 | GPS |
-| Custom circuit board (PCB) from PCBWay | $5 | See [Step 1](#step-1-order-the-circuit-board) |
+| Custom circuit board (PCB) from PCBWay | $10 | See [Step 1](#step-1-order-the-circuit-board) |
 | 3D printer filament (PLA) | $5 | Orange in the photos, any colour works |
 | microSD card, 8–16 GB | a few $ | Doesn't need to be bigger |
-| **HT-RA62 LoRa radio module** | $4 | [HT-RA62] (https://heltec.org/project/ht-ra62/) Soldered directly onto the PCB, used for FANET. *Not included in the original $60 estimate.* |
+| **HT-RA62 LoRa radio module** | $7 USD (includes shipping) | [HT-RA62] (https://heltec.org/project/ht-ra62/) Soldered directly onto the PCB, used for FANET. *Not included in the original $60 estimate.* |
 | **18650 lithium battery** | comes with waveshare board for extra $3| Fits in the holder on the Waveshare board. Use a good-quality protected cell. |
 | **USB-C data cable** | | Must carry data, not just charge |
 
@@ -74,7 +74,7 @@ A DIY flight computer for paragliding and paramotoring that costs about **$60 US
 
 You will also need some pin headers and/or sockets to connect the Waveshare board, BMP580 and GPS module to the PCB. The exact layout is shown in the [KiCad project](PCB%20files/ESP32%20vario_PCB_layout/).
 
-**Total: roughly $60–80 USD** plus shipping, depending on the items in bold.
+**Total: roughly $80 USD**
 
 > **Tip:** Buy everything from the same order window if you can. PCBs from PCBWay usually arrive in a couple of weeks, so order that first.
 
