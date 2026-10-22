@@ -2,6 +2,9 @@
 
 #include <cmath>
 #include <cstring>
+#include <string>
+
+#include "SD_MMC.h"
 
 // Declares haversine_km, resolveAltitudeFt, loadAirspaceDatabase,
 // findNearestControlledAirspace and the status getters.
@@ -223,4 +226,135 @@ TEST(OpenAirSearch, EmptyDatabaseFindsNothingAndLeavesResultUntouched)
         EXPECT_EQ(0, std::memcmp(&out, &before, sizeof(out)))
             << "alertOnly = " << alertOnly;
     }
+}
+
+namespace
+{
+const char* kTestAirspaceFile = "/TEST_AIRSPACE.TXT";
+const char* kCircleWithFiveNmRadius =
+    "AC CTR\n"
+    "AN Test circle\n"
+    "AL SFC\n"
+    "AH 3500ft\n"
+    "V X=41:00:00S 175:12:00E\n"
+    "DC 5\n";
+const char* kCircleThreeKmFromPilot =
+    "AC CTR\n"
+    "AN Nearby circle\n"
+    "AL SFC\n"
+    "AH 3500ft\n"
+    "V X=41:00:00S 175:14:06E\n"
+    "DC 0.1\n";
+const char* kCShapedPolygon =
+    "AC CTR\n"
+    "AN C shaped polygon\n"
+    "AL 1500ft\n"
+    "AH 9500ft\n"
+    "DP 41:30:00S 174:30:00E\n"
+    "DP 41:30:00S 175:30:00E\n"
+    "DP 41:18:00S 175:30:00E\n"
+    "DP 41:18:00S 174:42:00E\n"
+    "DP 40:42:00S 174:42:00E\n"
+    "DP 40:42:00S 175:30:00E\n"
+    "DP 40:30:00S 175:30:00E\n"
+    "DP 40:30:00S 174:30:00E\n";
+
+bool loadTestAirspace(const char* contents)
+{
+    SD_MMC_SetFileContents(kTestAirspaceFile, contents);
+    return loadAirspaceDatabase(kTestAirspaceFile, kControlled, 5);
+}
+}
+
+TEST(OpenAirSearch, CircleReportsEntryAndExitWithTrueHorizontalDistance)
+{
+    ASSERT_TRUE(loadTestAirspace(kCircleWithFiveNmRadius));
+
+    const double outsideLat = -40.7;
+    const double longitude = 175.2;
+    AirspaceResult result;
+
+    ASSERT_TRUE(findNearestControlledAirspace(
+        outsideLat, longitude, 2500.0f, 100.0f, true, true, result));
+    const double centerDistance = haversine_km(outsideLat, longitude, -41.0, longitude);
+    const double expectedOutsideDistance = centerDistance - 5.0 * 1.852;
+    EXPECT_FALSE(result.insideHoriz);
+    EXPECT_NEAR(result.horizDistance_km, expectedOutsideDistance, 0.05);
+
+    ASSERT_TRUE(findNearestControlledAirspace(
+        -41.0, longitude, 2500.0f, 100.0f, true, true, result));
+    EXPECT_TRUE(result.insideHoriz);
+    EXPECT_TRUE(result.insideVert);
+    EXPECT_FLOAT_EQ(result.horizDistance_km, 0.0f);
+
+    ASSERT_TRUE(findNearestControlledAirspace(
+        outsideLat, longitude, 2500.0f, 100.0f, true, true, result));
+    EXPECT_FALSE(result.insideHoriz);
+    EXPECT_NEAR(result.horizDistance_km, expectedOutsideDistance, 0.05);
+}
+
+TEST(OpenAirSearch, FartherPolygonDoesNotReplaceNearestCircle)
+{
+    const std::string contents = std::string(kCircleThreeKmFromPilot) + kCShapedPolygon;
+    ASSERT_TRUE(loadTestAirspace(contents.c_str()));
+
+    AirspaceResult result;
+    ASSERT_TRUE(findNearestControlledAirspace(
+        -41.0, 175.2, 5000.0f, 100.0f, true, true, result));
+
+    const double centerDistance = haversine_km(-41.0, 175.2, -41.0, 175.235);
+    const double expectedDistance = centerDistance - 0.1 * 1.852;
+    EXPECT_STREQ(result.name, "Nearby circle");
+    EXPECT_NEAR(result.horizDistance_km, expectedDistance, 0.05);
+    EXPECT_FALSE(result.insideHoriz);
+    EXPECT_FALSE(result.insideVert);
+}
+
+TEST(OpenAirSearch, LaterallyInsideCircleAboveCeilingRemainsNearest)
+{
+    const char* circle =
+        "AC CTR\n"
+        "AN Inside circle\n"
+        "AL SFC\n"
+        "AH 3500ft\n"
+        "V X=41:00:00S 175:12:00E\n"
+        "DC 5\n";
+    const std::string contents = std::string(circle) + kCShapedPolygon;
+    ASSERT_TRUE(loadTestAirspace(contents.c_str()));
+
+    AirspaceResult result;
+    ASSERT_TRUE(findNearestControlledAirspace(
+        -41.0, 175.2, 5000.0f, 100.0f, true, true, result));
+
+    EXPECT_STREQ(result.name, "Inside circle");
+    EXPECT_FLOAT_EQ(result.horizDistance_km, 0.0f);
+    EXPECT_TRUE(result.insideHoriz);
+    EXPECT_FALSE(result.insideVert);
+}
+
+TEST(OpenAirSearch, CShapedPolygonReportsTrueEdgeDistance)
+{
+    ASSERT_TRUE(loadTestAirspace(kCShapedPolygon));
+
+    AirspaceResult result;
+    ASSERT_TRUE(findNearestControlledAirspace(
+        -41.0, 175.2, 5000.0f, 100.0f, true, true, result));
+
+    EXPECT_STREQ(result.name, "C shaped polygon");
+    EXPECT_FALSE(result.insideHoriz);
+    EXPECT_NEAR(result.horizDistance_km, 33.0, 1.0);
+}
+
+TEST(OpenAirSearch, SurfaceFloorReportsWhetherGroundElevationIsKnown)
+{
+    ASSERT_TRUE(loadTestAirspace(kCircleWithFiveNmRadius));
+
+    AirspaceResult result;
+    ASSERT_TRUE(findNearestControlledAirspace(
+        -41.0, 175.2, 2500.0f, 100.0f, false, true, result));
+    EXPECT_FALSE(result.vertKnown);
+
+    ASSERT_TRUE(findNearestControlledAirspace(
+        -41.0, 175.2, 2500.0f, 100.0f, true, true, result));
+    EXPECT_TRUE(result.vertKnown);
 }

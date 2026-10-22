@@ -2014,10 +2014,9 @@ void drawDashboard() {
 // AIRSPACE WARNING OVERLAY
 //
 // Silent and invisible when there's nothing to report. Shows a banner
-// when the nearest controlled airspace is within AIRSPACE_WARN_HORIZ_KM /
-// AIRSPACE_WARN_VERT_FT, and a more prominent one if you're actually
-// inside its lateral+vertical bounds. A short alert tone fires once on
-// the transition into "inside" (edge-triggered, not every redraw).
+// only when the pilot is laterally inside and vertically inside or the
+// vertical band is unknown. A short alert tone fires once on the
+// transition into "inside" (edge-triggered, not every redraw).
 // =====================================================
 // Copies out the latest airspace scan result under backgroundDataMutex.
 // Quick by design -- a plain struct copy, no SD/SPI work while the lock is
@@ -2070,18 +2069,11 @@ bool drawAirspaceWarning() {
 
   if (!valid) return false;
 
-  // insideVert / vertDistance_ft are meaningless when result.vertKnown is
-  // false (floor or ceiling is AGL/SFC-referenced and there's currently no
-  // valid ground elevation to resolve it against -- see
-  // AirspaceResult::vertKnown). Don't claim a confident "inside" in that
-  // case -- and don't use an untrustworthy vertDistance_ft to decide
-  // "nearby" either; treat vertical range as unknown-but-possible instead,
-  // so a real infringement can't go silently unwarned just because the
-  // ground elevation lookup is temporarily unresolved.
-  bool insideNow = result.vertKnown && result.insideHoriz && result.insideVert;
-  bool nearby = !insideNow &&
-                result.horizDistance_km <= AIRSPACE_WARN_HORIZ_KM &&
-                (!result.vertKnown || result.vertDistance_ft <= AIRSPACE_WARN_VERT_FT);
+  // Inside laterally, and either inside vertically or the vertical band can't be resolved
+  // (AGL/SFC floor/ceiling with no valid ground elevation). Unknown is treated as inside
+  // (safe side) and flagged on the banner.
+  const bool insideNow = result.insideHoriz && (result.vertKnown ? result.insideVert : true);
+  const bool altUnknown = !result.vertKnown;
 
   // One-shot alert on entering controlled airspace, not on every redraw.
   // Deliberately NOT gated on airspaceAlertBarEnabled -- that setting
@@ -2099,20 +2091,20 @@ bool drawAirspaceWarning() {
   // this point is unaffected by the setting.
   if (!airspaceAlertBarEnabled) return false;
 
-  if (!insideNow && !nearby) return false;
+  if (!insideNow) return false;
 
   char line1[40];
   char line2[40];
 
-  if (insideNow) {
-    snprintf(line1, sizeof(line1), "INSIDE %s", result.name);
-    snprintf(line2, sizeof(line2), "Class %s", result.classId);
-  } else {
-    snprintf(line1, sizeof(line1), "%s", result.name);
-    if (result.vertKnown) {
-      snprintf(line2, sizeof(line2), "%.1fkm  %.0fft", result.horizDistance_km, result.vertDistance_ft);
-    } else {
-      snprintf(line2, sizeof(line2), "%.1fkm  VERT: --", result.horizDistance_km);
+  snprintf(line1, sizeof(line1), "INSIDE %s", result.name);
+  snprintf(line2, sizeof(line2), "Class %s", result.classId);
+  if (altUnknown) {
+    snprintf(line2, sizeof(line2), "Class %s  ALT UNKNOWN", result.classId);
+    if (u8g2.getStrWidth(line2) > SCREEN_W - 12) {
+      snprintf(line2, sizeof(line2), "%s  ALT UNKNOWN", result.classId);
+    }
+    if (u8g2.getStrWidth(line2) > SCREEN_W - 12) {
+      snprintf(line2, sizeof(line2), "ALT UNKNOWN");
     }
   }
 

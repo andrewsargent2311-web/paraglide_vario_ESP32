@@ -3,13 +3,13 @@
 // (native tests only).
 //
 // OpenAirScanner.cpp's loadAirspaceDatabase() reads its OpenAir file through
-// these. Nothing here can supply file contents: SD_MMC.open() always returns
-// a closed File. So the native tests can only cover the parts of
-// OpenAirScanner that never reach the SD card. Do not write tests that assert
-// against this stub: they would be testing the stub, not production code.
+// these. Native tests can supply in-memory file contents with
+// SD_MMC_SetFileContents(); paths without supplied contents remain closed.
 #include <Arduino.h>
+#include <map>
 #include <string>
 #include <stdexcept>
+#include <utility>
 
 #define FILE_READ "r"
 #define FILE_WRITE "w"
@@ -19,7 +19,19 @@ class String
 {
 public:
     String() {}
-    void        trim()           {}
+    explicit String(std::string value) : s_(std::move(value)) {}
+    void trim()
+    {
+        const auto first = s_.find_first_not_of(" \t\r\n");
+        if (first == std::string::npos)
+        {
+            s_.clear();
+            return;
+        }
+
+        const auto last = s_.find_last_not_of(" \t\r\n");
+        s_ = s_.substr(first, last - first + 1);
+    }
     unsigned    length() const   { return (unsigned)s_.size(); }
     char        charAt(unsigned i) const { return i < s_.size() ? s_[i] : 0; }
     const char* c_str() const    { return s_.c_str(); }
@@ -30,16 +42,59 @@ private:
 class File
 {
 public:
-    explicit operator bool() const { return false; }  // never opens
-    int    available()                   { return 0; }
-    String readStringUntil(char)         { return String(); }
-    void   close()                       {}
+    File() : open_(false), cursor_(0) {}
+    explicit File(const std::string& contents) : contents_(contents), open_(true), cursor_(0) {}
+    explicit operator bool() const { return open_; }
+    int available() { return open_ && cursor_ < contents_.size(); }
+    String readStringUntil(char delimiter)
+    {
+        const size_t start = cursor_;
+        while (cursor_ < contents_.size() && contents_[cursor_] != delimiter)
+        {
+            ++cursor_;
+        }
+        const std::string line = contents_.substr(start, cursor_ - start);
+        if (cursor_ < contents_.size())
+        {
+            ++cursor_;
+        }
+        return String(line);
+    }
+    void close() { open_ = false; }
 
     // Write side, used by IgcRecorder.cpp. Nothing is stored.
     void println(const char*)            {}
     void flush()                         {}
     template <typename... A> void printf(const char*, A...) {}
+private:
+    std::string contents_;
+    bool open_;
+    size_t cursor_;
 };
+
+inline std::map<std::string, std::string>& SD_MMC_TestFiles()
+{
+    static std::map<std::string, std::string> files;
+    return files;
+}
+
+inline void SD_MMC_SetFileContents(const char* path, const char* text)
+{
+    if (!path) throw std::invalid_argument("SD_MMC_SetFileContents(nullptr)");
+    if (text)
+    {
+        SD_MMC_TestFiles()[path] = text;
+    }
+    else
+    {
+        SD_MMC_TestFiles().erase(path);
+    }
+}
+
+inline void SD_MMC_ClearFileContents()
+{
+    SD_MMC_TestFiles().clear();
+}
 
 class SDMMCFS
 {
@@ -49,7 +104,8 @@ public:
         // Real SD_MMC does not accept a null path. Fail loudly here so a
         // production null-check that goes missing is caught by a test.
         if (!path) throw std::invalid_argument("SD_MMC.open(nullptr)");
-        return File();
+        const auto found = SD_MMC_TestFiles().find(path);
+        return found == SD_MMC_TestFiles().end() ? File() : File(found->second);
     }
 };
 

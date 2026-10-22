@@ -219,17 +219,13 @@ static double polygonDistanceKm(
         return 1e18;
     }
 
+    (void)bestKnownKm; // Retained for existing callers; the true distance must not be cutoff.
+
     const double kmPerDegLon =
         KM_PER_DEG_LAT *
         cos(degToRad(lat));
 
     double bestSq = 1e18;
-
-    if (bestKnownKm < 1e17) {
-        bestSq =
-            bestKnownKm *
-            bestKnownKm;
-    }
 
     for (uint8_t i = 0, j = a.numPoints - 1;
          i < a.numPoints;
@@ -1811,8 +1807,8 @@ bool findNearestControlledAirspace(
 
         const bool better =
             !haveBest ||
-            horizKm < bestHorizKm ||
-            (horizKm == bestHorizKm &&
+            (float)horizKm < bestHorizKm ||
+            ((float)horizKm == bestHorizKm &&
              vertFt < bestVertFt);
 
         if (!better) {

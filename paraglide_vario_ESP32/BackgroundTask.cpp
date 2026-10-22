@@ -119,12 +119,14 @@ void backgroundTask(void* parameter) {
       airspaceScanAnchor = now;
 
       PositionSnapshot pos;
+      bool posRead = false;
       if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
         pos = sharedPosition;
+        posRead = true;
         xSemaphoreGive(backgroundDataMutex);
       }
 
-      if (pos.valid) {
+      if (posRead && pos.valid) {
         AirspaceResult nearest;
 
         // groundElevationValid is read here, not just groundElevationFt --
@@ -189,9 +191,8 @@ void backgroundTask(void* parameter) {
             nearestAirspace = nearest;
             airspaceResultValid = true;
           } else {
-            // No controlled airspace nearby right now -- clear any stale
-            // result so the UI doesn't keep showing the last hit after
-            // the pilot has flown clear of it.
+            // No alert-eligible controlled airspace is cached -- clear
+            // any stale result so the UI doesn't keep showing an old hit.
             airspaceResultValid = false;
           }
 
@@ -202,6 +203,14 @@ void backgroundTask(void* parameter) {
             airspaceInfoResultValid = false;
           }
 
+          xSemaphoreGive(backgroundDataMutex);
+        }
+      }
+      else if (posRead) {
+        if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+          airspaceResultValid = false;
+          airspaceInfoResultValid = false;
+          airspaceClearanceValid = false;
           xSemaphoreGive(backgroundDataMutex);
         }
       }

@@ -36,8 +36,6 @@
 // already defines all three, and this header would just be duplicating it.
 // =====================================================
 #define TOP_BAR_HEIGHT_PX 32
-#define AIRSPACE_WARN_HORIZ_KM 5.0f
-#define AIRSPACE_WARN_VERT_FT 2000.0f
 #define WEATHER_STATION_NAME_MAX 20
 #define TRACKED_METERS 6
 #define CLIMB_DEADBAND_MS 0.15f
