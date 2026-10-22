@@ -21,6 +21,7 @@ uint8_t menuSelectedIndex = 0;
 #define MAX_MAP_FILES 8
 static char mapFileNames[MAX_MAP_FILES][DEM_FILENAME_MAX_LEN];
 static uint8_t mapFileCount = 0;
+static bool voiceProfileRequestPending = false;
 
 // =====================================================
 // SCREEN NAVIGATION STACK
@@ -246,7 +247,7 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_BLUETOOTH: return 3;
     case MENU_SCREEN_BLUETOOTH_SCAN: return bleScanResultCount() > 0 ? bleScanResultCount() : 1;
     case MENU_SCREEN_MAP: return mapFileCount > 0 ? mapFileCount : 1;
-    case MENU_SCREEN_ADSB_SETTINGS: return 8;
+    case MENU_SCREEN_ADSB_SETTINGS: return 9;
     case MENU_SCREEN_ADSB_RADIUS: return ADSB_RADIUS_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_VERTICAL: return ADSB_VERTICAL_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_ALERT_VOLUME: return ADSB_ALERT_VOLUME_CHOICE_COUNT;
@@ -464,6 +465,14 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         snprintf(buf, buflen, "Airspace Alert Bar: %s", airspaceAlertBarEnabled ? "On" : "Off");
       } else if (index == 7) {
         snprintf(buf, buflen, "Airspace Info: %s", airspaceInfoBarEnabled ? "On" : "Off");
+      } else if (index == 8) {
+        if (voiceProfileLoading()) {
+          snprintf(buf, buflen, "Voice: Loading...");
+        } else {
+          const char* profile = voiceClipsLoaded() ? voiceActiveProfile() : voiceProfile;
+          snprintf(buf, buflen, "Voice: %s",
+                   profile[0] == '\0' ? "Default" : profile);
+        }
       } else {
         static const char* items[] = { "Alert Radius", "Vertical Threshold" };
         snprintf(buf, buflen, "%s", items[index]);
@@ -807,6 +816,37 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           displayDirty = true;
           playFeedbackTone(600.0f, 50);
           return;
+        case 8: {
+          if (voiceProfileLoading()) return;
+          char profiles[VOICE_MAX_PROFILES][VOICE_PROFILE_NAME_MAX] = {};
+          uint8_t profileCount = listVoiceProfiles(profiles, VOICE_MAX_PROFILES);
+          if (profileCount == 0) return;
+          if (profileCount == 1) {
+            playFeedbackTone(600.0f, 50);
+            return;
+          }
+
+          int activeIndex = -1;
+          if (voiceClipsLoaded()) {
+            const char* activeProfile = voiceActiveProfile();
+            for (uint8_t i = 0; i < profileCount; i++) {
+              if (strcmp(profiles[i], activeProfile) == 0) {
+                activeIndex = i;
+                break;
+              }
+            }
+          }
+          uint8_t nextIndex = (activeIndex < 0)
+                                ? 0
+                                : (uint8_t)((activeIndex + 1) % profileCount);
+          if (requestVoiceProfile(profiles[nextIndex])) {
+            voiceProfileRequestPending = true;
+            displayDirty = true;
+          } else {
+            playFeedbackTone(300.0f, 60);
+          }
+          return;
+        }
       }
       return;
 
@@ -973,6 +1013,20 @@ void menuMoveDown() {
 
 void menuSelectCurrentItem() {
   selectMenuItem(currentMenuScreen(), menuSelectedIndex);
+}
+
+void menuService() {
+  if (!voiceProfileRequestPending || voiceProfileLoading()) return;
+  voiceProfileRequestPending = false;
+  if (voiceLastReloadOk() && voiceClipsLoaded()) {
+    const char* activeProfile = voiceActiveProfile();
+    strncpy(voiceProfile, activeProfile, VOICE_PROFILE_NAME_MAX - 1);
+    voiceProfile[VOICE_PROFILE_NAME_MAX - 1] = '\0';
+    saveSettings();
+  } else {
+    playFeedbackTone(200.0f, 250);
+  }
+  displayDirty = true;
 }
 
 bool menuSelectionIsImmediate() {

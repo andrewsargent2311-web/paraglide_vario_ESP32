@@ -236,13 +236,14 @@ static const WifiNetwork WIFI_NETWORKS[WIFI_NETWORK_COUNT] = {
 |---|---|
 | `AIRSPACE.txt` | Airspace data, used for warnings |
 | `Lower_North_Island.ADEM` | Terrain height map, used to work out your height above ground (AGL). It's about 99 MB. |
-| `VOICE/` (folder) | The 60 short speech clips (`V000.PCM` to `V059.PCM`, about 1.25 MB in total) used for [voice traffic alerts](#voice-traffic-alerts). The card must end up with `/VOICE/V000.PCM`, `/VOICE/V001.PCM` and so on. |
+| `VOICE/` (folder) | The 60 short speech clips (`V000.PCM` to `V059.PCM`) used for [voice traffic alerts](#voice-traffic-alerts). Flat `/VOICE/V###.PCM` files are the **Default** voice; optional profiles go in subfolders such as `/VOICE/US_RYAN/V000.PCM`. |
 
 3. Eject the card safely and put it into the microSD slot on the Waveshare board.
 
 **Notes:**
 - The vario still works without the SD card, but you won't get flight logs, maps, airspace or voice alerts.
-- All 60 voice clips must be present. If the `VOICE` folder or any single clip is missing, voice alerts are switched off (the rest of the unit works normally). `manifest.txt` in that folder is just a list of what each clip says. You don't need to copy it.
+- All 60 clips must be present in a profile folder or that profile is skipped. The existing flat `/VOICE/V###.PCM` layout is still supported as **Default**. Put additional voices in `/VOICE/<NAME>/` folders; profile names may use letters, numbers, `_` and `-`, up to 12 characters. The device can list up to 8 profiles. `manifest.txt` is just a list of what each clip says and is ignored by the device.
+- Generate additional profiles with the [`voicebuild` tool](voicebuild/README.md). Copy each generated profile folder into `VOICE/` on the card.
 - You can keep several `.ADEM` maps on the card and choose between them from the menu (**Map**).
 - The included airspace and terrain files cover the lower North Island of New Zealand. See [Optional extras](#optional-extras) for other areas.
 - An optional splash image can be shown at startup: a file called `ROY.BIN` in the card root. If it's missing, a plain text splash screen is shown instead, so you can skip this.
@@ -270,7 +271,7 @@ Do this indoors first, then repeat outside.
 2. Move the unit up and down by about a metre. You should hear the **vario beep** and see the altitude change.
 3. Take it **outside with a clear view of the sky**. The first GPS lock can take a few minutes. Once it locks, speed, heading and time appear.
 4. Look at the **AIR SPACE** box on the main screen. After the first temperature/humidity reading (about 10 seconds) and once the GPS has calibrated the altitude, the **CLD BASE** line shows a number. Until then it shows `--`. See [Cloud base estimate](#cloud-base-estimate) to calibrate it.
-5. To see what the device is doing while it boots, click the **Serial Monitor** (🔌 plug icon) in the blue bar at the bottom of VS Code while the unit is plugged into your computer. It runs at **115200** baud automatically. It prints messages showing whether the SD card, barometer, GPS and radio all started correctly. If the voice clips loaded you will see `[Voice] Loaded 60 voice clips into PSRAM`. Click the bin/trash or press `Ctrl+C` in the terminal to close the monitor, and **close it before you upload again** (the upload can't use the port while the monitor has it open).
+5. To see what the device is doing while it boots, click the **Serial Monitor** (🔌 plug icon) in the blue bar at the bottom of VS Code while the unit is plugged into your computer. It runs at **115200** baud automatically. It prints messages showing whether the SD card, barometer, GPS and radio all started correctly. If voice clips loaded you will see `[Voice] Loaded 60 voice clips into PSRAM (profile: Default)` or the name of the selected profile. Click the bin/trash or press `Ctrl+C` in the terminal to close the monitor, and **close it before you upload again** (the upload can't use the port while the monitor has it open).
 
 ---
 
@@ -294,7 +295,7 @@ The unit has **one button**:
 - **Connections:** WiFi on/off and network choice, Bluetooth (engine meter), FANET on/off
 - **FANET Messaging:** messaging on/off, and the preset messages you can broadcast
 - **Map:** choose which terrain map to use
-- **ADS-B settings:** alert radius and vertical threshold, auto-jump to the ADS-B page, **Alarm Sound** (Off / Alarm / Voice), **Alert Volume**, range rings, airspace bars
+- **ADS-B settings:** alert radius and vertical threshold, auto-jump to the ADS-B page, **Alarm Sound** (Off / Alarm / Voice), **Alert Volume**, range rings, airspace bars, and **Voice** profile
 - **Weather settings:** update interval, number of stations, data source
 - **Flight recordings:** recording on/off, **Export files** (see below), auto-stop
 
@@ -314,6 +315,7 @@ When ADS-B shows an aircraft close to you, the unit can **speak** the warning (o
 |---|---|
 | **Alarm Sound** | Select it (hold the button ~2 seconds) to cycle **Off → Alarm → Voice**; each select moves it to the next mode. *Alarm* is the two-tone siren (5 seconds). *Voice* speaks the sentence above. *Off* mutes both. |
 | **Alert Volume** | How loud the alert is, 0–100% in 10% steps. It applies to whichever of Alarm or Voice is selected. Select **Test** at the bottom of the list to hear it (it plays the example sentence above). It deliberately does not play a preview each time you scroll, because the full sentence takes about 5 seconds. |
+| **Voice** | Select to cycle through the available profiles, including **Default** for the original flat `/VOICE/V###.PCM` clips. Switching takes a couple of seconds; the menu shows **Loading...** while it changes. The successful choice is remembered across reboots. |
 | **Alert Radius** | How close, sideways, an aircraft must be to trigger an alert: 3, 5, 8 or 10 km (default 5). |
 | **Vertical Threshold** | How close, up or down, it must be: 1000, 1500, 2000 or 3000 ft (default 2000). |
 | **Auto-Jump** | Whether a new aircraft also switches the screen to the ADS-B page. This only changes the screen. The audio alert happens either way. |
@@ -334,7 +336,7 @@ When ADS-B shows an aircraft close to you, the unit can **speak** the warning (o
 
 **Good to know:**
 - **It needs a GPS fix and for you to be moving.** The clock position is worked out from your direction of travel, so with no valid GPS course (for example standing still on the ground, or before the first fix) the voice alert stays silent rather than guess. The siren does not have this limit.
-- **It needs the SD card with the `VOICE` folder** (see [Step 7](#step-7-prepare-the-sd-card)) and **PSRAM enabled**, which the project's `platformio.ini` already does for you (see [Step 6](#step-6-build-and-upload-the-code)). The clips are loaded into memory once at start-up, so nothing is read from the card while an alert is playing.
+- **It needs the SD card with the `VOICE` folder** (see [Step 7](#step-7-prepare-the-sd-card)) and **PSRAM enabled**, which the project's `platformio.ini` already does for you (see [Step 6](#step-6-build-and-upload-the-code)). The selected profile is loaded into memory at start-up; nothing is read from the card while an alert is playing. Switching profiles reads the clips in the background and can take a couple of seconds.
 - ADS-B data arrives over WiFi, so the alert only works when the unit is connected (for example to your phone hotspot). See the notes on ADS-B in [Step 5](#step-5-add-your-wifi-details).
 - Like the rest of this project it is an aid, not a safety system. Keep looking around.
 
@@ -410,7 +412,7 @@ The [`Engine_meter/`](Engine_meter/) folder contains a separate project (nRF5284
 | **No sound** | Check the speaker is plugged in and the vario isn't muted (hold the button ~4 s). Check volume in **Config → Volume**. Traffic alerts have their own level in **ADSB Settings → Alert Volume**. |
 | **No GPS fix** | Go outside with a clear view of the sky and wait a few minutes. Check the GPS module's soldering and that the case doesn't block it. |
 | **No voice alert (siren works, or nothing plays)** | Check **ADSB Settings → Alarm Sound** is set to **Voice** (not Alarm or Off) and the Alert Volume isn't 0%. Then check the Serial Monitor at boot for `[Voice] Loaded 60 voice clips into PSRAM`. |
-| **Serial Monitor says `[Voice] /VOICE folder not found` or `Missing clip file`** | The `VOICE` folder must sit in the root of the SD card with all 60 clips in it (`V000.PCM` to `V059.PCM`). Copy the whole folder again. |
+| **Serial Monitor says `[Voice] /VOICE folder not found` or a profile is incomplete** | The `VOICE` folder must sit in the root of the SD card. The flat Default clips go directly inside it; each named profile needs all 60 clips (`V000.PCM` to `V059.PCM`) in its own subfolder. Incomplete profiles are skipped. |
 | **Serial Monitor says `[Voice] PSRAM allocation failed`** | PSRAM isn't enabled in the build. Check the PSRAM lines in `platformio.ini` (see [Step 6](#step-6-build-and-upload-the-code)) and upload again. |
 | **Serial Monitor shows nothing** | Make sure the unit is plugged in with a data cable, that you've clicked the plug icon, and that `-DARDUINO_USB_CDC_ON_BOOT=1` is still in `platformio.ini`. Try unplugging and replugging the USB cable. |
 | **Voice alert works in the menu Test but never speaks in flight** | It stays silent until the GPS has a valid course, so you need a fix and to be moving. It also needs WiFi for the ADS-B data, and the aircraft must be inside your Alert Radius and Vertical Threshold. |

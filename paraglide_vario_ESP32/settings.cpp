@@ -110,6 +110,8 @@ bool wifiEnabled = true;
 // Default matches the renamed tile now shipped on the SD card.
 char selectedDemFile[DEM_FILENAME_MAX_LEN] = "/Lower_North_Island.ADEM";
 
+char voiceProfile[VOICE_PROFILE_NAME_MAX] = "";
+
 // Default matches the app's original behaviour: boots on the Paraglider page.
 uint8_t mainPageSelection = 0;  // 0 = Paraglider, 1 = Paramotor
 
@@ -160,6 +162,33 @@ void loadSettings() {
   strncpy(selectedDemFile, dem.c_str(), DEM_FILENAME_MAX_LEN - 1);
   selectedDemFile[DEM_FILENAME_MAX_LEN - 1] = '\0';
 
+  char storedVoiceProfile[VOICE_PROFILE_NAME_MAX] = { 0 };
+  size_t storedVoiceLength = prefs.isKey("voiceProf")
+                               ? prefs.getStringLength("voiceProf") : 0;
+  bool validVoiceProfile = storedVoiceLength == 0 ||
+                           storedVoiceLength <= sizeof(storedVoiceProfile);
+  if (validVoiceProfile && storedVoiceLength > 0) {
+    size_t readLength = prefs.getString(
+      "voiceProf", storedVoiceProfile, sizeof(storedVoiceProfile));
+    validVoiceProfile = readLength == storedVoiceLength &&
+                        storedVoiceProfile[storedVoiceLength - 1] == '\0';
+  }
+  size_t voiceProfileLength = storedVoiceLength > 0 ? storedVoiceLength - 1 : 0;
+  for (size_t i = 0; validVoiceProfile && i < voiceProfileLength; i++) {
+    char c = storedVoiceProfile[i];
+    validVoiceProfile = (c >= 'A' && c <= 'Z') ||
+                        (c >= 'a' && c <= 'z') ||
+                        (c >= '0' && c <= '9') ||
+                        c == '_' || c == '-';
+  }
+  if (validVoiceProfile) {
+    strncpy(voiceProfile, storedVoiceProfile, VOICE_PROFILE_NAME_MAX - 1);
+    voiceProfile[VOICE_PROFILE_NAME_MAX - 1] = '\0';
+  } else {
+    Serial.println("[Settings] Invalid voice profile in NVS; using Default");
+    voiceProfile[0] = '\0';
+  }
+
   mainPageSelection = prefs.getUChar("mainPage", mainPageSelection);
 
   buzzerMuted = prefs.getBool("muted", buzzerMuted);
@@ -204,6 +233,9 @@ void saveSettings() {
   prefs.putUChar("wxSource", (uint8_t)weatherSource);
 
   prefs.putString("demFile", selectedDemFile);
+  if (prefs.putString("voiceProf", voiceProfile) == 0) {
+    Serial.println("[Settings] Failed to save voice profile");
+  }
 
   prefs.putUChar("mainPage", mainPageSelection);
 

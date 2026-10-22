@@ -11,6 +11,7 @@
 #include "FileServer.h"
 #include "menu.h"
 #include "settings.h"
+#include "VoiceAlert.h"
 
 TaskHandle_t backgroundTaskHandle = nullptr;
 
@@ -26,6 +27,10 @@ void backgroundTask(void* parameter) {
   for (;;) {
 
     uint32_t now = millis();
+
+    if (sdCardOK) {
+      voiceProfileService();
+    }
 
     // ---------------------------------------------------------
     // Wi-Fi + Bluetooth connection management -- the connect/retry state

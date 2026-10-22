@@ -141,13 +141,13 @@ void setup() {
   sdCardOK = SD_MMC.begin("/sdcard", true);  // true = 1-bit mode (only D0 is wired)
   Serial.println(sdCardOK ? "SD CARD MOUNTED" : "SD CARD NOT FOUND -- IGC recording disabled");
 
-  // Voice alert clips (see VoiceAlert.h) -- loads all 60 clips from
-  // /VOICE/*.PCM into PSRAM once, up front, so real-time playback later
-  // never has to touch the SD card. If this fails (missing folder,
-  // missing PSRAM, etc.) voice alerts are just unavailable -- everything
-  // else on the device still works normally.
+  // Voice alert clips (see VoiceAlert.h) -- loads the selected profile
+  // from /VOICE/ or a /VOICE/<PROFILE>/ folder into PSRAM, so playback
+  // never has to touch the SD card.
   if (sdCardOK) {
-    loadVoiceClips();
+    if (!loadVoiceClips()) {
+      Serial.println("[BOOT] Voice alerts unavailable");
+    }
   }
 
   Serial.println("[BOOT] Drawing splash screen...");
@@ -577,6 +577,7 @@ void loop() {
   // 4. User input
   // ---------------------------------------------------------
   updatePageButton();
+  menuService();
   // ---------------------------------------------------------
   // 4.5 ADS-B new intruder: jump to the traffic page and alert --
   //     immediately when a brand new threat appears (adsbNewThreat, set

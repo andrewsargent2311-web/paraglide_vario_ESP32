@@ -8,33 +8,38 @@
 //
 // The clips themselves are generated offline (Piper neural TTS, see
 // /voicebuild in the repo) and stored on the SD card as raw headerless
-// 16kHz mono 16-bit PCM at /VOICE/V###.PCM. There is no text-to-speech or
-// audio decoding on the device -- just pre-recorded words stitched
-// together in the right order.
+// 16kHz mono 16-bit PCM at /VOICE/V###.PCM (Default) or
+// /VOICE/<PROFILE>/V###.PCM. There is no text-to-speech or audio decoding
+// on the device -- just pre-recorded words stitched together in order.
 //
-// ARCHITECTURE: all 60 clips (~1.25MB total) are loaded into PSRAM once
-// at boot by loadVoiceClips(), called from setup() after SD_MMC.begin().
-// Real-time playback then never touches the SD card -- i2sToneService()
-// (paraglide_vario_ESP32.ino) copies samples directly out of the PSRAM
-// buffers each audio chunk, the same real-time-safe way it already
-// synthesizes tones. This matters: doing small SD reads from inside that
-// timing-critical callback would risk audible stutter/blocking, since SD
-// access isn't guaranteed fast or uncontended (the same card also serves
-// AIRSPACE.txt, the DEM terrain lookups, and IGC logging elsewhere).
+// ARCHITECTURE: all 60 clips are loaded into one fixed PSRAM pool at boot
+// and profile switches reuse that pool. Playback never reads the SD card;
+// the audio task uses a zero-timeout lock and emits silence while the pool
+// is being replaced.
 // =====================================================
 #include "VoiceClips.h"
+#include "settings.h"
 #include <stdint.h>
 
+#define VOICE_MAX_PROFILES 8
 #define VOICE_MAX_SENTENCE_CLIPS 24
 #define VOICE_INTER_CLIP_GAP_MS 90  // silence between spliced clips
 
-// Call once from setup(), after SD_MMC.begin(). Loads every clip in
-// VoiceClips.h from /VOICE/V###.PCM into PSRAM. If the SD card, a clip
-// file, or the PSRAM allocation fails, this logs the problem to Serial
-// and leaves voice alerts unavailable (voiceClipsLoaded() false) rather
-// than crashing -- the rest of the device works normally either way.
-bool loadVoiceClips();
+// Call once from setup(), after SD_MMC.begin(). Loads the persisted voice
+// profile, falling back to Default and then the first complete profile.
+[[nodiscard]] bool loadVoiceClips();
 bool voiceClipsLoaded();
+
+// Returns profile names ("Default" is represented by an empty string).
+// The caller supplies room for maxNames entries, each
+// VOICE_PROFILE_NAME_MAX bytes. SD contention is logged and returns zero.
+[[nodiscard]] uint8_t listVoiceProfiles(char names[][VOICE_PROFILE_NAME_MAX],
+                                        uint8_t maxNames);
+const char* voiceActiveProfile();  // valid only while voiceClipsLoaded()
+[[nodiscard]] bool requestVoiceProfile(const char* name);
+bool voiceProfileLoading();
+bool voiceLastReloadOk();
+void voiceProfileService();  // call once per backgroundTask() pass
 
 // True while a clip sequence is still playing.
 bool voiceIsPlaying();

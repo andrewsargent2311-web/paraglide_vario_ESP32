@@ -95,11 +95,13 @@ extern uint8_t activePageIndex;
 //   |     |-- (Airspace Alert Bar toggle, cycled in place -- NOT
 //   |     |    persisted, always back on at reboot; see
 //   |     |    airspaceAlertBarEnabled in settings.h)
-//   |     `-- (Airspace Info toggle, cycled in place -- persisted; see
-//   |          airspaceInfoBarEnabled in settings.h. Shows/hides
-//   |          drawAirspaceInfoBar() -- ADS-B page only, bottom of
-//   |          screen, current airspace name/frequency including CFZ,
-//   |          or "Class G" if not inside anything charted)
+//   |     |-- (Airspace Info toggle, cycled in place -- persisted; see
+//   |     |    airspaceInfoBarEnabled in settings.h. Shows/hides
+//   |     |    drawAirspaceInfoBar() -- ADS-B page only, bottom of
+//   |     |    screen, current airspace name/frequency including CFZ,
+//   |     |    or "Class G" if not inside anything charted)
+//   |     `-- (Voice profile -- cycles through Default and available
+//   |          /VOICE/<NAME>/ folders; saves successfully loaded choice)
 //   |-- WEATHER_SETTINGS
 //   |     |-- WEATHER_POLL_INTERVAL   (Zephyr station poll cadence)
 //   |     |-- WEATHER_STATIONS_SHOWN  (how many stations to display)
@@ -244,6 +246,7 @@ void closeMenu();
 void menuMoveDown();
 void menuSelectCurrentItem();
 bool menuSelectionIsImmediate();
+void menuService();
 void menuGoBack();
 void drawMenu();
 

@@ -300,6 +300,14 @@ extern bool wifiEnabled;
 extern char selectedDemFile[DEM_FILENAME_MAX_LEN];
 
 // =====================================================
+// VOICE PROFILE SELECTION
+// Empty selects the existing flat /VOICE/V###.PCM layout ("Default").
+// Named profiles live in /VOICE/<NAME>/ and are limited to 12 characters.
+// =====================================================
+#define VOICE_PROFILE_NAME_MAX 13
+extern char voiceProfile[VOICE_PROFILE_NAME_MAX];
+
+// =====================================================
 // FANET RADIO ENABLE
 // Turns the FANET radio (SX1262/HT-RA62, see Sx126xLink.h) fully on or
 // off. OFF puts the chip itself into low-power sleep over SPI (no RX, no
