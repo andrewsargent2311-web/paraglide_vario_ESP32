@@ -644,6 +644,11 @@ void loop() {
   // 7.5 IGC FLIGHT RECORDER
   // ---------------------------------------------------------
   updateIgcRecorder();
+  static uint32_t lastAirspaceAlertMs = 0;
+  if ((uint32_t)(now - lastAirspaceAlertMs) >= 500UL) {
+    lastAirspaceAlertMs = now;
+    updateAirspaceAlert();
+  }
   // ---------------------------------------------------------
   // 8. Display - 1 Hz, or immediately when something changed (page
   //     cycle, menu open/navigate/select) so the menu feels responsive.

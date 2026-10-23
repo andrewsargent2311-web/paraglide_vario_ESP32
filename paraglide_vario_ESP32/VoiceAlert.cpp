@@ -20,6 +20,7 @@ static LoadedClip g_clips[VOICE_CLIP_COUNT];
 static uint8_t* g_voicePool = nullptr;
 static uint8_t g_voiceReadBuffer[VOICE_READ_CHUNK_BYTES];
 static SemaphoreHandle_t g_clipMutex = nullptr;
+static bool giveClipMutex();
 static volatile bool g_clipsLoaded = false;
 static char g_activeProfile[VOICE_PROFILE_NAME_MAX] = "";
 

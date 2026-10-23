@@ -1,4 +1,5 @@
 #include "AuxSensors.h"
+#include "Buzzer.h"
 #include "CloudBase.h"
 #include "Gps.h"
 #include "Vario.h"  // currentPressureHpa (produced by the BMP580 code)
@@ -27,6 +28,21 @@ void updateBattery() {
 
   float pct = (batteryVoltage - BATT_EMPTY_V) / (BATT_FULL_V - BATT_EMPTY_V) * 100.0f;
   batteryPercent = (uint8_t)constrain(pct, 0.0f, 100.0f);
+
+  static bool warned15 = false;
+  static bool warned8 = false;
+  if (batteryPercent <= 15 && !warned15) {
+    warned15 = true;
+    playFeedbackTone(500.0f, 500);
+  }
+  if (batteryPercent <= 8 && !warned8) {
+    warned8 = true;
+    playFeedbackTone(500.0f, 900);
+  }
+  if (batteryPercent >= 20) {
+    warned15 = false;
+    warned8 = false;
+  }
 }
 
 // =====================================================

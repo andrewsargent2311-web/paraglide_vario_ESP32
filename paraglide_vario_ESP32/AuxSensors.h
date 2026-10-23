@@ -15,7 +15,7 @@
 // =====================================================
 #define BATT_ADC_PIN 4
 #define BATT_DIVIDER_RATIO 3.0f
-#define BATT_EMPTY_V 2.5f
+#define BATT_EMPTY_V 3.3f
 #define BATT_FULL_V 4.2f
 #define BATT_SAMPLE_MS 2000
 #define BATT_EMA_ALPHA 0.2f

@@ -12,6 +12,8 @@ bool windEstimateValid = false;
 
 namespace {
 
+uint32_t gWindPublished_ms = 0;
+constexpr uint32_t kWindMaxAge_ms = 10UL * 60UL * 1000UL;
 constexpr uint32_t kGpsSampleMaxAge_ms = 2000;
 constexpr uint32_t kMinSampleInterval_ms = 500;     // decimates fast GPS rates
 constexpr uint32_t kMaxCircleDuration_ms = 45000;   // slower than this is not a thermal turn
@@ -162,6 +164,7 @@ bool publishIfValid(const CircleFit& fit) {
   estimatedAirspeedKph = fit.radius_kph;
   estimatedWindDirectionDeg = from_deg;
   windEstimateValid = true;
+  gWindPublished_ms = millis();
   return true;
 }
 
@@ -215,6 +218,11 @@ void windEstimatorFeed(float groundSpeedKph, float trackDeg, uint32_t now_ms) {
 }
 
 void updateWindEstimator() {
+  if (windEstimateValid &&
+      (uint32_t)(millis() - gWindPublished_ms) > kWindMaxAge_ms) {
+    windEstimateValid = false;
+  }
+
   // Only consume complete, fresh GPS updates. Reusing the same sample on
   // every loop pass would bias the fit.
   const bool speedFresh = gps.speed.isValid() &&

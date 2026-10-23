@@ -168,7 +168,7 @@ void performADSBUpdate() {
 
     JsonObject ac = aircraftList[i];
 
-    if (!ac.containsKey("gs") || (float)ac["gs"] < 10.0f) {
+    if (!ac["gs"].is<float>() || (float)ac["gs"] < 10.0f) {
 
       aircraftList.remove(i);
     }
@@ -197,7 +197,8 @@ void performADSBUpdate() {
 
   for (JsonObject ac : aircraftList) {
 
-    if (!ac.containsKey("lat") || !ac.containsKey("lon") || !ac.containsKey("hex")) {
+    if (!ac["lat"].is<float>() || !ac["lon"].is<float>() ||
+        !ac["hex"].is<const char*>()) {
 
       continue;
     }
@@ -252,7 +253,7 @@ void performADSBUpdate() {
         // "track" (heading) isn't sent by every aircraft/feed state --
         // ADSB Settings > the voice alert says "heading unknown" rather
         // than guessing when it's missing.
-        nearestThisFrame.headingKnown = ac.containsKey("track");
+        nearestThisFrame.headingKnown = ac["track"].is<float>();
         nearestThisFrame.headingDeg = nearestThisFrame.headingKnown ? (float)ac["track"] : 0.0f;
       }
 

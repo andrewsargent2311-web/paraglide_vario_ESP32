@@ -189,6 +189,7 @@ void drawDashboard();
 // Returns true if it actually drew a banner (see its header comment in
 // DrawPages.cpp for why drawDashboard() needs to know that).
 bool drawAirspaceWarning();
+void updateAirspaceAlert();
 
 // FANET message banner -- shares the same top-of-screen slot as
 // drawAirspaceWarning() (drawDashboard() only calls this when that one

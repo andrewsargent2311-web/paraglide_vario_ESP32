@@ -15,7 +15,7 @@ static AglDisplayBuffer aglDisplayBuffer;
 static bool getDisplayAglM(float& aglM) {
   const bool baroFresh = millis() - lastSuccessfulBaroSample < 1000UL;
   const bool gpsFresh = gps.location.isValid() && gps.location.age() < 2000;
-  const bool sourcesValid = bmpOK && windowCount > 0 && qnhCalibrated &&
+  const bool sourcesValid = bmpOK && windowCount > 0 && !qnhIsFallback &&
                             baroFresh && gpsFresh && groundElevationValid;
   const float currentAglM = currentAltitudeM - (groundElevationFt / 3.28084f);
   return aglDisplayBuffer.update(sourcesValid, currentAglM, millis(), aglM);
@@ -2058,6 +2058,19 @@ bool getAirspaceInfoSnapshot(AirspaceResult& out) {
   return valid;
 }
 
+void updateAirspaceAlert() {
+  static bool wasInside = false;
+
+  AirspaceResult result;
+  if (!getAirspaceSnapshot(result)) return;
+
+  const bool insideNow = result.insideHoriz && (result.vertKnown ? result.insideVert : true);
+  if (insideNow && !wasInside) {
+    playFeedbackTone(900.0f, 600);
+  }
+  wasInside = insideNow;
+}
+
 // Returns true if a banner was actually drawn (occupying the top
 // banner slot), false if there was nothing to show. Used by
 // drawDashboard() to decide whether drawFanetMessageBanner() gets to
@@ -2075,20 +2088,6 @@ bool drawAirspaceWarning() {
   const bool insideNow = result.insideHoriz && (result.vertKnown ? result.insideVert : true);
   const bool altUnknown = !result.vertKnown;
 
-  // One-shot alert on entering controlled airspace, not on every redraw.
-  // Deliberately NOT gated on airspaceAlertBarEnabled -- that setting
-  // only hides the visual banner below, same as adsbAlarmMode is kept
-  // independent of ADS-B's Auto-Jump (settings.h). A pilot who's hidden
-  // the banner still gets the one-time tone telling them they've
-  // actually entered controlled airspace.
-  static bool wasInside = false;
-  if (insideNow && !wasInside) {
-    playFeedbackTone(900.0f, 600);
-  }
-  wasInside = insideNow;
-
-  // Visual banner only -- see the comment above for why the tone above
-  // this point is unaffected by the setting.
   if (!airspaceAlertBarEnabled) return false;
 
   if (!insideNow) return false;

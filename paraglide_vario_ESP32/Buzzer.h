@@ -80,7 +80,7 @@ extern esp_timer_handle_t audioServiceTimer;
 #define ES8311_I2C_ADDR 0x18
 
 // CLIMB_DEADBAND_MS is defined in DrawPages.h (shared with drawParagliderPage()'s sink indicator, and with updateI2sAudioBuzzer() below).
-#define SINK_ALARM_MS -0.5f  // Sink alarm set to start at -0.5m/s can alter this later to suit
+#define SINK_ALARM_MS -2.0f  // Sink alarm starts at -2.0 m/s
 #define CLIMB_TONE_MAX_MS 5.0f
 //#define SINK_RELEASE_MS -5.0f  // Set to -5m/s as not uncommon to hit 4 m/s sink alarm switches off above 5 m/s to avoid distraction
 //commented out max sink threshold for debugging as its causing clipping

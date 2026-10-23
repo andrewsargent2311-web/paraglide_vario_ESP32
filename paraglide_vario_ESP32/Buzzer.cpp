@@ -417,7 +417,7 @@ void updateI2sAudioBuzzer(){
   // SINK ALARM WITH HYSTERESIS
   // ============================================================
 
-  const float SINK_ALARM_RELEASE_MS = -0.2f;
+  const float SINK_ALARM_RELEASE_MS = -1.5f;
 
   if (!sinkAlarmActive) {
 
