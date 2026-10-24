@@ -191,7 +191,7 @@ void setSelectedDemFile(const char* filename);
 // =====================================================
 // Dependencies provided by the main .ino
 // =====================================================
-extern U8G2_ST7305_300X400_1_4W_HW_SPI u8g2;
+extern U8G2_ST7305_300X400_F_4W_HW_SPI u8g2;
 extern bool sdCardOK;
 extern SemaphoreHandle_t sdMutex;
 

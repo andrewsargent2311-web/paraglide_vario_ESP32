@@ -36,6 +36,7 @@ static uint16_t pointsDroppedForPoolFull = 0;
 // Airspaces skipped entirely because fewer than 3 points fit in the
 // remaining pool space.
 static uint16_t airspacesRejectedForPool = 0;
+static uint16_t truncatedPolygons = 0;
 
 static bool databaseLoaded = false;
 
@@ -1078,6 +1079,7 @@ bool loadAirspaceDatabase(
     pointPoolUsed = 0;
     pointsDroppedForPoolFull = 0;
     airspacesRejectedForPool = 0;
+    truncatedPolygons = 0;
 
     if (!filename ||
         !controlledClasses ||
@@ -1119,8 +1121,6 @@ bool loadAirspaceDatabase(
     uint16_t polygonBlocks = 0;
 
     uint32_t polygonPoints = 0;
-
-    uint16_t truncatedPolygons = 0;
 
     // -----------------------------------------------------------------------
     // Read file one line at a time.
@@ -1540,6 +1540,14 @@ uint16_t getAirspacePointPoolCapacity() {
 
 bool isAirspaceDatabaseLoaded() {
     return databaseLoaded;
+}
+
+bool airspaceDatabaseComplete() {
+    return databaseLoaded &&
+           airspacesRejectedForPool == 0 &&
+           pointsDroppedForPoolFull == 0 &&
+           truncatedPolygons == 0 &&
+           airspaceCount < OAS_MAX_AIRSPACES;
 }
 
 // ---------------------------------------------------------------------------

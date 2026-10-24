@@ -367,9 +367,17 @@ void updateWeather() {
   // ---------------------------------------------------------
   // Lock shared weather data while we populate localMeters.
   // ---------------------------------------------------------
-  if (backgroundDataMutex != nullptr) {
-    xSemaphoreTake(backgroundDataMutex, portMAX_DELAY);
+  static bool mutexTimeoutLogged = false;
+  if (backgroundDataMutex == nullptr ||
+      xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(2000)) != pdTRUE) {
+    hasWeatherData = false;
+    if (!mutexTimeoutLogged) {
+      Serial.println("[Zephyr] Timed out waiting for background data mutex");
+      mutexTimeoutLogged = true;
+    }
+    return;
   }
+  mutexTimeoutLogged = false;
 
   // ---------------------------------------------------------
   // Clear old station validity flags

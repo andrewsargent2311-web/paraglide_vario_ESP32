@@ -18,6 +18,9 @@
 #include <string.h>
 #include <esp_task_wdt.h>
 #include <esp_timer.h>
+#include <esp_heap_caps.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 #include <Preferences.h>  // climb/sink volume persistence (see loadVarioVolumes())
 #include <FS.h>
 #include <SD_MMC.h>
@@ -50,6 +53,8 @@
 #include "PageButton.h"
 #include "IgcRecorder.h"
 #include "BackgroundTask.h"
+
+static TaskHandle_t audioTaskHandle = nullptr;
 
 // =====================================================
 // WIFI (feeds Weather + ADS-B pages) + BLUETOOTH (engine meter)
@@ -207,6 +212,10 @@ void setup() {
       Serial.println(
           "ERROR: Airspace database failed to load");
   }
+  const bool aspComplete = airspaceDatabaseComplete();
+  const char* aspMsg = aspComplete ? nullptr :
+    (isAirspaceDatabaseLoaded() ? "AIRSPACE DATA INCOMPLETE"
+                                : "AIRSPACE DATA MISSING");
   u8g2.firstPage();
   do {
     if (splashImageLoaded) {
@@ -215,6 +224,11 @@ void setup() {
     } else {
       u8g2.setFont(u8g2_font_fub20_tf);
       u8g2.drawStr(20, 200, "FLIGHT COMPUTER");
+    }
+    if (aspMsg != nullptr) {
+      u8g2.setFont(u8g2_font_helvB14_tf);
+      u8g2.drawStr((SCREEN_W - u8g2.getStrWidth(aspMsg)) / 2,
+                   SCREEN_H - 8, aspMsg);
     }
   } while (u8g2.nextPage());
 
@@ -239,34 +253,8 @@ void setup() {
   Wire.begin(I2C_SDA, I2C_SCL);
   Wire.setTimeOut(50);
 
-  // Cheap presence check before touching any library's begin()/readTime():
-  // a plain I2C address probe is bounded by Wire.setTimeOut() above, so
-  // it can't hang even if a device is fully absent. This protects against
-  // library-internal init loops that might not have their own timeout --
-  // we simply never call into them for a device that isn't there.
-  uint8_t bmpAddress = 0;
-  if (i2cDevicePresent(BMP5XX_DEFAULT_I2C_ADDR)) {
-    bmpAddress = BMP5XX_DEFAULT_I2C_ADDR;
-  } else if (i2cDevicePresent(BMP5XX_ALT_I2C_ADDR)) {
-    bmpAddress = BMP5XX_ALT_I2C_ADDR;
-  }
-  bmpOK = (bmpAddress != 0) && bmp.begin(bmpAddress, &Wire);
+  initBaro();
   if (bmpOK) {
-    // begin() leaves the sensor in NORMAL mode. Per the BMP5xx datasheet,
-    // OSR/ODR/press-enable config registers should only be written while in
-    // STANDBY -- but setOutputDataRate()/setPressureOversampling()/
-    // enablePressure() don't enforce that themselves (only the IIR filter
-    // setter does), so writing them straight after begin() means they hit
-    // the sensor mid-measurement with no guarantee they're actually applied.
-    // Force standby first, configure everything, then switch to NORMAL last
-    // so measurement only starts once the config is known-good.
-    bmp.setPowerMode(BMP5XX_POWERMODE_STANDBY);
-    bmp.setTemperatureOversampling(BMP5XX_OVERSAMPLING_2X);
-    bmp.setPressureOversampling(BMP5XX_OVERSAMPLING_8X);
-    bmp.setIIRFilterCoeff(BMP5XX_IIR_FILTER_COEFF_3);
-    bmp.setOutputDataRate(BMP5XX_ODR_50_HZ);
-    bmp.enablePressure(true);
-    bmp.setPowerMode(BMP5XX_POWERMODE_NORMAL);
     Serial.println("BMP580 FOUND -- VARIO ACTIVE");
     delay(100);
 
@@ -440,7 +428,7 @@ void setup() {
       audioServiceTask,
       "audio_svc",
       4096,
-      nullptr,
+      &audioTaskHandle,
       10,
       nullptr,
       1
@@ -493,9 +481,36 @@ void setup() {
   }
 
   Serial.println("[BOOT] setup() COMPLETE -- entering loop()");
+  if (!bmpOK) {
+    playFeedbackTone(300.0f, 700);
+  }
+  if (aspMsg != nullptr) {
+    playFeedbackTone(300.0f, 700);
+  }
 }
 void loop() {
-  uint32_t now = millis();
+  static uint32_t maxDrawMs = 0;
+  static uint32_t maxIgcMs = 0;
+  static uint32_t maxLoopMs = 0;
+  static uint32_t lastDiagPrintMs = 0;
+  const uint32_t loopStartMs = millis();
+  uint32_t now = loopStartMs;
+  static uint32_t lastBaroInitAttemptMs = 0;
+  if (!bmpOK && (uint32_t)(now - lastBaroInitAttemptMs) >= 5000UL) {
+    lastBaroInitAttemptMs = now;
+    initBaro();
+  }
+  static bool wasFresh = false;
+  static uint32_t lastBaroWarnMs = 0;
+  const bool baroFresh = baroIsFresh();
+  if (wasFresh && !baroFresh && lastBaroWarnMs == 0) {
+    lastBaroWarnMs = now - 15000UL;
+  }
+  if (!baroFresh && (uint32_t)(now - lastBaroWarnMs) >= 15000UL) {
+    playFeedbackTone(300.0f, 700);
+    lastBaroWarnMs = now;
+  }
+  wasFresh = baroFresh;
   // ---------------------------------------------------------
   // 1. GPS - drain serial continuously
   // ---------------------------------------------------------
@@ -507,6 +522,10 @@ void loop() {
   // 2. GPS clock synchronisation - once per boot
   // ---------------------------------------------------------
   sharedGpsAltitudeFeet = gps.altitude.feet();  // cache for backgroundTask() (Core 0) to read safely
+  sharedOwnPressureAltFeet =
+    (baroIsFresh() && isfinite(currentPressureAltStdM))
+      ? currentPressureAltStdM * 3.28084f
+      : gps.altitude.feet();
   if (!gpsClockSyncedThisBoot && gps.date.isValid() && gps.time.isValid() && gps.date.age() < 2000 && gps.time.age() < 2000 && syncClockFromGPS()) {
     gpsClockSyncedThisBoot = true;
   }
@@ -519,7 +538,8 @@ void loop() {
     sharedPosition.lon = gps.location.lng();
     // Prefer the QNH-calibrated baro altitude (more precise once
     // calibrated); fall back to raw GPS altitude before calibration.
-    sharedPosition.altFt = qnhCalibrated ? (currentAltitudeM * 3.28084f) : gps.altitude.feet();
+    sharedPosition.altFt = baroAltitudeTrusted()
+                            ? (currentAltitudeM * 3.28084f) : gps.altitude.feet();
     sharedPosition.valid = gps.location.isValid() && gps.location.age() < 2000;
     if (gps.location.isValid()) sharedPosition.everValid = true;  // sticky -- never cleared once set
     xSemaphoreGive(backgroundDataMutex);
@@ -553,8 +573,8 @@ void loop() {
   if (fanetRadioOK && fanetEnabled && gps.location.isValid() && gps.location.age() < 2000) {
     // Prefer the QNH-calibrated baro altitude once available, same
     // preference order already used for sharedPosition above.
-    int32_t altM = qnhCalibrated ? (int32_t)lroundf(currentAltitudeM)
-                                  : (int32_t)lroundf(gps.altitude.meters());
+    int32_t altM = baroAltitudeTrusted() ? (int32_t)lroundf(currentAltitudeM)
+                                         : (int32_t)lroundf(gps.altitude.meters());
     float speedKmh = gps.speed.isValid() ? gps.speed.kmph() : 0.0f;
     float headingDeg = gps.course.isValid() ? gps.course.deg() : 0.0f;
 
@@ -643,7 +663,10 @@ void loop() {
   // ---------------------------------------------------------
   // 7.5 IGC FLIGHT RECORDER
   // ---------------------------------------------------------
+  const uint32_t igcStartMs = millis();
   updateIgcRecorder();
+  const uint32_t igcElapsedMs = (uint32_t)(millis() - igcStartMs);
+  if (igcElapsedMs > maxIgcMs) maxIgcMs = igcElapsedMs;
   static uint32_t lastAirspaceAlertMs = 0;
   if ((uint32_t)(now - lastAirspaceAlertMs) >= 500UL) {
     lastAirspaceAlertMs = now;
@@ -656,6 +679,31 @@ void loop() {
   if (displayDirty || now - lastDisplayUpdate >= 1000) {
     lastDisplayUpdate = now;
     displayDirty = false;
+    const uint32_t drawStartMs = millis();
     drawDashboard();
+    const uint32_t drawElapsedMs = (uint32_t)(millis() - drawStartMs);
+    if (drawElapsedMs > maxDrawMs) maxDrawMs = drawElapsedMs;
+  }
+  const uint32_t loopElapsedMs = (uint32_t)(millis() - loopStartMs);
+  if (loopElapsedMs > maxLoopMs) maxLoopMs = loopElapsedMs;
+  if (VARIO_DIAG_PRINT &&
+      (uint32_t)(millis() - lastDiagPrintMs) >= 10000UL) {
+    lastDiagPrintMs = millis();
+    Serial.printf("[LOOP DIAG] drawMax=%lums igcMax=%lums loopMax=%lums\n",
+                  (unsigned long)maxDrawMs,
+                  (unsigned long)maxIgcMs,
+                  (unsigned long)maxLoopMs);
+    Serial.printf("[HEALTH] stack: loop=%u audio=%u bg=%u free=%u minfree=%u maxblock=%u\n",
+                  (unsigned)uxTaskGetStackHighWaterMark(nullptr),
+                  (unsigned)(audioTaskHandle == nullptr
+                               ? 0 : uxTaskGetStackHighWaterMark(audioTaskHandle)),
+                  (unsigned)(backgroundTaskHandle == nullptr
+                               ? 0 : uxTaskGetStackHighWaterMark(backgroundTaskHandle)),
+                  (unsigned)ESP.getFreeHeap(),
+                  (unsigned)ESP.getMinFreeHeap(),
+                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    maxDrawMs = 0;
+    maxIgcMs = 0;
+    maxLoopMs = 0;
   }
 }

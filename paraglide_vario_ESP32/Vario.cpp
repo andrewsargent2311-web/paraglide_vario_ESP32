@@ -1,6 +1,8 @@
 #include "Vario.h"
 #include "Gps.h"
 #include "settings.h"
+#include "Utils.h"
+#include <Wire.h>
 #include <math.h>
 
 Adafruit_BMP5xx bmp;
@@ -14,6 +16,7 @@ int windowIndex = 0;
 unsigned long lastBaroSample = 0;
 unsigned long lastSuccessfulBaroSample = 0;
 float currentAltitudeM = 0.0f;
+float currentPressureAltStdM = NAN;
 float currentClimbRateMS = 0.0f;
 float currentClimbRateAvgMS = 0.0f;
 float currentQNH = SEA_LEVEL_QNH_DEFAULT;
@@ -26,6 +29,46 @@ bool qnhCalibrated = true;
 // True while the current QNH is the boot default (1013.25) rather than a
 // real GPS-derived value. Cleared by the first successful GPS calibration.
 bool qnhIsFallback = true;
+
+bool initBaro() {
+  // Cheap presence check before touching the library's begin(): a plain
+  // I2C address probe is bounded by Wire.setTimeOut(), so an absent device
+  // cannot leave the initialization path waiting indefinitely.
+  uint8_t bmpAddress = 0;
+  if (i2cDevicePresent(BMP5XX_DEFAULT_I2C_ADDR)) {
+    bmpAddress = BMP5XX_DEFAULT_I2C_ADDR;
+  } else if (i2cDevicePresent(BMP5XX_ALT_I2C_ADDR)) {
+    bmpAddress = BMP5XX_ALT_I2C_ADDR;
+  }
+  bmpOK = (bmpAddress != 0) && bmp.begin(bmpAddress, &Wire);
+  if (bmpOK) {
+    // begin() leaves the sensor in NORMAL mode. Per the BMP5xx datasheet,
+    // OSR/ODR/press-enable config registers should only be written while in
+    // STANDBY -- but setOutputDataRate()/setPressureOversampling()/
+    // enablePressure() don't enforce that themselves (only the IIR filter
+    // setter does), so writing them straight after begin() means they hit
+    // the sensor mid-measurement with no guarantee they're actually applied.
+    // Force standby first, configure everything, then switch to NORMAL last
+    // so measurement only starts once the config is known-good.
+    bmp.setPowerMode(BMP5XX_POWERMODE_STANDBY);
+    bmp.setTemperatureOversampling(BMP5XX_OVERSAMPLING_2X);
+    bmp.setPressureOversampling(BMP5XX_OVERSAMPLING_8X);
+    bmp.setIIRFilterCoeff(BMP5XX_IIR_FILTER_COEFF_3);
+    bmp.setOutputDataRate(BMP5XX_ODR_50_HZ);
+    bmp.enablePressure(true);
+    bmp.setPowerMode(BMP5XX_POWERMODE_NORMAL);
+  }
+  return bmpOK;
+}
+
+bool baroIsFresh() {
+  return bmpOK && lastSuccessfulBaroSample != 0 &&
+         (uint32_t)(millis() - (uint32_t)lastSuccessfulBaroSample) < 2000UL;
+}
+
+bool baroAltitudeTrusted() {
+  return baroIsFresh() && !qnhIsFallback;
+}
 
 // =====================================================
 // KALMAN CLIMB-RATE ESTIMATOR (see Vario.h for the rationale and tuning)
@@ -268,6 +311,7 @@ void updateVario() {
   static bool qnhAvgActive = false;
   static unsigned long qnhAvgStartMs = 0;
   static double qnhAvgAltSum = 0.0;
+  static double qnhAvgPressureSum = 0.0;
   static uint16_t qnhAvgCount = 0;
   static uint32_t lastGpsAltAge = UINT32_MAX;
   // Set when a real GPS calibration succeeds; the 15-minute refresh timer
@@ -286,6 +330,7 @@ void updateVario() {
       qnhAvgActive = true;
       qnhAvgStartMs = millis();
       qnhAvgAltSum = 0.0;
+      qnhAvgPressureSum = 0.0;
       qnhAvgCount = 0;
       lastGpsAltAge = gps.altitude.age();  // don't count the fix already on hand twice
     }
@@ -304,6 +349,7 @@ void updateVario() {
     uint32_t altAge = gps.altitude.age();
     if (altAge < lastGpsAltAge) {
       qnhAvgAltSum += gps.altitude.meters();
+      qnhAvgPressureSum += bmp.pressure;
       qnhAvgCount++;
     }
     lastGpsAltAge = altAge;
@@ -320,7 +366,8 @@ void updateVario() {
         float gpsAltM = (float)(qnhAvgAltSum / qnhAvgCount);
 
         float calculatedQNH =
-          bmp.pressure / powf(1.0f - (gpsAltM / 44330.0f), 1.0f / 0.1903f);
+          (float)(qnhAvgPressureSum / qnhAvgCount) /
+          powf(1.0f - (gpsAltM / 44330.0f), 1.0f / 0.1903f);
 
         if (calculatedQNH >= 850.0f && calculatedQNH <= 1100.0f) {
 
@@ -416,6 +463,7 @@ void updateVario() {
 
   // QNH-corrected altitude for everything that shows or logs altitude.
   currentAltitudeM = bmp.readAltitude(currentQNH);
+  currentPressureAltStdM = newAltitudeM;
 
   // Fixed-reference altitude into the estimators, see above.
   feedClimbEstimators(newAltitudeM, sampleMs);

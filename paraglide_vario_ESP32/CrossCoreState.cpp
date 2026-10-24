@@ -18,3 +18,4 @@ NearestThreatSnapshot sharedNearestThreat;
 // read/write is atomic on ESP32, so no mutex is needed for this single
 // scalar handoff.
 volatile float sharedGpsAltitudeFeet = 0.0f;
+volatile float sharedOwnPressureAltFeet = 0.0f;

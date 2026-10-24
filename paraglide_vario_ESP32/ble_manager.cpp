@@ -3,6 +3,8 @@
 #include <NimBLEDevice.h>
 #include <Preferences.h>
 #include <atomic>
+#include <string>
+#include <strings.h>
 
 // =====================================================
 // ENGINE-METER PROTOCOL: the Nordic UART Service TX characteristic sends
@@ -126,15 +128,16 @@ class VarioScanCallbacks : public NimBLEScanCallbacks {
   }
 
   void onResult(const NimBLEAdvertisedDevice* advertisedDevice) override {
-    String addr = advertisedDevice->getAddress().toString().c_str();
-    String name = advertisedDevice->haveName() ? advertisedDevice->getName().c_str() : "";
+    std::string addr = advertisedDevice->getAddress().toString();
+    std::string name = advertisedDevice->haveName()
+                         ? advertisedDevice->getName() : std::string();
     int rssi = advertisedDevice->getRSSI();
     uint8_t addrType = advertisedDevice->getAddress().getType();
 
     if (bleStateMutex != nullptr && xSemaphoreTake(bleStateMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
       int slot = -1;
       for (uint8_t i = 0; i < scanResultCount; i++) {
-        if (addr.equalsIgnoreCase(scanResults[i].address)) {
+        if (strcasecmp(addr.c_str(), scanResults[i].address) == 0) {
           slot = i;
           break;
         }
@@ -150,7 +153,7 @@ class VarioScanCallbacks : public NimBLEScanCallbacks {
         // kept as a defensive no-op belt-and-braces even though NimBLE's
         // onResult() should already have the merged/complete name whenever
         // the device sent one at all.
-        if (name.length() > 0) {
+        if (!name.empty()) {
           strncpy(scanResults[slot].name, name.c_str(), BLE_DEVICE_NAME_MAX_LEN - 1);
           scanResults[slot].name[BLE_DEVICE_NAME_MAX_LEN - 1] = '\0';
         }
@@ -165,8 +168,9 @@ class VarioScanCallbacks : public NimBLEScanCallbacks {
     if (!bleConnected && !connectPending.load() &&
         (bleRememberedAddress[0] != '\0' || bleRememberedName[0] != '\0')) {
       bool addressMatch = bleRememberedAddress[0] != '\0' &&
-                          addr.equalsIgnoreCase(bleRememberedAddress);
-      bool nameMatch = !addressMatch && bleRememberedName[0] != '\0' && name.equals(bleRememberedName);
+                          strcasecmp(addr.c_str(), bleRememberedAddress) == 0;
+      bool nameMatch = !addressMatch && bleRememberedName[0] != '\0' &&
+                       name == bleRememberedName;
       if (addressMatch || nameMatch) {
         strncpy(pendingConnectAddress, addr.c_str(), sizeof(pendingConnectAddress) - 1);
         pendingConnectAddress[sizeof(pendingConnectAddress) - 1] = '\0';
@@ -272,10 +276,11 @@ static void startScanBurst() {
   if (!bleEnabled) return;
 
   NimBLEScan* pScan = NimBLEDevice::getScan();
-  pScan->setScanCallbacks(&scanCallbacks, /*wantDuplicates=*/true);
+  const bool dense = scanWanted.load();
+  pScan->setScanCallbacks(&scanCallbacks, dense);
   pScan->setActiveScan(true);
-  pScan->setInterval(100);
-  pScan->setWindow(99);
+  pScan->setInterval(dense ? 100 : 160);
+  pScan->setWindow(dense ? 99 : 40);
   pScan->start(BLE_SCAN_WINDOW_S * 1000, /*isContinue=*/false, /*restart=*/true);  // ms; completion arrives via onScanEnd()
 }
 
@@ -405,6 +410,7 @@ static bool tryConnect(NimBLEAddress address, const char* name, uint32_t generat
       return false;
     }
     pClient->setClientCallbacks(&clientCallbacks, /*deleteOnDisconnect=*/false);
+    pClient->setConnectTimeout(5000);
   }
   if (pClient->isConnected()) {
     pClient->disconnect();
@@ -547,6 +553,7 @@ void bleManagerLoop() {
   }
   if (engineDataValid && millis() - lastEngineDataMillis > ENGINE_DATA_TIMEOUT_MS) {
     engineDataValid = false;  // engine meter went quiet -- out of range, off, or disconnected
+    engineBatteryPercentValid = false;
   }
 
   if (connectPending.load() && connectScanDone.load()) {

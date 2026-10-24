@@ -33,10 +33,15 @@ FanetWeatherStation fanetWeatherStations[MAX_FANET_WEATHER_STATIONS];
 // reading the same array.
 void onFanetTracking(const FanetAddress& src, const FanetTracking& pkt,
                       float rssi, float snr) {
-  Serial.printf("[FANET] from %02X:%04X  lat=%.5f lon=%.5f alt=%ldm  spd=%.0fkm/h  rssi=%.0f snr=%.1f\n",
-                src.manufacturer, src.id,
-                pkt.latitude, pkt.longitude, (long)pkt.altitudeM,
-                pkt.speedKmh, rssi, snr);
+  static uint32_t lastPrintMs = 0;
+  const uint32_t now = millis();
+  if ((uint32_t)(now - lastPrintMs) >= 1000UL) {
+    lastPrintMs = now;
+    Serial.printf("[FANET] from %02X:%04X  lat=%.5f lon=%.5f alt=%ldm  spd=%.0fkm/h  rssi=%.0f snr=%.1f\n",
+                  src.manufacturer, src.id,
+                  pkt.latitude, pkt.longitude, (long)pkt.altitudeM,
+                  pkt.speedKmh, rssi, snr);
+  }
 
   // Find the existing slot for this address, or the first free slot if
   // it's new, or -- if the table is completely full of other live
@@ -90,11 +95,16 @@ void onFanetTracking(const FanetAddress& src, const FanetTracking& pkt,
 // comment in DrawPages.h for why no mutex is needed here.
 void onFanetWeather(const FanetAddress& src, const FanetWeather& pkt,
                      float rssi, float snr) {
-  Serial.printf("[FANET WX] from %02X:%04X  lat=%.5f lon=%.5f  wind=%.0f@%.0fkm/h gust=%.0fkm/h  rssi=%.0f snr=%.1f\n",
-                src.manufacturer, src.id,
-                pkt.latitude, pkt.longitude,
-                pkt.windHeadingDeg, pkt.windSpeedKmh, pkt.windGustKmh,
-                rssi, snr);
+  static uint32_t lastPrintMs = 0;
+  const uint32_t now = millis();
+  if ((uint32_t)(now - lastPrintMs) >= 1000UL) {
+    lastPrintMs = now;
+    Serial.printf("[FANET WX] from %02X:%04X  lat=%.5f lon=%.5f  wind=%.0f@%.0fkm/h gust=%.0fkm/h  rssi=%.0f snr=%.1f\n",
+                  src.manufacturer, src.id,
+                  pkt.latitude, pkt.longitude,
+                  pkt.windHeadingDeg, pkt.windSpeedKmh, pkt.windGustKmh,
+                  rssi, snr);
+  }
 
   // Same find-slot-or-evict-quietest approach as onFanetTracking() above.
   int slot = -1;

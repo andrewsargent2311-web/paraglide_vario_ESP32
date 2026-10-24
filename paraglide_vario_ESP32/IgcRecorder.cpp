@@ -9,6 +9,7 @@
 
 File igcFile;
 bool igcRecording = false;
+bool igcWriteFailed = false;
 char igcFilename[32] = "";
 
 unsigned long igcAboveThresholdSince = 0;
@@ -29,11 +30,51 @@ unsigned long acceptedGpsAltitudeAt = 0;
 uint32_t lastAltitudeAge = UINT32_MAX;
 uint32_t lastIgcLogMs = 0;
 
-void logIgcThrottled(const char* msg) {
+static void logIgcThrottled(const char* msg) {
   const uint32_t now = millis();
   if (!igcRecording || (uint32_t)(now - lastIgcLogMs) < 5000UL) return;
   lastIgcLogMs = now;
   Serial.println(msg);
+}
+
+static void markIgcWriteFailure() {
+  igcFile.clearWriteError();
+  igcFile.close();
+  if (!igcWriteFailed) {
+    logIgcThrottled("[IGC] SD write failed; attempting to reopen");
+  }
+  igcWriteFailed = true;
+}
+
+static bool writeIgcRecordLocked(const char* record) {
+  const size_t written = igcFile.println(record);
+  if (written == 0 || igcFile.getWriteError() != 0) {
+    markIgcWriteFailure();
+    return false;
+  }
+  return true;
+}
+
+static void tryReopenIgc() {
+  static bool attempted = false;
+  static uint32_t lastAttemptMs = 0;
+  const uint32_t now = millis();
+  if (attempted && (uint32_t)(now - lastAttemptMs) < 5000UL) return;
+  attempted = true;
+  lastAttemptMs = now;
+
+  if (sdMutex != nullptr &&
+      xSemaphoreTake(sdMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+    return;
+  }
+  igcFile = SD_MMC.open(igcFilename, FILE_APPEND);
+  if (igcFile) {
+    igcWriteFailed = false;
+  } else {
+    igcWriteFailed = true;
+    logIgcThrottled("[IGC] SD reopen failed");
+  }
+  if (sdMutex != nullptr) xSemaphoreGive(sdMutex);
 }
 
 double distanceMeters(double lat1, double lon1, double lat2, double lon2) {
@@ -105,7 +146,7 @@ void updateAcceptedGpsFix(unsigned long now) {
         acceptedGpsAltitudeAt = now;
         haveAcceptedGpsAltitude = true;
       } else if (isfinite(altitudeM)) {
-        Serial.println("[IGC] GPS altitude jump rejected");
+        logIgcThrottled("[IGC] GPS altitude jump rejected");
       }
     }
   }
@@ -256,7 +297,15 @@ void formatIgcLatLon(double lat, double lon, char* out, size_t outSize) {
            longitude.degrees, longitude.minutes, longitude.thousandths, lonHemi);
 }
 void writeIgcBRecord() {
-  if (!igcFile) return;
+  if (!igcRecording) return;
+  if (!igcFile) {
+    if (!igcWriteFailed) {
+      logIgcThrottled("[IGC] IGC file is unavailable");
+    }
+    igcWriteFailed = true;
+    tryReopenIgc();
+    if (!igcFile) return;
+  }
 
   time_t nowEpoch;
   time(&nowEpoch);
@@ -272,7 +321,8 @@ void writeIgcBRecord() {
 
   bool fixValid = latestPositionAccepted && gpsQualityIsGood();
 
-  int pressureAltM = bmpOK ? (int)roundf(currentAltitudeM) : 0;
+  int pressureAltM = (baroIsFresh() && isfinite(currentPressureAltStdM))
+                       ? (int)roundf(currentPressureAltStdM) : 0;
   int gpsAltM = haveAcceptedGpsAltitude ? (int)roundf(acceptedGpsAltitudeM) : 0;
 
   char bRecord[64];
@@ -285,11 +335,10 @@ void writeIgcBRecord() {
   // block the loop here; if the lock is unavailable, queue the B-record for
   // the next opportunity when the recorder runs again.
   if (sdMutex == nullptr || xSemaphoreTake(sdMutex, 0) == pdTRUE) {
-    igcFile.println(bRecord);
-    igcFile.flush();  // flush every fix -- a lost flight log is worse than the SD write cost
-    if (sdMutex != nullptr) {
-      xSemaphoreGive(sdMutex);
+    if (writeIgcRecordLocked(bRecord)) {
+      igcFile.flush();  // flush every fix -- a lost flight log is worse than the SD write cost
     }
+    if (sdMutex != nullptr) xSemaphoreGive(sdMutex);
   } else {
     if (pendingIgcRecordCount >= 4) {
       for (uint8_t i = 1; i < 4; ++i) {
@@ -321,24 +370,32 @@ void startIgcRecording() {
   }
   snprintf(igcFilename, sizeof(igcFilename), "%s.IGC", base);
 
-  if (sdMutex == nullptr || xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
+  if (sdMutex != nullptr &&
+      xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
     Serial.println("[IGC] SD busy -- could not start recording this cycle");
     return;
   }
 
-  for (uint8_t suffix = 1; suffix < 100; ++suffix) {
-    if (!SD_MMC.exists(igcFilename)) break;
+  uint8_t suffix = 0;
+  while (SD_MMC.exists(igcFilename) && suffix < 99) {
+    suffix++;
     int len = snprintf(igcFilename, sizeof(igcFilename), "%s_%u.IGC", base, suffix);
     if (len < 0 || len >= (int)sizeof(igcFilename)) {
-      snprintf(igcFilename, sizeof(igcFilename), "/FLT_%lu.IGC", (unsigned long)millis());
-      break;
+      snprintf(base, sizeof(base), "/FLT_%lu", (unsigned long)millis());
+      snprintf(igcFilename, sizeof(igcFilename), "%s.IGC", base);
+      suffix = 0;
     }
+  }
+  if (SD_MMC.exists(igcFilename)) {
+    Serial.println("[IGC] Could not find an unused filename -- recording not started");
+    if (sdMutex != nullptr) xSemaphoreGive(sdMutex);
+    return;
   }
 
   igcFile = SD_MMC.open(igcFilename, FILE_APPEND);
   if (!igcFile) {
     Serial.printf("[IGC] Failed to open %s\n", igcFilename);
-    xSemaphoreGive(sdMutex);
+    if (sdMutex != nullptr) xSemaphoreGive(sdMutex);
     return;
   }
 
@@ -349,9 +406,10 @@ void startIgcRecording() {
   igcFile.println("HFPRSPRESSALTSENSOR:Bosch BMP580");
   igcFile.println("HFDTM100GPSDATUM:WGS-1984");
   igcFile.flush();
-  xSemaphoreGive(sdMutex);
+  if (sdMutex != nullptr) xSemaphoreGive(sdMutex);
 
   igcRecording = true;
+  igcWriteFailed = false;
   lastIgcFixWrite = 0;
   Serial.printf("[IGC] Recording started: %s\n", igcFilename);
 }
@@ -370,20 +428,39 @@ void stopIgcRecording() {
   Serial.printf("[IGC] Recording stopped: %s\n", igcFilename);
 }
 void updateIgcRecorder() {
-  if (!flightRecorderEnabled) return;
-
-  if (igcRecording && pendingIgcRecordCount > 0) {
-    if (sdMutex == nullptr || xSemaphoreTake(sdMutex, 0) == pdTRUE) {
-      for (uint8_t i = 0; i < pendingIgcRecordCount; ++i) {
-        igcFile.println(pendingIgcRecords[i]);
-      }
-      igcFile.flush();
-      if (sdMutex != nullptr) {
-        xSemaphoreGive(sdMutex);
-      }
-      pendingIgcRecordCount = 0;
+  if (igcRecording && !igcFile) {
+    if (!igcWriteFailed) {
+      logIgcThrottled("[IGC] IGC file is unavailable");
     }
+    igcWriteFailed = true;
+    tryReopenIgc();
   }
+
+  if (igcRecording && igcFile && pendingIgcRecordCount > 0 &&
+      (sdMutex == nullptr || xSemaphoreTake(sdMutex, 0) == pdTRUE)) {
+    bool writeFailed = false;
+    uint8_t writtenCount = 0;
+    for (; writtenCount < pendingIgcRecordCount; ++writtenCount) {
+      if (!writeIgcRecordLocked(pendingIgcRecords[writtenCount])) {
+        writeFailed = true;
+        break;
+      }
+    }
+    if (!writeFailed) {
+      igcFile.flush();
+      pendingIgcRecordCount = 0;
+    } else {
+      const uint8_t remaining = pendingIgcRecordCount - writtenCount;
+      for (uint8_t i = 0; i < remaining; ++i) {
+        snprintf(pendingIgcRecords[i], sizeof(pendingIgcRecords[0]), "%s",
+                 pendingIgcRecords[writtenCount + i]);
+      }
+      pendingIgcRecordCount = remaining;
+    }
+    if (sdMutex != nullptr) xSemaphoreGive(sdMutex);
+  }
+
+  if (!flightRecorderEnabled) return;
 
   unsigned long now = millis();
   updateAcceptedGpsFix(now);

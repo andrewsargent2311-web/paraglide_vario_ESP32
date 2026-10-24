@@ -5,6 +5,7 @@
 #include <stdarg.h>
 #include <math.h>
 #include <chrono>
+#include <time.h>
 
 typedef uint8_t byte;
 
@@ -26,6 +27,16 @@ typedef uint8_t byte;
 
 // Defined by TinyGPS++.cpp when ARDUINO is not defined.
 unsigned long millis();
+
+inline struct tm* gmtime_r(const time_t* timeValue, struct tm* result)
+{
+    return gmtime_s(result, timeValue) == 0 ? result : nullptr;
+}
+
+inline struct tm* localtime_r(const time_t* timeValue, struct tm* result)
+{
+    return localtime_s(result, timeValue) == 0 ? result : nullptr;
+}
 
 // Vario.cpp only prints diagnostics; the tests don't check them.
 struct HostSerial

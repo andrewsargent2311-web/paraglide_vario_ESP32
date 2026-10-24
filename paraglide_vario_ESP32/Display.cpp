@@ -6,7 +6,7 @@
 // (diag = sqrt(300^2+400^2) = 500px = 106.68mm -> ~4.687 px/mm -> 8mm ~= 37.5px).
 // Close enough for layout purposes, but if the exact 8mm matters, verify
 // against the physical panel with calipers rather than trust this alone.
-U8G2_ST7305_300X400_1_4W_HW_SPI u8g2(U8G2_R0, /*cs=*/RLCD_CS, /*dc=*/RLCD_DC, /*reset=*/RLCD_RST);
+U8G2_ST7305_300X400_F_4W_HW_SPI u8g2(U8G2_R0, /*cs=*/RLCD_CS, /*dc=*/RLCD_DC, /*reset=*/RLCD_RST);
 
 // Set whenever page/menu state changes; drives an immediate redraw instead
 // of waiting for the next 1Hz display tick, so menu navigation feels

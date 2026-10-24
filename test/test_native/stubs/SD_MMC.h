@@ -10,9 +10,11 @@
 #include <string>
 #include <stdexcept>
 #include <utility>
+#include <string.h>
 
 #define FILE_READ "r"
 #define FILE_WRITE "w"
+#define FILE_APPEND "a"
 
 // Just the String members OpenAirScanner.cpp uses.
 class String
@@ -63,8 +65,10 @@ public:
     void close() { open_ = false; }
 
     // Write side, used by IgcRecorder.cpp. Nothing is stored.
-    void println(const char*)            {}
+    size_t println(const char* text)     { return text ? strlen(text) + 2 : 0; }
     void flush()                         {}
+    int getWriteError() const            { return 0; }
+    void clearWriteError()               {}
     template <typename... A> void printf(const char*, A...) {}
 private:
     std::string contents_;
@@ -106,6 +110,10 @@ public:
         if (!path) throw std::invalid_argument("SD_MMC.open(nullptr)");
         const auto found = SD_MMC_TestFiles().find(path);
         return found == SD_MMC_TestFiles().end() ? File() : File(found->second);
+    }
+    bool exists(const char* path) const
+    {
+        return path && SD_MMC_TestFiles().find(path) != SD_MMC_TestFiles().end();
     }
 };
 

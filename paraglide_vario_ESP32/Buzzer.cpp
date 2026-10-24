@@ -72,6 +72,7 @@ bool muteToneIsMuteSequence = false;  // true = play MUTE_SEQUENCE; false = play
 
 bool interceptAlarmActive = false;
 unsigned long interceptAlarmStart = 0;
+static bool interceptToneFallback = false;
 
 unsigned long pageBeepUntil = 0;  // while set, updateBuzzer() yields the pin to the page-change beep
 
@@ -320,6 +321,7 @@ void updateI2sAudioBuzzer(){
     if (elapsed >= INTERCEPT_ALARM_DURATION_MS) {
 
       interceptAlarmActive = false;
+      interceptToneFallback = false;
 
       setToneFrequency(0);
 
@@ -328,7 +330,7 @@ void updateI2sAudioBuzzer(){
       climbToneOn = false;
 
     }
-    else if (adsbAlarmMode == ADSB_ALARM_TONE) {
+    else if (adsbAlarmMode == ADSB_ALARM_TONE || interceptToneFallback) {
 
       unsigned long phase =
         elapsed % (INTERCEPT_TONE_TOGGLE_MS * 2);
@@ -604,22 +606,33 @@ void triggerAdsbAlert(const NearestThreatSnapshot& threat) {
   if (adsbAlarmMode == ADSB_ALARM_OFF || !threat.valid) return;
 
   if (adsbAlarmMode == ADSB_ALARM_TONE) {
+    interceptToneFallback = false;
     interceptAlarmActive = true;
     interceptAlarmStart = millis();
     return;
   }
 
   // ADSB_ALARM_VOICE
-  if (!voiceClipsLoaded()) return;  // SD card / PSRAM load failed at boot -- nothing to play
+  if (!voiceClipsLoaded()) {
+    interceptAlarmActive = true;
+    interceptAlarmStart = millis();
+    interceptToneFallback = true;
+    return;
+  }
 
   // Clock position needs the pilot's own heading. With no valid course
   // (stationary, no GPS fix) there's no sensible "o'clock" to give, so
   // skip the alert entirely rather than guess -- agreed behaviour.
-  if (!gps.course.isValid()) return;
+  if (!gps.course.isValid()) {
+    interceptAlarmActive = true;
+    interceptAlarmStart = millis();
+    interceptToneFallback = true;
+    return;
+  }
 
   float relativeBearing = threat.bearingFromMeDeg - (float)gps.course.deg();
-  while (relativeBearing < 0.0f) relativeBearing += 360.0f;
-  while (relativeBearing >= 360.0f) relativeBearing -= 360.0f;
+  relativeBearing = fmodf(relativeBearing, 360.0f);
+  if (relativeBearing < 0.0f) relativeBearing += 360.0f;
   int clockHour = (int)roundf(relativeBearing / 30.0f);
   if (clockHour <= 0) clockHour = 12;
   if (clockHour > 12) clockHour = 12;  // defensive only -- shouldn't occur
@@ -646,6 +659,13 @@ void triggerAdsbAlert(const NearestThreatSnapshot& threat) {
                               clockHour, threat.headingKnown, threat.headingDeg,
                               altitudeFt, relativeFt, threat.aircraftAbove,
                               distanceValue, distanceIsMeters);
+
+  if (n <= 0) {
+    interceptAlarmActive = true;
+    interceptAlarmStart = millis();
+    interceptToneFallback = true;
+    return;
+  }
 
   voicePlaySequence(sentence, n, varioVolumeToGain(adsbAlertVolumePercent));
 }
@@ -856,9 +876,9 @@ void applyBuzzerVolume() {
 void setToneFrequency(float freq) {
   toneFrequency = freq;
 }
-void i2sToneService() {
+bool i2sToneService() {
 
-    if (!codecOK || !es8311OK) return;
+    if (!codecOK || !es8311OK) return false;
 
     // Voice alerts take priority over the tone generator -- serve PCM
     // samples straight from PSRAM (see VoiceAlert.cpp) instead of
@@ -871,11 +891,13 @@ void i2sToneService() {
       voiceServiceChunk(chunk, I2S_TONE_CHUNK);
       size_t bytesWritten = 0;
 #if AUDIO_USE_DEDICATED_TASK
-      i2s_write(I2S_PORT, chunk, sizeof(chunk), &bytesWritten, pdMS_TO_TICKS(100));
+      esp_err_t writeResult =
+        i2s_write(I2S_PORT, chunk, sizeof(chunk), &bytesWritten, pdMS_TO_TICKS(100));
 #else
-      i2s_write(I2S_PORT, chunk, sizeof(chunk), &bytesWritten, 0);
+      esp_err_t writeResult =
+        i2s_write(I2S_PORT, chunk, sizeof(chunk), &bytesWritten, 0);
 #endif
-      return;
+      return writeResult == ESP_OK && bytesWritten > 0;
     }
 
     int16_t chunk[I2S_TONE_CHUNK];
@@ -1029,7 +1051,7 @@ void i2sToneService() {
     // Blocking write: waits for room in the DMA ring, which is what paces
     // audioServiceTask() to the I2S hardware clock. (Bounded, so a stalled
     // I2S peripheral can't hang the task forever.)
-    i2s_write(
+    esp_err_t writeResult = i2s_write(
         I2S_PORT,
         chunk,
         sizeof(chunk),
@@ -1038,7 +1060,7 @@ void i2sToneService() {
     );
 #else
     // Zero-timeout: writes only what fits and never blocks (timer callback).
-    i2s_write(
+    esp_err_t writeResult = i2s_write(
         I2S_PORT,
         chunk,
         sizeof(chunk),
@@ -1046,6 +1068,7 @@ void i2sToneService() {
         0
     );
 #endif
+    return writeResult == ESP_OK && bytesWritten > 0;
 }
 
 #if AUDIO_USE_DEDICATED_TASK
@@ -1054,13 +1077,30 @@ void i2sToneService() {
 // fast as the hardware plays samples -- see AUDIO_USE_DEDICATED_TASK.
 void audioServiceTask(void* arg) {
   (void)arg;
+  static uint8_t failures = 0;
+  static bool failureReported = false;
   for (;;) {
     if (!codecOK || !es8311OK) {
       // I2S/codec not up (yet, or failed) -- don't spin.
       vTaskDelay(pdMS_TO_TICKS(20));
       continue;
     }
-    i2sToneService();
+    if (i2sToneService()) {
+      failures = 0;
+      continue;
+    }
+
+    vTaskDelay(pdMS_TO_TICKS(2));
+    if (failures < 50) {
+      failures++;
+    }
+    if (failures >= 50) {
+      codecOK = false;
+      if (!failureReported) {
+        Serial.println("[AUDIO] Repeated I2S write failures; audio service disabled");
+        failureReported = true;
+      }
+    }
   }
 }
 #endif

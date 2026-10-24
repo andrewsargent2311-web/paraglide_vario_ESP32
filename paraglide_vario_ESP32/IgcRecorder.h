@@ -56,6 +56,7 @@ private:
 
 extern File igcFile;
 extern bool igcRecording;
+extern bool igcWriteFailed;
 extern char igcFilename[32];
 extern unsigned long igcAboveThresholdSince;
 extern unsigned long igcBelowThresholdSince;

@@ -1,13 +1,15 @@
 #pragma once
 // Vario -- BMP580 barometer sampling, altitude / climb-rate state, QNH
-// calibration. BMP580 probing/config at boot stays inline in setup(); all
-// audio lives in Buzzer.cpp.
+// calibration. All audio lives in Buzzer.cpp.
 #include <Arduino.h>
 #include <Adafruit_Sensor.h>
 #include <Adafruit_BMP5xx.h>
 
 extern Adafruit_BMP5xx bmp;
 extern bool bmpOK;
+bool initBaro();
+bool baroIsFresh();
+bool baroAltitudeTrusted();
 // BMP58x breakouts use either 0x47 (default) or 0x46 (SDO/address jumper).
 // Probe both: the barometer is an external flight sensor, not onboard.
 constexpr uint8_t BMP5XX_DEFAULT_I2C_ADDR = 0x47;
@@ -189,6 +191,7 @@ extern int windowIndex;
 extern unsigned long lastBaroSample;
 extern unsigned long lastSuccessfulBaroSample;
 extern float currentAltitudeM;
+extern float currentPressureAltStdM;
 extern float currentClimbRateMS;     // fast -- audio buzzer
 extern float currentClimbRateAvgMS;  // DISPLAY_CLIMB_AVG_MS average -- screen, glide ratio
 extern float currentQNH;

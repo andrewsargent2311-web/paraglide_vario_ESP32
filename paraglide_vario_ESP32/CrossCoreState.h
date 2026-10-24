@@ -43,3 +43,4 @@ extern PositionSnapshot sharedPosition;
 extern NearestThreatSnapshot sharedNearestThreat;
 extern SemaphoreHandle_t backgroundDataMutex;
 extern volatile float sharedGpsAltitudeFeet;
+extern volatile float sharedOwnPressureAltFeet;

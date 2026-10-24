@@ -209,6 +209,7 @@ bool loadAirspaceDatabase(
 uint16_t getAirspaceCount();
 
 bool isAirspaceDatabaseLoaded();
+bool airspaceDatabaseComplete();
 
 // How much of the shared polygon point pool (OAS_POINT_POOL_SIZE) is
 // currently used, for boot-time RAM tuning diagnostics.

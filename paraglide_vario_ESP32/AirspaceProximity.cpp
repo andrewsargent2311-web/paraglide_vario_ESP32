@@ -23,6 +23,8 @@ static const uint8_t AIRSPACE_NUM_CONTROLLED_CLASSES = 5;
 // groundElevationFt.
 float groundElevationFt = 0.0f;
 volatile bool groundElevationValid = false;
+volatile uint32_t groundElevationMs = 0;
+volatile uint32_t airspaceScanDoneMs = 0;
 
 unsigned long demScanAnchor = 0;
 unsigned long airspaceScanAnchor = 0;

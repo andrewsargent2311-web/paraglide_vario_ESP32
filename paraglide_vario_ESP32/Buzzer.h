@@ -145,7 +145,7 @@ void es8311WriteReg(uint8_t reg, uint8_t value);
 void es8311Init();
 void applyBuzzerVolume();
 void setToneFrequency(float freq);
-void i2sToneService();
+bool i2sToneService();
 void updateI2sAudioBuzzer();
 void playFeedbackTone(float freq, unsigned long durationMs);
 void playVolumePreviewTone(float freq, unsigned long durationMs, uint8_t volumePercent);

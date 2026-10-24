@@ -12,6 +12,7 @@
 #include "menu.h"
 #include "settings.h"
 #include "VoiceAlert.h"
+#include "Vario.h"
 
 TaskHandle_t backgroundTaskHandle = nullptr;
 
@@ -30,6 +31,150 @@ void backgroundTask(void* parameter) {
 
     if (sdCardOK) {
       voiceProfileService();
+    }
+
+    if (groundElevationValid &&
+        (uint32_t)(now - groundElevationMs) > 30000UL) {
+      groundElevationValid = false;
+    }
+
+    // ---------------------------------------------------------
+    // Ground elevation (AGL): local SD file only, no WiFi needed. Runs
+    // before the airspace scan below so a fresh groundElevationFt is
+    // available for this same cycle's AGL-referenced airspace floors.
+    // ---------------------------------------------------------
+    if (sdCardOK && now - demScanAnchor >= DEM_SCAN_INTERVAL_MS) {
+      demScanAnchor = now;
+
+      PositionSnapshot demPos;
+      bool demPosRead = false;
+      if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        demPos = sharedPosition;
+        demPosRead = true;
+        xSemaphoreGive(backgroundDataMutex);
+      }
+      if (demPosRead && !demPos.valid) groundElevationValid = false;
+
+      if (demPos.valid) {
+        if (sdMutex != nullptr && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+          float elevM;
+          // getGroundElevationM() (TerrainDem.h) yields periodically via
+          // vTaskDelay() while seeking into the DEM file now, so a deep
+          // first-time seek into a large tile can't starve IDLE0 on core 0
+          // long enough to trip the task watchdog. See seekWithYield() in
+          // that file for why esp_task_wdt_reset() couldn't fix this
+          // (BackgroundTask was never watchdog-registered in the first
+          // place -- the trip was always about IDLE0, not this task).
+          bool found = getGroundElevationM(selectedDemFile, demPos.lat, demPos.lon, elevM);
+          xSemaphoreGive(sdMutex);
+
+          if (found) {
+            groundElevationFt = elevM * 3.28084f;
+            groundElevationMs = millis();
+            groundElevationValid = true;
+          } else {
+            groundElevationValid = false;  // outside tile / no DEM loaded
+          }
+        } else {
+          Serial.println("[DEM] SD busy -- lookup skipped this cycle");
+        }
+      }
+    }
+
+    const uint32_t airspaceStartMs = millis();
+    bool airspaceScanAttempted = false;
+    // ---------------------------------------------------------
+    // Airspace proximity: findNearestControlledAirspace() searches the
+    // in-RAM cache only (see OpenAirScanner.h -- no SD access, no
+    // parsing), so unlike the DEM lookup above this does NOT need
+    // sdMutex. It previously took sdMutex here anyway, which meant it
+    // competed with the IGC logger for the same lock every 10s for no
+    // reason -- that contention (not actual SD I/O) was why scans were
+    // being skipped.
+    // ---------------------------------------------------------
+    if (sdCardOK && now - airspaceScanAnchor >= AIRSPACE_SCAN_INTERVAL_MS) {
+      airspaceScanAttempted = true;
+      airspaceScanAnchor = now;
+
+      PositionSnapshot pos;
+      bool posRead = false;
+      if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        pos = sharedPosition;
+        posRead = true;
+        xSemaphoreGive(backgroundDataMutex);
+      }
+
+      if (posRead && pos.valid) {
+        AirspaceResult nearest;
+        bool found = findNearestControlledAirspace(
+          pos.lat,
+          pos.lon,
+          pos.altFt,
+          groundElevationFt,
+          groundElevationValid,
+          /*alertOnly=*/true,
+          nearest
+        );
+
+        AirspaceResult nearestInfo;
+        bool foundInfo = findNearestControlledAirspace(
+          pos.lat,
+          pos.lon,
+          pos.altFt,
+          groundElevationFt,
+          groundElevationValid,
+          /*alertOnly=*/false,
+          nearestInfo
+        );
+
+        AirspaceClearance clearance;
+        bool foundClearance = findAirspaceClearances(
+          pos.lat,
+          pos.lon,
+          pos.altFt,
+          groundElevationFt,
+          groundElevationValid,
+          clearance
+        );
+
+        if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+          if (foundClearance) {
+            airspaceClearance = clearance;
+            airspaceClearanceValid = true;
+          } else {
+            airspaceClearanceValid = false;
+          }
+
+          if (found) {
+            nearestAirspace = nearest;
+            airspaceResultValid = true;
+          } else {
+            airspaceResultValid = false;
+          }
+
+          if (foundInfo) {
+            nearestAirspaceInfo = nearestInfo;
+            airspaceInfoResultValid = true;
+          } else {
+            airspaceInfoResultValid = false;
+          }
+          airspaceScanDoneMs = millis();
+          xSemaphoreGive(backgroundDataMutex);
+        }
+      }
+      else if (posRead) {
+        if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+          airspaceResultValid = false;
+          airspaceInfoResultValid = false;
+          airspaceClearanceValid = false;
+          airspaceScanDoneMs = millis();
+          xSemaphoreGive(backgroundDataMutex);
+        }
+      }
+    }
+    if (VARIO_DIAG_PRINT && airspaceScanAttempted) {
+      Serial.printf("[ASP] scan took %lums\n",
+                    (unsigned long)(millis() - airspaceStartMs));
     }
 
     // ---------------------------------------------------------
@@ -72,156 +217,7 @@ void backgroundTask(void* parameter) {
       }
     }
 
-    // ---------------------------------------------------------
-    // Ground elevation (AGL): local SD file only, no WiFi needed. Runs
-    // before the airspace scan below so a fresh groundElevationFt is
-    // available for this same cycle's AGL-referenced airspace floors.
-    // ---------------------------------------------------------
-    if (sdCardOK && now - demScanAnchor >= DEM_SCAN_INTERVAL_MS) {
-      demScanAnchor = now;
-
-      PositionSnapshot demPos;
-      if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-        demPos = sharedPosition;
-        xSemaphoreGive(backgroundDataMutex);
-      }
-
-      if (demPos.valid) {
-        if (sdMutex != nullptr && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
-          float elevM;
-          // getGroundElevationM() (TerrainDem.h) yields periodically via
-          // vTaskDelay() while seeking into the DEM file now, so a deep
-          // first-time seek into a large tile can't starve IDLE0 on core 0
-          // long enough to trip the task watchdog. See seekWithYield() in
-          // that file for why esp_task_wdt_reset() couldn't fix this
-          // (BackgroundTask was never watchdog-registered in the first
-          // place -- the trip was always about IDLE0, not this task).
-          bool found = getGroundElevationM(selectedDemFile, demPos.lat, demPos.lon, elevM);
-          xSemaphoreGive(sdMutex);
-
-          if (found) {
-            groundElevationFt = elevM * 3.28084f;
-            groundElevationValid = true;
-          } else {
-            groundElevationValid = false;  // outside tile / no DEM loaded
-          }
-        } else {
-          Serial.println("[DEM] SD busy -- lookup skipped this cycle");
-        }
-      }
-    }
-
-    // ---------------------------------------------------------
-    // Airspace proximity: findNearestControlledAirspace() searches the
-    // in-RAM cache only (see OpenAirScanner.h -- no SD access, no
-    // parsing), so unlike the DEM lookup above this does NOT need
-    // sdMutex. It previously took sdMutex here anyway, which meant it
-    // competed with the IGC logger for the same lock every 10s for no
-    // reason -- that contention (not actual SD I/O) was why scans were
-    // being skipped.
-    // ---------------------------------------------------------
-    if (sdCardOK && now - airspaceScanAnchor >= AIRSPACE_SCAN_INTERVAL_MS) {
-      airspaceScanAnchor = now;
-
-      PositionSnapshot pos;
-      bool posRead = false;
-      if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-        pos = sharedPosition;
-        posRead = true;
-        xSemaphoreGive(backgroundDataMutex);
-      }
-
-      if (posRead && pos.valid) {
-        AirspaceResult nearest;
-
-        // groundElevationValid is read here, not just groundElevationFt --
-        // this is what stops an AGL/SFC-referenced floor being resolved
-        // against a stale ground elevation once the aircraft has flown
-        // outside the loaded DEM tile. See AirspaceResult::vertKnown.
-        //
-        // alertOnly = true -- this feeds the proximity/entry ALERT (top
-        // banner + tone) and the Paraglider/Paramotor pages' AIR SPACE
-        // box, neither of which should ever trigger for a CFZ.
-        bool found = findNearestControlledAirspace(
-          pos.lat,
-          pos.lon,
-          pos.altFt,
-          groundElevationFt,
-          groundElevationValid,
-          /*alertOnly=*/true,
-          nearest
-        );
-
-        // A second, independent search -- alertOnly = false, so a CFZ
-        // (or anything else in the cache) can be returned. Feeds ONLY
-        // the ADS-B page's "Airspace Info" bar (Config > ADS-B Settings
-        // > Airspace Info), which exists specifically to surface a
-        // CFZ's name/frequency even though it must never trigger the
-        // alert above.
-        AirspaceResult nearestInfo;
-
-        bool foundInfo = findNearestControlledAirspace(
-          pos.lat,
-          pos.lon,
-          pos.altFt,
-          groundElevationFt,
-          groundElevationValid,
-          /*alertOnly=*/false,
-          nearestInfo
-        );
-
-        // Third search: the two independent clearances shown in the AIR
-        // SPACE box (horizontal at my altitude / vertical above-below me).
-        // Cheaper than either search above -- see findAirspaceClearances().
-        AirspaceClearance clearance;
-
-        bool foundClearance = findAirspaceClearances(
-          pos.lat,
-          pos.lon,
-          pos.altFt,
-          groundElevationFt,
-          groundElevationValid,
-          clearance
-        );
-
-        if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-          if (foundClearance) {
-            airspaceClearance = clearance;
-            airspaceClearanceValid = true;
-          } else {
-            airspaceClearanceValid = false;
-          }
-
-          if (found) {
-            nearestAirspace = nearest;
-            airspaceResultValid = true;
-          } else {
-            // No alert-eligible controlled airspace is cached -- clear
-            // any stale result so the UI doesn't keep showing an old hit.
-            airspaceResultValid = false;
-          }
-
-          if (foundInfo) {
-            nearestAirspaceInfo = nearestInfo;
-            airspaceInfoResultValid = true;
-          } else {
-            airspaceInfoResultValid = false;
-          }
-
-          xSemaphoreGive(backgroundDataMutex);
-        }
-      }
-      else if (posRead) {
-        if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-          airspaceResultValid = false;
-          airspaceInfoResultValid = false;
-          airspaceClearanceValid = false;
-          xSemaphoreGive(backgroundDataMutex);
-        }
-      }
-    }
-
-    // All real work above is interval-gated (15s / 5min), so this task
+    // All real work above is interval-gated (5s / 10s or longer), so this task
     // spends nearly all its time asleep here rather than busy-polling.
     vTaskDelay(pdMS_TO_TICKS(500));
   }

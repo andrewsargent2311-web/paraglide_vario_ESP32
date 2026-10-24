@@ -45,8 +45,13 @@ FanetMessageEvent lastFanetMessage = { false, { 0, 0 }, "", 0 };
 void onFanetMessageReceived(const FanetAddress& src, const FanetMessage& msg, float rssi, float snr) {
   if (!fanetMessagingEnabled) return;
 
-  Serial.printf("[FANET MSG] from %02X:%04X  \"%s\"  rssi=%.0f snr=%.1f\n",
-                src.manufacturer, src.id, msg.text, rssi, snr);
+  static uint32_t lastPrintMs = 0;
+  const uint32_t now = millis();
+  if ((uint32_t)(now - lastPrintMs) >= 1000UL) {
+    lastPrintMs = now;
+    Serial.printf("[FANET MSG] from %02X:%04X  \"%s\"  rssi=%.0f snr=%.1f\n",
+                  src.manufacturer, src.id, msg.text, rssi, snr);
+  }
 
   lastFanetMessage.valid = true;
   lastFanetMessage.src = src;
@@ -56,7 +61,13 @@ void onFanetMessageReceived(const FanetAddress& src, const FanetMessage& msg, fl
 
   // One-shot alert -- a different pitch/pattern from the airspace entry
   // tone (900Hz/600ms) so the two are distinguishable by ear.
-  playFeedbackTone(1300.0f, 150);
+  static bool haveTone = false;
+  static uint32_t lastToneMs = 0;
+  if (!haveTone || (uint32_t)(millis() - lastToneMs) >= 3000UL) {
+    lastToneMs = millis();
+    haveTone = true;
+    playFeedbackTone(1300.0f, 150);
+  }
 
   displayDirty = true;  // draw the banner immediately rather than waiting for the next 1Hz tick
 }

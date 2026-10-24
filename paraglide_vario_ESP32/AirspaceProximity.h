@@ -6,6 +6,7 @@
 
 extern float groundElevationFt;
 extern volatile bool groundElevationValid;
+extern volatile uint32_t groundElevationMs;
 
 // Produced offline from a LINZ DEM GeoTIFF by dem_to_agldem.py (downscaled
 // + reprojected to WGS84 lat/lon) -- see that script for how to (re)build
@@ -16,6 +17,8 @@ extern volatile bool groundElevationValid;
 #define DEM_SCAN_INTERVAL_MS 5000UL
 
 #define AIRSPACE_SCAN_INTERVAL_MS 10000UL
+#define AIRSPACE_MAX_AGE_MS 30000UL
+extern volatile uint32_t airspaceScanDoneMs;
 
 extern unsigned long demScanAnchor;
 extern unsigned long airspaceScanAnchor;

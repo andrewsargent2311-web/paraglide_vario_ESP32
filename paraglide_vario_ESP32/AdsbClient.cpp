@@ -23,6 +23,8 @@ unsigned long lastAdsbAlertAnnounceMs = 0;
 
 char activeThreatHexes[MAX_TRACKED_THREATS][9] = {};  // Fixed-size ADS-B hex IDs
 int activeThreatCount = 0;
+static char* adsbBody = nullptr;
+static size_t adsbBodyCap = 0;
 
 // =====================================================
 // ADSB data handling
@@ -114,28 +116,87 @@ void performADSBUpdate() {
     return;
   }
 
-  // Parse directly from the HTTP stream to avoid allocating a second
-  // String containing the complete JSON response.
+  static bool allocationAttempted = false;
+  static bool allocationFailureLogged = false;
+  static bool overflowLogged = false;
+  if (!allocationAttempted) {
+    allocationAttempted = true;
+    // DEVIATION(P1-2): one-time allocation on first poll, never freed.
+    adsbBody = (char*)ps_malloc(49152);
+    if (adsbBody != nullptr) {
+      adsbBodyCap = 49152;
+    } else {
+      adsbBody = (char*)malloc(24576);
+      if (adsbBody != nullptr) adsbBodyCap = 24576;
+    }
+  }
+  if (adsbBody == nullptr) {
+    if (!allocationFailureLogged) {
+      Serial.println("[ADS-B] Unable to allocate response buffer");
+      allocationFailureLogged = true;
+    }
+    hasAdsbData = false;
+    http.end();
+    return;
+  }
+
   WiFiClient* adsbStream = http.getStreamPtr();
+  if (adsbStream == nullptr) {
+    Serial.println("[ADS-B] HTTP response stream unavailable");
+    hasAdsbData = false;
+    http.end();
+    return;
+  }
+  const int responseSize = http.getSize();
+  size_t bodyLength = 0;
+  if (responseSize > 0) {
+    if ((size_t)responseSize >= adsbBodyCap) {
+      if (!overflowLogged) {
+        Serial.println("[ADS-B] Response body exceeds buffer capacity");
+        overflowLogged = true;
+      }
+      hasAdsbData = false;
+      http.end();
+      return;
+    }
+    bodyLength = adsbStream->readBytes(adsbBody, (size_t)responseSize);
+    if (bodyLength != (size_t)responseSize) {
+      Serial.printf("[ADS-B] Incomplete response body: %u/%d bytes\n",
+                    (unsigned)bodyLength, responseSize);
+      hasAdsbData = false;
+      http.end();
+      return;
+    }
+  } else {
+    bodyLength = adsbStream->readBytes(adsbBody, adsbBodyCap - 1);
+    if (bodyLength == adsbBodyCap - 1 && adsbStream->available() > 0) {
+      if (!overflowLogged) {
+        Serial.println("[ADS-B] Response body exceeds buffer capacity");
+        overflowLogged = true;
+      }
+      hasAdsbData = false;
+      http.end();
+      return;
+    }
+  }
+  adsbBody[bodyLength] = '\0';
+  http.end();
+  Serial.printf("[ADS-B] Response body bytes read: %u\n", (unsigned)bodyLength);
 
   // ---------------------------------------------------------
   // Parse into the shared document
   // ---------------------------------------------------------
-  // This now runs on the Core 0 background task while drawADSBPage() reads
-  // adsbDoc from Core 1 -- lock around the write, released again before we
-  // return. Network I/O above already completed, so the lock is only held
-  // for parsing + in-memory processing, never for anything that blocks on
-  // the network.
-  if (backgroundDataMutex != nullptr) {
-    xSemaphoreTake(backgroundDataMutex, portMAX_DELAY);
+  if (backgroundDataMutex == nullptr ||
+      xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(500)) != pdTRUE) {
+    hasAdsbData = false;
+    Serial.println("[ADS-B] Timed out waiting for background data mutex");
+    return;
   }
 
   adsbDoc.clear();
 
   DeserializationError error =
-    deserializeJson(adsbDoc, *adsbStream);
-
-  http.end();
+    deserializeJson(adsbDoc, adsbBody, bodyLength);
 
   if (error) {
 
@@ -184,7 +245,7 @@ void performADSBUpdate() {
 
   bool brandNewThreatDetected = false;
 
-  float myAltitudeFeet = sharedGpsAltitudeFeet;
+  float myAltitudeFeet = sharedOwnPressureAltFeet;
 
   char currentFrameThreatHexes[MAX_TRACKED_THREATS][9] = {};
   int currentFrameThreatCount = 0;
@@ -202,6 +263,7 @@ void performADSBUpdate() {
 
       continue;
     }
+    if (!ac["alt_baro"].is<float>()) continue;
 
     float acLat = ac["lat"];
     float acLon = ac["lon"];

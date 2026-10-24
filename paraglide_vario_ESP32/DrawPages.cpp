@@ -7,10 +7,17 @@
 // See DrawPages.h for the declarations these functions rely on.
 // =====================================================
 #include "DrawPages.h"
+#include "CrossCoreState.h"
 #include "AirspaceProximity.h" 
 #include "AglDisplay.h"
 
 static AglDisplayBuffer aglDisplayBuffer;
+
+static bool airspaceScanIsFresh() {
+  const uint32_t scanDoneMs = airspaceScanDoneMs;
+  return scanDoneMs != 0 &&
+         (uint32_t)(millis() - scanDoneMs) <= AIRSPACE_MAX_AGE_MS;
+}
 
 static bool getDisplayAglM(float& aglM) {
   const bool baroFresh = millis() - lastSuccessfulBaroSample < 1000UL;
@@ -1468,7 +1475,7 @@ void drawADSBPage() {
   }
 
   // Pull current altitude (defaults to 0 if GPS is not connected/locked yet)
-  float myAltitudeFeet = gps.altitude.feet();
+  float myAltitudeFeet = sharedOwnPressureAltFeet;
 
   // 2. Snapshot the aircraft list under the mutex, then release it
   // immediately -- moved up from later in this function so we know, before
@@ -1985,29 +1992,28 @@ void drawParamotorPage() {
 }
 
 void drawDashboard() {
-  u8g2.firstPage();
-  do {
-    if (menuActive) {
-      drawMenu();
-    } else {
-      drawTopBar();
-      switch (currentPage) {
-        case PAGE_PARAGLIDER: drawParagliderPage(); break;
-        case PAGE_WEATHER: drawWeatherPage(); break;
-        case PAGE_ADSB: drawADSBPage(); break;
-        case PAGE_PARAMOTOR: drawParamotorPage(); break;
-        default: break;
-      }
-      // Drawn last, on top of whatever page is active. Airspace warning
-      // takes priority for this slot (safety-critical); a received
-      // FANET message only gets it when there's no airspace warning to
-      // show -- see drawFanetMessageBanner()'s header comment.
-      bool airspaceBannerShown = drawAirspaceWarning();
-      if (!airspaceBannerShown) {
-        drawFanetMessageBanner();
-      }
+  u8g2.clearBuffer();
+  if (menuActive) {
+    drawMenu();
+  } else {
+    drawTopBar();
+    switch (currentPage) {
+      case PAGE_PARAGLIDER: drawParagliderPage(); break;
+      case PAGE_WEATHER: drawWeatherPage(); break;
+      case PAGE_ADSB: drawADSBPage(); break;
+      case PAGE_PARAMOTOR: drawParamotorPage(); break;
+      default: break;
     }
-  } while (u8g2.nextPage());
+    // Drawn last, on top of whatever page is active. Airspace warning
+    // takes priority for this slot (safety-critical); a received
+    // FANET message only gets it when there's no airspace warning to
+    // show -- see drawFanetMessageBanner()'s header comment.
+    bool airspaceBannerShown = drawAirspaceWarning();
+    if (!airspaceBannerShown) {
+      drawFanetMessageBanner();
+    }
+  }
+  u8g2.sendBuffer();
 }
 
 // =====================================================
@@ -2025,7 +2031,7 @@ void drawDashboard() {
 bool getAirspaceSnapshot(AirspaceResult& out) {
   bool valid = false;
   if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-    valid = airspaceResultValid;
+    valid = airspaceResultValid && airspaceScanIsFresh();
     if (valid) out = nearestAirspace;
     xSemaphoreGive(backgroundDataMutex);
   }
@@ -2037,7 +2043,7 @@ bool getAirspaceSnapshot(AirspaceResult& out) {
 bool getAirspaceClearanceSnapshot(AirspaceClearance& out) {
   bool valid = false;
   if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-    valid = airspaceClearanceValid;
+    valid = airspaceClearanceValid && airspaceScanIsFresh();
     if (valid) out = airspaceClearance;
     xSemaphoreGive(backgroundDataMutex);
   }
@@ -2051,7 +2057,7 @@ bool getAirspaceClearanceSnapshot(AirspaceClearance& out) {
 bool getAirspaceInfoSnapshot(AirspaceResult& out) {
   bool valid = false;
   if (backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
-    valid = airspaceInfoResultValid;
+    valid = airspaceInfoResultValid && airspaceScanIsFresh();
     if (valid) out = nearestAirspaceInfo;
     xSemaphoreGive(backgroundDataMutex);
   }
