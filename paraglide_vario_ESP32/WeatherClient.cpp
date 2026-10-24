@@ -370,7 +370,6 @@ void updateWeather() {
   static bool mutexTimeoutLogged = false;
   if (backgroundDataMutex == nullptr ||
       xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(2000)) != pdTRUE) {
-    hasWeatherData = false;
     if (!mutexTimeoutLogged) {
       Serial.println("[Zephyr] Timed out waiting for background data mutex");
       mutexTimeoutLogged = true;

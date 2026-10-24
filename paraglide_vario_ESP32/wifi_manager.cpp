@@ -10,6 +10,11 @@
 // the main .ino.
 #define WIFI_RETRY_MS 50000UL
 #define MAX_WIFI_RETRIES 10
+// After MAX_WIFI_RETRIES quick attempts, keep trying at this slower pace
+// instead of switching WiFi off until reboot: a phone hotspot that was off or
+// out of reach for a while must not cost the pilot ADS-B and weather for the
+// rest of the flight.
+#define WIFI_SLOW_RETRY_MS 300000UL
 
 volatile bool wifiConnected = false;
 uint8_t selectedWifiIndex = 0;
@@ -87,21 +92,20 @@ void wifiManagerLoop() {
   if (wifiConnected || !networkSlotValid(selectedWifiIndex)) return;
 
   unsigned long now = millis();
-  if (wifiRetryCount >= MAX_WIFI_RETRIES || now - lastWifiRetry < WIFI_RETRY_MS) return;
+  const unsigned long retryIntervalMs =
+      (wifiRetryCount >= MAX_WIFI_RETRIES) ? WIFI_SLOW_RETRY_MS : WIFI_RETRY_MS;
+  if (now - lastWifiRetry < retryIntervalMs) return;
 
   lastWifiRetry = now;
-  wifiRetryCount++;
+  if (wifiRetryCount < 255) wifiRetryCount++;
 
   WiFi.disconnect();
   beginConnect(selectedWifiIndex);
 
-  Serial.printf("WIFI RETRY %u/%u\n", wifiRetryCount, MAX_WIFI_RETRIES);
-
-  if (wifiRetryCount >= MAX_WIFI_RETRIES) {
-    WiFi.disconnect(true);
-    WiFi.mode(WIFI_OFF);
-    wifiDisabledUntilReboot = true;
-    Serial.println("WIFI DISABLED UNTIL REBOOT");
+  if (wifiRetryCount <= MAX_WIFI_RETRIES) {
+    Serial.printf("WIFI RETRY %u/%u\n", wifiRetryCount, MAX_WIFI_RETRIES);
+  } else {
+    Serial.println("WIFI RETRY (slow)");
   }
 }
 

@@ -190,6 +190,19 @@ void drawTopBar() {
 
   u8g2.drawStr(tempX, textY, tempBuf);
 
+  // Airspace data stale: the background scan has not completed for
+  // AIRSPACE_MAX_AGE_MS while GPS is valid, so "no banner" does not mean
+  // "no airspace". Only drawn if it fits in the free space after the page
+  // dots; nothing else is moved.
+  if (sdCardOK && millis() > 60000UL && gps.location.isValid() &&
+      gps.location.age() < 5000 && !airspaceScanIsFresh()) {
+    const char* aspStale = "ASP?";
+    const int aspW = u8g2.getStrWidth(aspStale);
+    if (x + aspW + fieldGap <= tempX) {
+      u8g2.drawStr(x, textY, aspStale);
+    }
+  }
+
 
   // =========================================================
   // BATTERY FRAME

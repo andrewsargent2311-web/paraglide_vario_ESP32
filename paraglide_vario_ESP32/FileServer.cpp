@@ -1,11 +1,15 @@
 #include "FileServer.h"
 #include "menu.h"          // sdCardOK, sdMutex
 #include "wifi_manager.h"  // wifiConnected
+#include "IgcRecorder.h"   // igcRecording
 
 #include <WebServer.h>
 #include <WiFi.h>
 #include <SD_MMC.h>
 #include <FS.h>
+
+// Upper bound on entries in the recordings listing.
+#define FILE_SERVER_MAX_LISTED 200
 
 static WebServer server(80);
 
@@ -53,6 +57,12 @@ static void handleRoot() {
 
       bool isIgc = name.endsWith(".IGC") || name.endsWith(".igc");
 
+      if (count >= FILE_SERVER_MAX_LISTED) {
+        // Bound the page size (and the heap used to build it).
+        html += "<li>... more recordings on the card are not listed</li>";
+        break;
+      }
+
       if (!f.isDirectory() && isIgc) {
         size_t sizeKb = (f.size() + 512) / 1024;  // rounded, not truncated
         html += "<li><a href=\"/download?file=" + name + "\">" + name + "</a>";
@@ -97,6 +107,19 @@ static void handleDownload() {
   // bare filename, so this only ever rejects a hand-crafted request.
   if (filename.indexOf("..") >= 0 || filename.indexOf('/') >= 0 || filename.length() == 0) {
     server.send(400, "text/plain", "Invalid filename");
+    return;
+  }
+
+  // Only flight recordings are served (the listing only shows .IGC files).
+  if (!(filename.endsWith(".IGC") || filename.endsWith(".igc"))) {
+    server.send(400, "text/plain", "Only .IGC files can be downloaded");
+    return;
+  }
+
+  // Streaming a file holds the SD mutex for the whole transfer, which would
+  // stall flight recording; never do that while a recording is open.
+  if (igcRecording) {
+    server.send(503, "text/plain", "Recording in progress -- try again after landing");
     return;
   }
 

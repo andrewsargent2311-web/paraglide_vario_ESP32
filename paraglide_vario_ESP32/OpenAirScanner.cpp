@@ -37,6 +37,12 @@ static uint16_t pointsDroppedForPoolFull = 0;
 // remaining pool space.
 static uint16_t airspacesRejectedForPool = 0;
 static uint16_t truncatedPolygons = 0;
+// Altitude strings that contained no number and circle radii that were
+// missing or not positive. Such airspaces are not silently kept with a
+// meaningless 0: altitudes fall back to the safe side (floor = surface,
+// ceiling = unlimited) and bad circles are skipped; either way the database
+// is reported as incomplete.
+static uint16_t altitudeParseFailures = 0;
 
 static bool databaseLoaded = false;
 
@@ -664,7 +670,8 @@ static bool containsIgnoreCase(
 // ---------------------------------------------------------------------------
 
 static Altitude parseAltitude(
-    const char* input) {
+    const char* input,
+    bool isCeiling) {
 
     Altitude a;
 
@@ -707,22 +714,48 @@ static Altitude parseAltitude(
     if (s[0] == 'F' &&
         s[1] == 'L') {
 
-        a.ref = ALTREF_FL;
+        char* flEnd = nullptr;
+        const float fl = strtof(s + 2, &flEnd);
 
-        a.value_ft =
-            strtof(
-                s + 2,
-                nullptr) *
-            100.0f;
+        if (flEnd == s + 2) {
+            // "FL" with no number: fail safe (see below).
+            altitudeParseFailures++;
+            a.value_ft = 0.0f;
+            a.ref = isCeiling ? ALTREF_UNL : ALTREF_SFC;
+            return a;
+        }
+
+        a.ref = ALTREF_FL;
+        a.value_ft = fl * 100.0f;
 
         return a;
     }
 
     // Numeric altitude.
-    a.value_ft =
-        strtof(
-            s,
-            nullptr);
+    char* numEnd = nullptr;
+    float value = strtof(s, &numEnd);
+
+    if (numEnd == s) {
+        // No number at all. Never turn this into "0 ft MSL": as a ceiling
+        // that airspace could never contain the pilot (silent loss of
+        // alerts). Fail safe: floor = surface, ceiling = unlimited.
+        altitudeParseFailures++;
+        a.value_ft = 0.0f;
+        a.ref = isCeiling ? ALTREF_UNL : ALTREF_SFC;
+        return a;
+    }
+
+    // Unit after the number. Feet are the default. A leading 'M' that is
+    // not part of "MSL" means metres ("1500M", "500 M AGL", "METRES").
+    const char* unit = numEnd;
+    while (*unit == ' ') {
+        unit++;
+    }
+    if (unit[0] == 'M' && unit[1] != 'S') {
+        value *= 3.28084f;
+    }
+
+    a.value_ft = value;
 
     // AGL.
     if (containsIgnoreCase(
@@ -767,6 +800,9 @@ struct BlockState {
     double centerLat = 0.0;
     double centerLon = 0.0;
 
+    // V D=+ (default) / V D=- : sweep direction of DA/DB arcs.
+    bool arcClockwise = true;
+
     bool isCircle = false;
 
     double radius_nm = 0.0;
@@ -798,6 +834,8 @@ struct BlockState {
         centerLat = 0.0;
         centerLon = 0.0;
 
+        arcClockwise = true;
+
         isCircle = false;
 
         radius_nm = 0.0;
@@ -821,6 +859,109 @@ struct BlockState {
         numPoints++;
     }
 };
+
+// ---------------------------------------------------------------------------
+// Arcs (OpenAir DA / DB)
+//
+// Arcs are approximated by points every ARC_STEP_DEG degrees around the
+// centre set by "V X=". Bearings are degrees clockwise from north. At the
+// distances involved (a few tens of km at most) a flat local projection is
+// accurate to a few metres.
+// ---------------------------------------------------------------------------
+
+static constexpr double ARC_STEP_DEG = 10.0;
+
+static double normalizeDeg360(double deg) {
+    deg = fmod(deg, 360.0);
+    if (deg < 0.0) {
+        deg += 360.0;
+    }
+    return deg;
+}
+
+// Initial bearing from the centre towards (lat, lon), degrees 0..360.
+static double bearingFromCenterDeg(
+    double cLat,
+    double cLon,
+    double lat,
+    double lon) {
+
+    const double dNorth = lat - cLat;
+    const double dEast  = (lon - cLon) * cos(cLat * OAS_DEG_TO_RAD);
+
+    return normalizeDeg360(atan2(dEast, dNorth) / OAS_DEG_TO_RAD);
+}
+
+// Adds arc points from startDeg to endDeg (sweeping clockwise or
+// anti-clockwise) at the given radius around (cLat, cLon). With
+// skipEnds == true only the interior points are added (the caller adds the
+// exact end coordinates itself).
+static void addArc(
+    BlockState& b,
+    double cLat,
+    double cLon,
+    double radiusKm,
+    double startDeg,
+    double endDeg,
+    bool clockwise,
+    bool skipEnds) {
+
+    double sweep = clockwise
+        ? normalizeDeg360(endDeg - startDeg)
+        : -normalizeDeg360(startDeg - endDeg);
+
+    int steps = (int)ceil(fabs(sweep) / ARC_STEP_DEG);
+    if (steps < 1) {
+        steps = 1;
+    }
+
+    const double cosLat = cos(cLat * OAS_DEG_TO_RAD);
+    if (fabs(cosLat) < 1e-6) {
+        return;  // at a pole: not meaningful
+    }
+
+    const int first = skipEnds ? 1 : 0;
+    const int last  = skipEnds ? steps - 1 : steps;
+
+    for (int i = first; i <= last; i++) {
+
+        const double brg =
+            (startDeg + sweep * (double)i / (double)steps) * OAS_DEG_TO_RAD;
+
+        b.addPoint(
+            cLat + (radiusKm / KM_PER_DEG_LAT) * cos(brg),
+            cLon + (radiusKm / (KM_PER_DEG_LAT * cosLat)) * sin(brg));
+    }
+}
+
+// Parses "a, b, c" (commas and/or spaces) into three numbers.
+static bool parseThreeNumbers(
+    const char* text,
+    double& a,
+    double& b,
+    double& c) {
+
+    double* out[3] = { &a, &b, &c };
+    const char* q = text;
+
+    for (int i = 0; i < 3; i++) {
+
+        while (*q == ' ' || *q == '\t' || *q == ',') {
+            q++;
+        }
+
+        char* end = nullptr;
+        *out[i] = strtod(q, &end);
+
+        if (end == q) {
+            return false;
+        }
+
+        q = end;
+    }
+
+    return true;
+}
 
 // ---------------------------------------------------------------------------
 // Store completed block
@@ -1080,6 +1221,7 @@ bool loadAirspaceDatabase(
     pointsDroppedForPoolFull = 0;
     airspacesRejectedForPool = 0;
     truncatedPolygons = 0;
+    altitudeParseFailures = 0;
 
     if (!filename ||
         !controlledClasses ||
@@ -1274,7 +1416,7 @@ bool loadAirspaceDatabase(
             }
 
             block.floor =
-                parseAltitude(rest);
+                parseAltitude(rest, /*isCeiling=*/false);
         }
 
         // -------------------------------------------------------------------
@@ -1288,7 +1430,7 @@ bool loadAirspaceDatabase(
             }
 
             block.ceiling =
-                parseAltitude(rest);
+                parseAltitude(rest, /*isCeiling=*/true);
         }
 
         // -------------------------------------------------------------------
@@ -1329,6 +1471,14 @@ bool loadAirspaceDatabase(
                         true;
                 }
             }
+            // V D=+ (clockwise, default) or V D=- (anti-clockwise)
+            else if ((rest[0] == 'D' ||
+                      rest[0] == 'd') &&
+                     rest[1] == '=') {
+
+                block.arcClockwise =
+                    (rest[2] != '-');
+            }
         }
 
         // -------------------------------------------------------------------
@@ -1341,10 +1491,18 @@ bool loadAirspaceDatabase(
                 continue;
             }
 
-            block.radius_nm =
-                strtod(
-                    rest,
-                    nullptr);
+            char* radiusEnd = nullptr;
+            const double radiusNm = strtod(rest, &radiusEnd);
+
+            if (radiusEnd == rest || !(radiusNm > 0.0)) {
+                // Missing or non-positive radius: a circle that can never
+                // contain the pilot. Skip the airspace and report it.
+                altitudeParseFailures++;
+                block.active = false;
+                continue;
+            }
+
+            block.radius_nm = radiusNm;
 
             block.isCircle =
                 block.haveCenter;
@@ -1382,9 +1540,103 @@ bool loadAirspaceDatabase(
         }
 
         // -------------------------------------------------------------------
-        // Other OpenAir commands intentionally ignored.
-        //
-        // DA/DB arcs are not reconstructed here.
+        // DA - arc by radius and angles:  DA radius_nm, startDeg, endDeg
+        // -------------------------------------------------------------------
+
+        else if (strcmp(cmd, "DA") == 0) {
+
+            if (!block.active) {
+                continue;
+            }
+
+            if (!block.haveCenter) {
+                altitudeParseFailures++;  // arc without "V X=" centre
+                continue;
+            }
+
+            double radiusNm;
+            double startDeg;
+            double endDeg;
+
+            if (parseThreeNumbers(
+                    rest,
+                    radiusNm,
+                    startDeg,
+                    endDeg) &&
+                radiusNm > 0.0) {
+
+                addArc(
+                    block,
+                    block.centerLat,
+                    block.centerLon,
+                    radiusNm * NM_TO_KM,
+                    normalizeDeg360(startDeg),
+                    normalizeDeg360(endDeg),
+                    block.arcClockwise,
+                    /*skipEnds=*/false);
+            }
+            else {
+                altitudeParseFailures++;
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // DB - arc between two coordinates:  DB lat lon, lat lon
+        // -------------------------------------------------------------------
+
+        else if (strcmp(cmd, "DB") == 0) {
+
+            if (!block.active) {
+                continue;
+            }
+
+            if (!block.haveCenter) {
+                altitudeParseFailures++;  // arc without "V X=" centre
+                continue;
+            }
+
+            double lat1;
+            double lon1;
+            double lat2;
+            double lon2;
+
+            const char* comma = strchr(rest, ',');
+
+            if (comma != nullptr &&
+                parseCoordPair(rest, lat1, lon1) &&
+                parseCoordPair(comma + 1, lat2, lon2)) {
+
+                const double radiusKm =
+                    haversine_km(
+                        block.centerLat,
+                        block.centerLon,
+                        lat1,
+                        lon1);
+
+                block.addPoint(lat1, lon1);
+
+                addArc(
+                    block,
+                    block.centerLat,
+                    block.centerLon,
+                    radiusKm,
+                    bearingFromCenterDeg(
+                        block.centerLat, block.centerLon, lat1, lon1),
+                    bearingFromCenterDeg(
+                        block.centerLat, block.centerLon, lat2, lon2),
+                    block.arcClockwise,
+                    /*skipEnds=*/true);
+
+                block.addPoint(lat2, lon2);
+            }
+            else {
+                altitudeParseFailures++;
+            }
+        }
+
+        // -------------------------------------------------------------------
+        // Other OpenAir commands (DY airways, labels, pen/brush) are
+        // intentionally ignored.
         // -------------------------------------------------------------------
     }
 
@@ -1482,6 +1734,15 @@ bool loadAirspaceDatabase(
             airspacesRejectedForPool);
     }
 
+    if (altitudeParseFailures > 0) {
+
+        Serial.print(
+            "  WARNING: altitude/radius parse failures: ");
+
+        Serial.println(
+            altitudeParseFailures);
+    }
+
     if (truncatedPolygons > 0) {
 
         Serial.print(
@@ -1547,6 +1808,7 @@ bool airspaceDatabaseComplete() {
            airspacesRejectedForPool == 0 &&
            pointsDroppedForPoolFull == 0 &&
            truncatedPolygons == 0 &&
+           altitudeParseFailures == 0 &&
            airspaceCount < OAS_MAX_AIRSPACES;
 }
 

@@ -28,6 +28,7 @@ typedef uint8_t byte;
 // Defined by TinyGPS++.cpp when ARDUINO is not defined.
 unsigned long millis();
 
+#ifdef _WIN32
 inline struct tm* gmtime_r(const time_t* timeValue, struct tm* result)
 {
     return gmtime_s(result, timeValue) == 0 ? result : nullptr;
@@ -37,6 +38,7 @@ inline struct tm* localtime_r(const time_t* timeValue, struct tm* result)
 {
     return localtime_s(result, timeValue) == 0 ? result : nullptr;
 }
+#endif
 
 // Vario.cpp only prints diagnostics; the tests don't check them.
 struct HostSerial

@@ -13,6 +13,12 @@ esp_timer_handle_t audioServiceTimer = nullptr;
 
 bool codecOK = false;   // I2S peripheral configured
 bool es8311OK = false;  // ES8311 chip found and initialized over I2C
+// Consecutive I2S write failures seen by the audio task. After 50 the task
+// disables itself (codecOK = false); es8311Service() in this file re-installs the
+// I2S driver and clears this so audio comes back without a reboot.
+static volatile uint8_t i2sFailures = 0;
+static volatile bool i2sFailureReported = false;
+
 
 volatile float toneFrequency = 0.0f;  // 0 = silent
 // Loudness multiplier applied on top of the normal tone amplitude (1.0 =
@@ -863,6 +869,44 @@ void applyBuzzerVolume() {
   es8311WriteReg(0x32, (uint8_t)reg);
 }
 
+// Runs from loop() (the I2C bus is only touched from there). Every 30 s:
+//  - codec chip missing at boot: probe and initialise it again;
+//  - I2S driver disabled after repeated write failures: re-install it;
+//  - otherwise read back the key codec registers and reconfigure them if
+//    they no longer hold their values (e.g. a brown-out or RF-induced reset
+//    of the chip), so audio does not stay dead for the rest of a flight.
+void es8311Service() {
+  static uint32_t lastMs = 0;
+  static uint16_t recoveries = 0;
+  const uint32_t nowMs = millis();
+  if ((uint32_t)(nowMs - lastMs) < 30000UL) return;
+  lastMs = nowMs;
+
+  if (!es8311OK) {
+    es8311Init();
+    return;
+  }
+  if (!codecOK) {
+    i2s_driver_uninstall(I2S_PORT);
+    setupI2sCodec();  // sets codecOK = true on success
+    if (codecOK) {
+      i2sFailures = 0;
+      i2sFailureReported = false;
+      Serial.println("[AUDIO] I2S driver re-initialised");
+    }
+    return;
+  }
+  if (voiceIsPlaying()) return;
+  if (!es8311VerifyRegisters()) {
+    recoveries++;
+    Serial.printf("[ES8311] registers lost; reconfiguring (recovery #%u)\n",
+                  (unsigned)recoveries);
+    es8311ConfigureRegisters();
+    applyBuzzerVolume();
+    es8311WriteReg(0x31, 0x00);  // DAC: unmute
+  }
+}
+
 // =====================================================
 // TONE GENERATION: non-blocking. Unlike a single long i2s_write() call
 // (which blocks for the tone's whole duration and would stall GPS/baro/
@@ -1077,8 +1121,6 @@ bool i2sToneService() {
 // fast as the hardware plays samples -- see AUDIO_USE_DEDICATED_TASK.
 void audioServiceTask(void* arg) {
   (void)arg;
-  static uint8_t failures = 0;
-  static bool failureReported = false;
   for (;;) {
     if (!codecOK || !es8311OK) {
       // I2S/codec not up (yet, or failed) -- don't spin.
@@ -1086,19 +1128,19 @@ void audioServiceTask(void* arg) {
       continue;
     }
     if (i2sToneService()) {
-      failures = 0;
+      i2sFailures = 0;
       continue;
     }
 
     vTaskDelay(pdMS_TO_TICKS(2));
-    if (failures < 50) {
-      failures++;
+    if (i2sFailures < 50) {
+      i2sFailures = i2sFailures + 1;
     }
-    if (failures >= 50) {
+    if (i2sFailures >= 50) {
       codecOK = false;
-      if (!failureReported) {
-        Serial.println("[AUDIO] Repeated I2S write failures; audio service disabled");
-        failureReported = true;
+      if (!i2sFailureReported) {
+        Serial.println("[AUDIO] Repeated I2S write failures; audio service disabled (will retry)");
+        i2sFailureReported = true;
       }
     }
   }

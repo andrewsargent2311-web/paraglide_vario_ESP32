@@ -143,6 +143,7 @@ extern uint8_t sinkVolumePercent;
 void setupI2sCodec();
 void es8311WriteReg(uint8_t reg, uint8_t value);
 void es8311Init();
+void es8311Service();  // call from loop(); rate-limited internally (30 s)
 void applyBuzzerVolume();
 void setToneFrequency(float freq);
 bool i2sToneService();

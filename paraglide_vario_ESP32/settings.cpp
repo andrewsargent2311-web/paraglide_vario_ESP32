@@ -127,6 +127,81 @@ ScreenOrientation screenOrientation = SCREEN_ORIENTATION_GPS_BOTTOM;
 // =====================================================
 // PERSISTENCE
 // =====================================================
+// Values read back from flash are not trusted: a corrupted or out-of-range
+// entry must never reach code that indexes arrays or divides by them (for
+// example drawWeatherPage() divides by weatherStationsShown, and
+// PAGE_NAMES[] / activePages[] are indexed by mainPageSelection). Any value
+// outside what the menus can produce is replaced by its default. Comparisons
+// are written so that NaN fails them and also gets the default.
+static void sanitizeLoadedSettings() {
+  auto reject = [](const char* name) {
+    Serial.printf("[Settings] %s out of range in NVS; using default\n", name);
+  };
+
+  if ((uint8_t)altitudeUnit > (uint8_t)ALT_UNIT_FEET) {
+    altitudeUnit = ALT_UNIT_FEET;
+    reject("altUnit");
+  }
+  if ((uint8_t)speedUnit > (uint8_t)SPEED_UNIT_MPH) {
+    speedUnit = SPEED_UNIT_KMH;
+    reject("spdUnit");
+  }
+  if ((uint8_t)timeZoneMode > (uint8_t)TZ_MODE_MANUAL) {
+    timeZoneMode = TZ_MODE_AUTO_NZ;
+    reject("tzMode");
+  }
+  if (utcOffsetHours < -12 || utcOffsetHours > 14) {
+    utcOffsetHours = 12;
+    reject("utcOff");
+  }
+  if (buzzerVolumePercent < 10 || buzzerVolumePercent > 100) {
+    buzzerVolumePercent = 80;
+    reject("volPct");
+  }
+  if (!(adsbAlertRadiusKm >= 1.0f && adsbAlertRadiusKm <= 50.0f)) {
+    adsbAlertRadiusKm = 5.0f;
+    reject("adsbRadius");
+  }
+  if (!(adsbAlertVerticalFt >= 100.0f && adsbAlertVerticalFt <= 20000.0f)) {
+    adsbAlertVerticalFt = 2000.0f;
+    reject("adsbVert");
+  }
+  if (!(adsbRingOuterKm >= 5.0f && adsbRingOuterKm <= 200.0f)) {
+    adsbRingOuterKm = 30.0f;
+    reject("ringOuter");
+  }
+  adsbRingInnerKm = adsbRingOuterKm / 2.0f;
+  if (adsbAlarmMode > ADSB_ALARM_VOICE) {
+    adsbAlarmMode = ADSB_ALARM_TONE;
+    reject("adsbAlarmMode");
+  }
+  if (adsbAlertVolumePercent > 100) {
+    adsbAlertVolumePercent = 100;
+    reject("adsbAlertVol");
+  }
+  if (weatherPollIntervalMs < 60UL * 1000UL ||
+      weatherPollIntervalMs > 60UL * 60UL * 1000UL) {
+    weatherPollIntervalMs = 5UL * 60UL * 1000UL;
+    reject("wxPoll");
+  }
+  if (weatherStationsShown < 1 || weatherStationsShown > 6) {
+    weatherStationsShown = 4;
+    reject("wxStations");
+  }
+  if ((uint8_t)weatherSource > (uint8_t)WEATHER_SOURCE_FANET) {
+    weatherSource = WEATHER_SOURCE_ZEPHYR;
+    reject("wxSource");
+  }
+  if (mainPageSelection > 1) {
+    mainPageSelection = 0;
+    reject("mainPage");
+  }
+  if ((uint8_t)screenOrientation > (uint8_t)SCREEN_ORIENTATION_GPS_TOP) {
+    screenOrientation = SCREEN_ORIENTATION_GPS_BOTTOM;
+    reject("scrOrient");
+  }
+}
+
 void loadSettings() {
   prefs.begin("vario", false);
 
@@ -204,6 +279,8 @@ void loadSettings() {
   // airspaceAlertBarEnabled and flightRecorderEnabled are intentionally
   // never read here -- see their comments in settings.h. Both keep
   // their compiled-in default (true) every boot.
+
+  sanitizeLoadedSettings();
 }
 
 void saveSettings() {

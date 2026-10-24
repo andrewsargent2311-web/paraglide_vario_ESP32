@@ -6,6 +6,7 @@
 #include <SD_MMC.h>
 #include <time.h>
 #include <math.h>
+#include <string.h>
 
 File igcFile;
 bool igcRecording = false;
@@ -21,7 +22,12 @@ IgcPositionFilter positionFilter;
 uint32_t lastLocationAge = UINT32_MAX;
 bool latestPositionAccepted = false;
 
-static char pendingIgcRecords[4][40];
+// B-records that could not be written yet (SD busy, file unavailable, write
+// failure). Written in time order as soon as the file is writable again;
+// cleared when a new recording starts so they can never leak into another
+// flight's file.
+static constexpr uint8_t kPendingIgcMax = 8;
+static char pendingIgcRecords[kPendingIgcMax][40];
 static uint8_t pendingIgcRecordCount = 0;
 
 float acceptedGpsAltitudeM = 0.0f;
@@ -296,6 +302,38 @@ void formatIgcLatLon(double lat, double lon, char* out, size_t outSize) {
            latitude.degrees, latitude.minutes, latitude.thousandths, latHemi,
            longitude.degrees, longitude.minutes, longitude.thousandths, lonHemi);
 }
+static void enqueuePendingIgcRecord(const char* record) {
+  if (pendingIgcRecordCount >= kPendingIgcMax) {
+    // Full: drop the oldest record.
+    memmove(pendingIgcRecords[0], pendingIgcRecords[1],
+            (size_t)(kPendingIgcMax - 1) * sizeof(pendingIgcRecords[0]));
+    pendingIgcRecordCount = kPendingIgcMax - 1;
+  }
+  snprintf(pendingIgcRecords[pendingIgcRecordCount],
+           sizeof(pendingIgcRecords[0]), "%s", record);
+  pendingIgcRecordCount++;
+}
+
+// Caller holds sdMutex (or sdMutex == nullptr). Writes queued records in
+// order. Returns true when the queue is empty afterwards.
+static bool drainPendingIgcLocked() {
+  if (pendingIgcRecordCount == 0) return true;
+  if (!igcFile) return false;
+  uint8_t written = 0;
+  while (written < pendingIgcRecordCount) {
+    if (!writeIgcRecordLocked(pendingIgcRecords[written])) break;
+    ++written;
+  }
+  const uint8_t remaining = pendingIgcRecordCount - written;
+  if (remaining > 0 && written > 0) {
+    memmove(pendingIgcRecords[0], pendingIgcRecords[written],
+            (size_t)remaining * sizeof(pendingIgcRecords[0]));
+  }
+  pendingIgcRecordCount = remaining;
+  if (written > 0 && igcFile) igcFile.flush();
+  return remaining == 0;
+}
+
 void writeIgcBRecord() {
   if (!igcRecording) return;
   if (!igcFile) {
@@ -304,7 +342,8 @@ void writeIgcBRecord() {
     }
     igcWriteFailed = true;
     tryReopenIgc();
-    if (!igcFile) return;
+    // Do not return: the record is still built below and queued so it is
+    // written, in order, once the file is back.
   }
 
   time_t nowEpoch;
@@ -331,25 +370,27 @@ void writeIgcBRecord() {
            latLonBuf, fixValid ? 'A' : 'V',
            pressureAltM, gpsAltM);
 
+  if (!igcFile) {
+    enqueuePendingIgcRecord(bRecord);
+    return;
+  }
+
   // Shared with the Core 0 airspace scan -- see sdMutex declaration. Never
   // block the loop here; if the lock is unavailable, queue the B-record for
-  // the next opportunity when the recorder runs again.
+  // the next opportunity when the recorder runs again. Older queued records
+  // are always written first so the file stays in time order.
   if (sdMutex == nullptr || xSemaphoreTake(sdMutex, 0) == pdTRUE) {
-    if (writeIgcRecordLocked(bRecord)) {
-      igcFile.flush();  // flush every fix -- a lost flight log is worse than the SD write cost
+    bool wrote = false;
+    if (drainPendingIgcLocked()) {
+      wrote = writeIgcRecordLocked(bRecord);
+      if (wrote) {
+        igcFile.flush();  // flush every fix -- a lost flight log is worse than the SD write cost
+      }
     }
+    if (!wrote) enqueuePendingIgcRecord(bRecord);
     if (sdMutex != nullptr) xSemaphoreGive(sdMutex);
   } else {
-    if (pendingIgcRecordCount >= 4) {
-      for (uint8_t i = 1; i < 4; ++i) {
-        snprintf(pendingIgcRecords[i - 1], sizeof(pendingIgcRecords[0]),
-                 "%s", pendingIgcRecords[i]);
-      }
-      pendingIgcRecordCount = 3;
-    }
-    snprintf(pendingIgcRecords[pendingIgcRecordCount], sizeof(pendingIgcRecords[0]),
-             "%s", bRecord);
-    pendingIgcRecordCount++;
+    enqueuePendingIgcRecord(bRecord);
   }
 }
 void startIgcRecording() {
@@ -408,6 +449,7 @@ void startIgcRecording() {
   igcFile.flush();
   if (sdMutex != nullptr) xSemaphoreGive(sdMutex);
 
+  pendingIgcRecordCount = 0;
   igcRecording = true;
   igcWriteFailed = false;
   lastIgcFixWrite = 0;
@@ -417,12 +459,15 @@ void stopIgcRecording() {
   if (!igcRecording) return;
 
   if (sdMutex != nullptr && xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) == pdTRUE) {
+    // Write anything still queued so the last fixes of the flight are kept.
+    if (igcFile) drainPendingIgcLocked();
     igcFile.close();
     xSemaphoreGive(sdMutex);
   } else {
     Serial.println("[IGC] SD busy -- closing file without the lock (best effort)");
     igcFile.close();
   }
+  pendingIgcRecordCount = 0;
 
   igcRecording = false;
   Serial.printf("[IGC] Recording stopped: %s\n", igcFilename);
@@ -438,25 +483,7 @@ void updateIgcRecorder() {
 
   if (igcRecording && igcFile && pendingIgcRecordCount > 0 &&
       (sdMutex == nullptr || xSemaphoreTake(sdMutex, 0) == pdTRUE)) {
-    bool writeFailed = false;
-    uint8_t writtenCount = 0;
-    for (; writtenCount < pendingIgcRecordCount; ++writtenCount) {
-      if (!writeIgcRecordLocked(pendingIgcRecords[writtenCount])) {
-        writeFailed = true;
-        break;
-      }
-    }
-    if (!writeFailed) {
-      igcFile.flush();
-      pendingIgcRecordCount = 0;
-    } else {
-      const uint8_t remaining = pendingIgcRecordCount - writtenCount;
-      for (uint8_t i = 0; i < remaining; ++i) {
-        snprintf(pendingIgcRecords[i], sizeof(pendingIgcRecords[0]), "%s",
-                 pendingIgcRecords[writtenCount + i]);
-      }
-      pendingIgcRecordCount = remaining;
-    }
+    drainPendingIgcLocked();
     if (sdMutex != nullptr) xSemaphoreGive(sdMutex);
   }
 

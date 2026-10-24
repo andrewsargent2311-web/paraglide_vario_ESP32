@@ -358,3 +358,174 @@ TEST(OpenAirSearch, SurfaceFloorReportsWhetherGroundElevationIsKnown)
         -41.0, 175.2, 2500.0f, 100.0f, true, true, result));
     EXPECT_TRUE(result.vertKnown);
 }
+
+// ---------------------------------------------------------------------------
+// Arcs (DA / DB), altitude units and parse failures
+// ---------------------------------------------------------------------------
+//
+// Geometry used below: centre 41:00:00S 175:00:00E. At that latitude one
+// degree of longitude is about 84.0 km, so 3 NM east/west of the centre is
+// about 0.0661 degrees of longitude and 5 NM is about 0.1102 degrees.
+
+namespace
+{
+// East half-disc: the centre plus a clockwise 5 NM arc from north (0) to
+// south (180).
+const char* kEastHalfDiscByDa =
+    "AC CTR\n"
+    "AN East half disc\n"
+    "AL SFC\n"
+    "AH 3500ft\n"
+    "V X=41:00:00S 175:00:00E\n"
+    "V D=+\n"
+    "DP 41:00:00S 175:00:00E\n"
+    "DA 5,0,180\n";
+
+// Same shape with the default direction omitted: must also be clockwise.
+const char* kEastHalfDiscDefaultDirection =
+    "AC CTR\n"
+    "AN East half disc default\n"
+    "AL SFC\n"
+    "AH 3500ft\n"
+    "V X=41:00:00S 175:00:00E\n"
+    "DP 41:00:00S 175:00:00E\n"
+    "DA 5,0,180\n";
+
+// Anti-clockwise from north (0) to south (180) goes through west.
+const char* kWestHalfDiscAntiClockwise =
+    "AC CTR\n"
+    "AN West half disc\n"
+    "AL SFC\n"
+    "AH 3500ft\n"
+    "V X=41:00:00S 175:00:00E\n"
+    "V D=-\n"
+    "DP 41:00:00S 175:00:00E\n"
+    "DA 5,0,180\n";
+
+// North half-disc: DB from the east point to the west point, anti-clockwise
+// (through north); the polygon closes along the east-west diameter.
+const char* kNorthHalfDiscByDb =
+    "AC CTR\n"
+    "AN North half disc\n"
+    "AL SFC\n"
+    "AH 3500ft\n"
+    "V X=41:00:00S 175:00:00E\n"
+    "V D=-\n"
+    "DB 41:00:00S 175:06:37E, 41:00:00S 174:53:23E\n";
+
+bool insideHorizontally(double lat, double lon)
+{
+    AirspaceResult result;
+    if (!findNearestControlledAirspace(lat, lon, 2000.0f, 100.0f, true, true, result))
+        return false;
+    return result.insideHoriz;
+}
+}
+
+TEST(OpenAirArcs, DaArcFormsAnEastHalfDisc)
+{
+    ASSERT_TRUE(loadTestAirspace(kEastHalfDiscByDa));
+    EXPECT_TRUE(insideHorizontally(-41.0, 175.0661));   // 3 NM east
+    EXPECT_FALSE(insideHorizontally(-41.0, 174.9339));  // 3 NM west
+    EXPECT_FALSE(insideHorizontally(-41.0, 175.1286));  // 7 NM east, beyond the arc
+    EXPECT_TRUE(airspaceDatabaseComplete());
+}
+
+TEST(OpenAirArcs, DirectionDefaultsToClockwise)
+{
+    ASSERT_TRUE(loadTestAirspace(kEastHalfDiscDefaultDirection));
+    EXPECT_TRUE(insideHorizontally(-41.0, 175.0661));
+    EXPECT_FALSE(insideHorizontally(-41.0, 174.9339));
+}
+
+TEST(OpenAirArcs, AntiClockwiseDirectionSweepsTheOtherWay)
+{
+    ASSERT_TRUE(loadTestAirspace(kWestHalfDiscAntiClockwise));
+    EXPECT_TRUE(insideHorizontally(-41.0, 174.9339));   // 3 NM west
+    EXPECT_FALSE(insideHorizontally(-41.0, 175.0661));  // 3 NM east
+}
+
+TEST(OpenAirArcs, DbArcFormsANorthHalfDisc)
+{
+    ASSERT_TRUE(loadTestAirspace(kNorthHalfDiscByDb));
+    EXPECT_TRUE(insideHorizontally(-40.9500, 175.0));   // about 3 NM north
+    EXPECT_FALSE(insideHorizontally(-41.0500, 175.0));  // about 3 NM south
+    EXPECT_FALSE(insideHorizontally(-40.9000, 175.0));  // about 6 NM north, beyond the arc
+}
+
+TEST(OpenAirArcs, ArcWithoutCentreMarksTheDatabaseIncomplete)
+{
+    const char* noCentre =
+        "AC CTR\n"
+        "AN Arc without centre\n"
+        "AL SFC\n"
+        "AH 3500ft\n"
+        "DP 41:00:00S 175:00:00E\n"
+        "DP 41:00:00S 175:06:00E\n"
+        "DP 40:54:00S 175:06:00E\n"
+        "DA 5,0,180\n";
+    ASSERT_TRUE(loadTestAirspace(noCentre));
+    EXPECT_FALSE(airspaceDatabaseComplete());
+}
+
+TEST(OpenAirAltitudes, MetresAreConvertedAndMslIsNotMistakenForMetres)
+{
+    const char* contents =
+        "AC CTR\n"
+        "AN Metres\n"
+        "AL 1000M AMSL\n"
+        "AH 5000 MSL\n"
+        "V X=41:00:00S 175:00:00E\n"
+        "DC 5\n";
+    ASSERT_TRUE(loadTestAirspace(contents));
+
+    AirspaceResult result;
+    ASSERT_TRUE(findNearestControlledAirspace(
+        -41.0, 175.0, 4000.0f, 100.0f, true, true, result));
+    EXPECT_NEAR(result.floor_ft_msl, 3280.84f, 0.5f);
+    EXPECT_NEAR(result.ceiling_ft_msl, 5000.0f, 0.5f);
+    EXPECT_TRUE(airspaceDatabaseComplete());
+}
+
+TEST(OpenAirAltitudes, UnparseableCeilingFailsSafeToUnlimitedAndIsReported)
+{
+    const char* contents =
+        "AC CTR\n"
+        "AN Bad ceiling\n"
+        "AL ???\n"
+        "AH ABOVE\n"
+        "V X=41:00:00S 175:00:00E\n"
+        "DC 5\n";
+    ASSERT_TRUE(loadTestAirspace(contents));
+
+    AirspaceResult result;
+    ASSERT_TRUE(findNearestControlledAirspace(
+        -41.0, 175.0, 20000.0f, 100.0f, true, true, result));
+    EXPECT_TRUE(result.insideHoriz);
+    EXPECT_TRUE(result.insideVert);
+    EXPECT_FALSE(airspaceDatabaseComplete());
+}
+
+TEST(OpenAirAltitudes, CircleWithoutAPositiveRadiusIsSkippedAndReported)
+{
+    const char* contents =
+        "AC CTR\n"
+        "AN Zero radius\n"
+        "AL SFC\n"
+        "AH 3500ft\n"
+        "V X=41:00:00S 175:00:00E\n"
+        "DC 0\n"
+        "AC CTR\n"
+        "AN Good circle\n"
+        "AL SFC\n"
+        "AH 3500ft\n"
+        "V X=41:30:00S 175:00:00E\n"
+        "DC 5\n";
+    ASSERT_TRUE(loadTestAirspace(contents));
+    EXPECT_FALSE(airspaceDatabaseComplete());
+
+    AirspaceResult result;
+    ASSERT_TRUE(findNearestControlledAirspace(
+        -41.5, 175.0, 2000.0f, 100.0f, true, true, result));
+    EXPECT_STREQ("Good circle", result.name);
+}

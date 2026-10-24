@@ -502,15 +502,21 @@ void loop() {
   }
   static bool wasFresh = false;
   static uint32_t lastBaroWarnMs = 0;
+  static uint32_t firstLoopMs = 0;
+  if (firstLoopMs == 0) firstLoopMs = now;
   const bool baroFresh = baroIsFresh();
-  if (wasFresh && !baroFresh && lastBaroWarnMs == 0) {
-    lastBaroWarnMs = now - 15000UL;
+  // No warning in the first 5 s of loop(): the baro has not had a chance to
+  // deliver its first sample yet.
+  if ((uint32_t)(now - firstLoopMs) >= 5000UL) {
+    if (wasFresh && !baroFresh && lastBaroWarnMs == 0) {
+      lastBaroWarnMs = now - 15000UL;
+    }
+    if (!baroFresh && (uint32_t)(now - lastBaroWarnMs) >= 15000UL) {
+      playFeedbackTone(300.0f, 700);
+      lastBaroWarnMs = now;
+    }
+    wasFresh = baroFresh;
   }
-  if (!baroFresh && (uint32_t)(now - lastBaroWarnMs) >= 15000UL) {
-    playFeedbackTone(300.0f, 700);
-    lastBaroWarnMs = now;
-  }
-  wasFresh = baroFresh;
   // ---------------------------------------------------------
   // 1. GPS - drain serial continuously
   // ---------------------------------------------------------
@@ -645,6 +651,8 @@ void loop() {
     lastBattSample = now;
     updateBattery();
   }
+
+  es8311Service();
 
   // ---------------------------------------------------------
   // 7. SHTC3
