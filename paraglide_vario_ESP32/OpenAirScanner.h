@@ -49,7 +49,9 @@
 // averaging ~11 points each (1,699 points across the first 150 loaded):
 //
 //   250 * 108           =  27,000 bytes  (airspace slots, generous headroom)
-//   4000 * 2 * 4         =  32,000 bytes  (point pool, ~2.4x the ~1,700 actually seen)
+//   6000 * 2 * 4         =  48,000 bytes  (point pool; the NZ file with its
+//                                           arcs and circles reconstructed
+//                                           needs about 3,800 points)
 //                         = 59,000 bytes total
 //
 // ...versus the old fixed-per-airspace layout, which for the same 250
@@ -63,8 +65,8 @@
 // ---------------------------------------------------------------------------
 
 #define OAS_MAX_AIRSPACES   250
-#define OAS_MAX_POLY_POINTS 128
-#define OAS_POINT_POOL_SIZE 4000
+#define OAS_MAX_POLY_POINTS 256
+#define OAS_POINT_POOL_SIZE 6000
 #define OAS_MAX_NAME_LEN    48
 #define OAS_MAX_CLASS_LEN   8
 

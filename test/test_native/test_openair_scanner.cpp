@@ -529,3 +529,61 @@ TEST(OpenAirAltitudes, CircleWithoutAPositiveRadiusIsSkippedAndReported)
         -41.5, 175.0, 2000.0f, 100.0f, true, true, result));
     EXPECT_STREQ("Good circle", result.name);
 }
+
+// ---------------------------------------------------------------------------
+// Regressions found by loading the real NZ AIRSPACE.txt
+// ---------------------------------------------------------------------------
+
+TEST(OpenAirRealFileFormats, CentreWithSpacesAroundEqualsSignIsAccepted)
+{
+    // The real NZ file writes "V X = lat lon" and "V D=-"; with the old
+    // parser a spaced centre was silently ignored, so circles were never
+    // created and arcs had no centre.
+    const char* contents =
+        "AC CTR\n"
+        "AN Spaced centre circle\n"
+        "AL SFC\n"
+        "AH 3500 FT\n"
+        "V X = 41:00:00 S 175:00:00 E\n"
+        "DC 5\n";
+    ASSERT_TRUE(loadTestAirspace(contents));
+    EXPECT_TRUE(insideHorizontally(-41.0, 175.0661));  // 3 NM east
+    EXPECT_FALSE(insideHorizontally(-41.0, 175.1286)); // 7 NM east
+    EXPECT_TRUE(airspaceDatabaseComplete());
+}
+
+TEST(OpenAirRealFileFormats, SpacedCentreAndDirectionWorkForArcs)
+{
+    const char* contents =
+        "AC CTR\n"
+        "AN Spaced arc\n"
+        "AL SFC\n"
+        "AH 3500 FT\n"
+        "V X = 41:00:00 S 175:00:00 E\n"
+        "V D=-\n"
+        "DB 41:00:00 S 175:06:37 E, 41:00:00 S 174:53:23 E\n";
+    ASSERT_TRUE(loadTestAirspace(contents));
+    EXPECT_TRUE(insideHorizontally(-40.9500, 175.0));   // about 3 NM north
+    EXPECT_FALSE(insideHorizontally(-41.0500, 175.0));  // about 3 NM south
+    EXPECT_TRUE(airspaceDatabaseComplete());
+}
+
+TEST(OpenAirRealFileFormats, TextCeilingIsUnlimitedAndNotAFailure)
+{
+    // NZ files give some ceilings as text, e.g. for MBZ and CFZ areas.
+    const char* contents =
+        "AC A\n"
+        "AN NZB680, PARAPARAUMU MBZ, 118.3 MHz\n"
+        "AL SFC\n"
+        "AH Lower limit of controlled airspace within NZB680 lateral limits\n"
+        "V X = 41:00:00 S 175:00:00 E\n"
+        "DC 5\n";
+    ASSERT_TRUE(loadTestAirspace(contents));
+
+    AirspaceResult result;
+    ASSERT_TRUE(findNearestControlledAirspace(
+        -41.0, 175.0, 1000.0f, 100.0f, false, true, result));
+    EXPECT_TRUE(result.insideHoriz);
+    EXPECT_TRUE(result.insideVert);
+    EXPECT_TRUE(airspaceDatabaseComplete());
+}

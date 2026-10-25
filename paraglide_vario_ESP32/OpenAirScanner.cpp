@@ -704,6 +704,16 @@ static Altitude parseAltitude(
     }
 
     // Unlimited.
+    // Some files give a ceiling as text ("Lower limit of controlled airspace
+    // within NZC271 lateral limits"), which cannot be resolved to a number
+    // here. Treat it as unlimited (the safe side); this is expected data, not
+    // a parse failure.
+    if (isCeiling && strncmp(s, "LOWER LIMIT", 11) == 0) {
+        a.ref = ALTREF_UNL;
+        a.value_ft = 0.0f;
+        return a;
+    }
+
     if (strncmp(s, "UNL", 3) == 0) {
 
         a.ref = ALTREF_UNL;
@@ -863,13 +873,19 @@ struct BlockState {
 // ---------------------------------------------------------------------------
 // Arcs (OpenAir DA / DB)
 //
-// Arcs are approximated by points every ARC_STEP_DEG degrees around the
+// Arcs are approximated by points spaced by an angle that keeps the chord within
+// ARC_MAX_SAG_KM of the true arc (5..20 degrees), around the
 // centre set by "V X=". Bearings are degrees clockwise from north. At the
 // distances involved (a few tens of km at most) a flat local projection is
 // accurate to a few metres.
 // ---------------------------------------------------------------------------
 
-static constexpr double ARC_STEP_DEG = 10.0;
+// Arc vertices are spaced so the chord stays within ARC_MAX_SAG_KM of the
+// true arc (about 100 m), but never closer than 5 or further apart than 20
+// degrees. Keeps small arcs cheap and big arcs accurate within the point pool.
+static constexpr double ARC_MAX_SAG_KM  = 0.1;
+static constexpr double ARC_MIN_STEP_DEG = 5.0;
+static constexpr double ARC_MAX_STEP_DEG = 20.0;
 
 static double normalizeDeg360(double deg) {
     deg = fmod(deg, 360.0);
@@ -910,7 +926,18 @@ static void addArc(
         ? normalizeDeg360(endDeg - startDeg)
         : -normalizeDeg360(startDeg - endDeg);
 
-    int steps = (int)ceil(fabs(sweep) / ARC_STEP_DEG);
+    double stepDeg = ARC_MAX_STEP_DEG;
+    if (radiusKm > ARC_MAX_SAG_KM) {
+        stepDeg = 2.0 * acos(1.0 - ARC_MAX_SAG_KM / radiusKm) / OAS_DEG_TO_RAD;
+    }
+    if (stepDeg < ARC_MIN_STEP_DEG) {
+        stepDeg = ARC_MIN_STEP_DEG;
+    }
+    if (stepDeg > ARC_MAX_STEP_DEG) {
+        stepDeg = ARC_MAX_STEP_DEG;
+    }
+
+    int steps = (int)ceil(fabs(sweep) / stepDeg);
     if (steps < 1) {
         steps = 1;
     }
@@ -1253,7 +1280,10 @@ bool loadAirspaceDatabase(
         return false;
     }
 
-    BlockState block;
+    // static: with OAS_MAX_POLY_POINTS vertices of doubles this is several
+    // KB, too much for the loop task's stack. Loading happens once at boot
+    // and is not re-entrant.
+    static BlockState block;
 
     block.reset();
 
@@ -1448,36 +1478,53 @@ bool loadAirspaceDatabase(
                 continue;
             }
 
-            // Find X=
-            if ((rest[0] == 'X' ||
-                 rest[0] == 'x') &&
-                rest[1] == '=') {
+            // "V X=lat lon" (centre) or "V D=+/-" (arc direction). Real files
+            // also write "V X = lat lon" with spaces around the '=', so skip
+            // spaces on both sides of it.
+            const char key =
+                (rest[0] >= 'a' && rest[0] <= 'z')
+                    ? (char)(rest[0] - 'a' + 'A')
+                    : rest[0];
 
-                double lat;
-                double lon;
+            const char* value = rest + 1;
 
-                if (parseCoordPair(
-                        rest + 2,
-                        lat,
-                        lon)) {
-
-                    block.centerLat =
-                        lat;
-
-                    block.centerLon =
-                        lon;
-
-                    block.haveCenter =
-                        true;
-                }
+            while (*value == ' ' || *value == '\t') {
+                value++;
             }
-            // V D=+ (clockwise, default) or V D=- (anti-clockwise)
-            else if ((rest[0] == 'D' ||
-                      rest[0] == 'd') &&
-                     rest[1] == '=') {
 
-                block.arcClockwise =
-                    (rest[2] != '-');
+            if ((key == 'X' || key == 'D') && *value == '=') {
+
+                value++;
+
+                while (*value == ' ' || *value == '\t') {
+                    value++;
+                }
+
+                if (key == 'X') {
+
+                    double lat;
+                    double lon;
+
+                    if (parseCoordPair(
+                            value,
+                            lat,
+                            lon)) {
+
+                        block.centerLat =
+                            lat;
+
+                        block.centerLon =
+                            lon;
+
+                        block.haveCenter =
+                            true;
+                    }
+                }
+                else {
+                    // V D=+ (clockwise, default) or V D=- (anti-clockwise)
+                    block.arcClockwise =
+                        (*value != '-');
+                }
             }
         }
 
