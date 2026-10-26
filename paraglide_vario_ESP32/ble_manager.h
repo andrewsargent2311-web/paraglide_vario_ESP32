@@ -37,9 +37,9 @@ struct BleScanResult {
   int rssi;
 };
 
-// Whether the pilot has turned Bluetooth on from the menu. Starts off at
-// boot unless a device was remembered from a previous session (see
-// loadBleSettings()), in which case it's turned on automatically so the
+// Whether the pilot has turned Bluetooth on from the menu. The on/off choice
+// is saved to flash and restored at boot (see loadBleSettings()). If it has
+// never been saved, it starts on only when a device was remembered, so the
 // vario can go looking for it.
 extern std::atomic<bool> bleEnabled;
 
@@ -64,7 +64,8 @@ void bleManagerLoop();
 
 // Turns the BLE radio on/off. Called from Connections > Bluetooth's
 // on/off toggle. Turning off disconnects and stops any scan in progress.
-void bleSetEnabled(bool enabled);
+// persist=true (default) saves the choice to flash so it survives a restart.
+void bleSetEnabled(bool enabled, bool persist = true);
 
 // Starts (or keeps alive) a continuous scan, refreshing
 // bleScanResultCount()/bleScanResultAt() live as advertisements come in

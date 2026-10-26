@@ -24,6 +24,7 @@ static const char* NUS_CHAR_TX_UUID = "6E400003-B5A3-F393-E0A9-E50E24DCCA9E";  /
 static const char* NVS_NAMESPACE = "conn";  // shared with wifi_manager.cpp
 static const char* NVS_KEY_BLE_ADDR = "bleAddr";
 static const char* NVS_KEY_BLE_NAME = "bleName";
+static const char* NVS_KEY_BLE_ON = "bleOn";  // pilot's Bluetooth on/off choice
 
 std::atomic<bool> bleEnabled(false);
 std::atomic<bool> bleConnected(false);
@@ -251,6 +252,10 @@ void loadBleSettings() {
   prefs.begin(NVS_NAMESPACE, /*readOnly=*/true);
   String addr = prefs.getString(NVS_KEY_BLE_ADDR, "");
   String name = prefs.getString(NVS_KEY_BLE_NAME, "");
+  // Pilot's saved on/off choice. If it has never been saved (older firmware),
+  // fall back to the old behaviour: on only when a device is remembered.
+  const bool bleOnSaved = prefs.isKey(NVS_KEY_BLE_ON);
+  const bool bleOnValue = prefs.getBool(NVS_KEY_BLE_ON, false);
   prefs.end();
 
   strncpy(bleRememberedAddress, addr.c_str(), sizeof(bleRememberedAddress) - 1);
@@ -263,9 +268,14 @@ void loadBleSettings() {
     Serial.println("[BLE] Could not set preferred MTU to 247");
   }
 
-  if (bleRememberedAddress[0] != '\0' || bleRememberedName[0] != '\0') {
-    Serial.println("[BLE] Remembered device found in flash -- turning Bluetooth on to look for it");
-    bleSetEnabled(true);
+  const bool haveRemembered =
+    (bleRememberedAddress[0] != '\0' || bleRememberedName[0] != '\0');
+  const bool startEnabled = bleOnSaved ? bleOnValue : haveRemembered;
+  if (startEnabled) {
+    Serial.println("[BLE] Bluetooth was left on -- starting it to look for the remembered device");
+    bleSetEnabled(true, /*persist=*/false);  // already what's saved (or legacy default)
+  } else if (haveRemembered) {
+    Serial.println("[BLE] Bluetooth was left off -- not auto-connecting");
   }
 }
 
@@ -522,8 +532,20 @@ void bleForgetDevice() {
 // =====================================================
 // ON / OFF + BACKGROUND RECONNECT
 // =====================================================
-void bleSetEnabled(bool enabled) {
+void bleSetEnabled(bool enabled, bool persist) {
   bleEnabled = enabled;
+
+  if (persist) {
+    Preferences prefs;
+    if (prefs.begin(NVS_NAMESPACE, /*readOnly=*/false)) {
+      if (prefs.putBool(NVS_KEY_BLE_ON, enabled) == 0U) {
+        Serial.println("[BLE] Could not save Bluetooth on/off setting");
+      }
+      prefs.end();
+    } else {
+      Serial.println("[BLE] Could not open settings to save Bluetooth on/off");
+    }
+  }
 
   if (!enabled) {
     connectGeneration.fetch_add(1);

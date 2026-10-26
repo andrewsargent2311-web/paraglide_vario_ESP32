@@ -18,15 +18,21 @@ static constexpr double OAS_DEG_TO_RAD = 0.017453292519943295;
 // Cached database
 // ---------------------------------------------------------------------------
 
-static CachedAirspace airspaces[OAS_MAX_AIRSPACES];
+// These three tables are ~75 KB. As static arrays they sat in internal DRAM
+// for the whole run, leaving only ~35 KB of heap -- too little for a TLS
+// handshake (ADS-B/weather failed with mbedTLS -32512). They are allocated
+// once, from PSRAM, by allocateAirspaceStorage() on first load. Every query
+// loops to airspaceCount, which stays 0 until a load succeeds, so a null
+// pointer is never dereferenced.
+static CachedAirspace* airspaces = nullptr;
 
 static uint16_t airspaceCount = 0;
 
 // Shared polygon point storage -- every CachedAirspace's points live here,
 // indexed by pointStart/numPoints, instead of each airspace reserving its
 // own OAS_MAX_POLY_POINTS-sized array whether it needs it or not.
-static float pointPoolLat[OAS_POINT_POOL_SIZE];
-static float pointPoolLon[OAS_POINT_POOL_SIZE];
+static float* pointPoolLat = nullptr;
+static float* pointPoolLon = nullptr;
 static uint16_t pointPoolUsed = 0;
 
 // Points lost because the pool itself ran out (distinct from
@@ -1234,6 +1240,41 @@ static bool storeBlock(
 }
 
 // ---------------------------------------------------------------------------
+// One-time storage allocation (init phase -- called from the first load)
+// ---------------------------------------------------------------------------
+
+static void* oasAllocZeroed(size_t count, size_t size) {
+#ifdef ARDUINO_ARCH_ESP32
+    return ps_calloc(count, size);  // PSRAM: keeps internal heap free for TLS
+#else
+    return calloc(count, size);     // host (native tests)
+#endif
+}
+
+// DEVIATION(P1-2): one-time allocation at first database load (boot), never
+// freed. Moves ~75 KB out of internal DRAM so the ADS-B/weather TLS
+// handshake has heap to work with. Safe: failure leaves the database
+// unloaded (count 0) and every query returns "nothing found".
+[[nodiscard]] static bool allocateAirspaceStorage() {
+    if (airspaces != nullptr && pointPoolLat != nullptr && pointPoolLon != nullptr) {
+        return true;
+    }
+    if (airspaces == nullptr) {
+        airspaces = static_cast<CachedAirspace*>(
+            oasAllocZeroed(OAS_MAX_AIRSPACES, sizeof(CachedAirspace)));
+    }
+    if (pointPoolLat == nullptr) {
+        pointPoolLat = static_cast<float*>(
+            oasAllocZeroed(OAS_POINT_POOL_SIZE, sizeof(float)));
+    }
+    if (pointPoolLon == nullptr) {
+        pointPoolLon = static_cast<float*>(
+            oasAllocZeroed(OAS_POINT_POOL_SIZE, sizeof(float)));
+    }
+    return airspaces != nullptr && pointPoolLat != nullptr && pointPoolLon != nullptr;
+}
+
+// ---------------------------------------------------------------------------
 // Public: load database
 // ---------------------------------------------------------------------------
 
@@ -1249,6 +1290,12 @@ bool loadAirspaceDatabase(
     airspacesRejectedForPool = 0;
     truncatedPolygons = 0;
     altitudeParseFailures = 0;
+
+    if (!allocateAirspaceStorage()) {
+        Serial.println(
+            "OpenAirScanner: unable to allocate airspace storage");
+        return false;
+    }
 
     if (!filename ||
         !controlledClasses ||
