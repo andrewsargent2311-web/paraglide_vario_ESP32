@@ -10,6 +10,9 @@
 #include "CrossCoreState.h"
 #include "AirspaceProximity.h" 
 #include "AglDisplay.h"
+#include "AdsbClient.h"
+#include "TrafficIcons.h"
+#include "wifi_manager.h"  // wifiConnected
 
 static AglDisplayBuffer aglDisplayBuffer;
 
@@ -28,12 +31,18 @@ static bool getDisplayAglM(float& aglM) {
   return aglDisplayBuffer.update(sourcesValid, currentAglM, millis(), aglM);
 }
 
-// Used only by drawADSBPage() below to snapshot the shared adsbDoc JSON
-// into a plain array before drawing -- not needed anywhere else, so it
-// stays private to this file rather than living in DrawPages.h.
-#define MAX_DISPLAYED_AIRCRAFT 24
+// Used only by drawADSBPage() below: one aircraft as it should appear this
+// frame, wherever it came from -- not needed anywhere else, so it stays
+// private to this file rather than living in DrawPages.h. Sized for every
+// ADS-B track (MAX_ADSB_TRACKS) plus every FANET contact.
+#define MAX_DISPLAYED_AIRCRAFT 40
 struct AircraftSnapshot {
   float lat, lon, altFeet, speedKt, headingDeg;
+  float distanceKm;
+  bool altKnown;   // false if ADS-B reports it as on the ground, or not at all
+  bool estimated;  // position older than 30 s: drawn as an outline
+  bool isClose;    // gets the flashing rings: see TRAFFIC_CLOSE_KM/_FT
+  TrafficIconType icon;
 
   // FANET-only fields, ignored for ADS-B entries (isFanet == false).
   bool isFanet;
@@ -899,9 +908,17 @@ void drawWeatherPage() {
   // ---------------------------------------------------------
   if (!snapshotHasWeatherData) {
 
-    u8g2.setFont(u8g2_font_helvB24_tf);
+    // Smaller than helvB24, so the longest message fits across the screen.
+    u8g2.setFont(u8g2_font_helvB18_tf);
 
     const char* msg = "No Weather Data";
+    if (!sharedPosition.everValid) {
+      msg = "Waiting for GPS fix";
+    } else if (!wifiConnected) {
+      msg = "No WiFi";
+    } else if (weatherFetchStatus == FETCH_FAILED) {
+      msg = "No internet";
+    }
 
     int msgWidth =
       u8g2.getStrWidth(msg);
@@ -1462,6 +1479,335 @@ void drawGliderHeadingArrow(int cx, int cy, int arrowRadius, float headingDeg) {
   // Draw the structural vectors for the custom arrow shape
   u8g2.drawTriangle(tipX, tipY, leftX, leftY, rightX, rightY);
 }
+// =====================================================
+// TRAFFIC TRACKS
+// Each ADS-B poll replaces adsbDoc, which only says where aircraft are right
+// now. The page keeps its own short memory of them here, so an aircraft can
+// keep moving between polls (15 s apart) and survive a missed poll. Only
+// drawADSBPage() touches this, on Core 1, so it needs no mutex of its own.
+// =====================================================
+#define MAX_ADSB_TRACKS 24
+#define TRAFFIC_ESTIMATED_AFTER_MS 30000UL  // older than this: drawn as an outline
+// Close traffic: 4,000 ft allows for others climbing well above or below you.
+#define TRAFFIC_CLOSE_KM 5.0f
+#define TRAFFIC_CLOSE_FT 4000.0f
+// Removal after 60 s is TRAFFIC_REMOVE_AFTER_MS, in DrawPages.h.
+#define TRAFFIC_REMOVE_OFFLINE_MS 120000UL  // removal while the connection is down
+
+struct AdsbTrack {
+  bool used;
+  char hex[9];
+  float lat, lon, altFeet, speedKt, headingDeg;
+  bool altKnown;
+  bool headingKnown;
+  TrafficIconType icon;
+  unsigned long lastPositionMs;
+  float lastDistanceKm;  // from the last draw, for choosing which track to replace
+};
+
+static AdsbTrack adsbTracks[MAX_ADSB_TRACKS];
+static uint32_t adsbTracksGeneration = 0;
+
+// Set each time the page draws. Asks for faster redraws so the rings around
+// close traffic can flash: see displayRefreshIntervalMs().
+static bool trafficHasCloseAircraft = false;
+
+// Static rather than on the stack: Core 1's stack is small and these are big.
+static AircraftSnapshot trafficSnapshot[MAX_DISPLAYED_AIRCRAFT];
+
+// Brings adsbTracks[] up to date if a new poll has been published. If the
+// mutex is busy, the next redraw simply tries again.
+static void mergeAdsbTracks(float myLat, float myLon) {
+  if (adsbFetchGeneration == adsbTracksGeneration) return;
+  if (backgroundDataMutex == nullptr ||
+      xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) != pdTRUE) {
+    return;
+  }
+
+  const unsigned long fetchMs = adsbDocFetchMs;
+  JsonArray aircraft = adsbDoc["ac"].as<JsonArray>();
+
+  for (JsonObject ac : aircraft) {
+    const char* hex = ac["hex"];
+    float acLat = ac["lat"];
+    float acLon = ac["lon"];
+    if (hex == nullptr || acLat == 0.0f || acLon == 0.0f) continue;
+
+    // seen_pos = how many seconds old this position already was at the
+    // server, so a position that's gone stale there isn't treated as fresh.
+    float seenPosSeconds = ac["seen_pos"].is<float>() ? (float)ac["seen_pos"] : 0.0f;
+    if (seenPosSeconds < 0.0f) seenPosSeconds = 0.0f;
+    if (seenPosSeconds * 1000.0f >= (float)TRAFFIC_REMOVE_AFTER_MS) continue;
+    const unsigned long positionMs = fetchMs - (unsigned long)(seenPosSeconds * 1000.0f);
+
+    int slot = -1;
+    int freeSlot = -1;
+    int farthestSlot = 0;
+    for (int i = 0; i < MAX_ADSB_TRACKS; i++) {
+      if (!adsbTracks[i].used) {
+        if (freeSlot < 0) freeSlot = i;
+        continue;
+      }
+      if (strcmp(adsbTracks[i].hex, hex) == 0) {
+        slot = i;
+        break;
+      }
+      if (adsbTracks[i].lastDistanceKm > adsbTracks[farthestSlot].lastDistanceKm) farthestSlot = i;
+    }
+
+    float distanceKm = -1.0f;
+    if (slot < 0) {
+      distanceKm = getDistanceKM(myLat, myLon, acLat, acLon);
+      if (freeSlot >= 0) {
+        slot = freeSlot;
+      } else if (distanceKm < adsbTracks[farthestSlot].lastDistanceKm) {
+        slot = farthestSlot;  // table full: closer aircraft matter more
+      } else {
+        continue;
+      }
+      strlcpy(adsbTracks[slot].hex, hex, sizeof(adsbTracks[slot].hex));
+      adsbTracks[slot].used = true;
+      adsbTracks[slot].lastDistanceKm = distanceKm;
+    }
+
+    AdsbTrack& track = adsbTracks[slot];
+    track.lat = acLat;
+    track.lon = acLon;
+    // alt_baro is the word "ground" for an aircraft on the ground.
+    track.altKnown = ac["alt_baro"].is<float>();
+    track.altFeet = ac["alt_baro"];
+    track.speedKt = ac["gs"];
+    track.headingKnown = ac["track"].is<float>();
+    track.headingDeg = ac["track"];
+    track.icon = trafficIconFromAdsbCategory(ac["category"].as<const char*>());
+    track.lastPositionMs = positionMs;
+  }
+
+  adsbTracksGeneration = adsbFetchGeneration;
+  xSemaphoreGive(backgroundDataMutex);
+}
+
+// Moves a position forward along its track for the time since it was reported.
+static void estimateTrafficPosition(float lat, float lon, float speedKt, float headingDeg,
+                                    unsigned long ageMs, float& outLat, float& outLon) {
+  const float distanceKm = speedKt * 1.852f * ((float)ageMs / 3600000.0f);
+  const float headingRad = deg2rad(headingDeg);
+  outLat = lat + (distanceKm * cosf(headingRad)) / 111.32f;
+  const float cosLat = cosf(deg2rad(lat));
+  outLon = (cosLat > 0.01f) ? lon + (distanceKm * sinf(headingRad)) / (111.32f * cosLat) : lon;
+}
+
+// True while the ADS-B feed can't be reached, so a silent aircraft may well
+// still be flying rather than gone.
+static bool trafficConnectionLost() {
+  return !wifiConnected || adsbFetchStatus == FETCH_FAILED;
+}
+
+// Fills trafficSnapshot[] with every aircraft to consider this frame, at its
+// estimated current position, and returns how many. Removes any that have
+// gone too long with no update: 60 s, or 2 minutes for ADS-B while the
+// connection is down. FANET comes by radio, so a lost connection changes
+// nothing for it.
+static int buildTrafficSnapshot(float myLat, float myLon, unsigned long nowMs) {
+  int count = 0;
+  const unsigned long adsbRemoveAfterMs =
+      trafficConnectionLost() ? TRAFFIC_REMOVE_OFFLINE_MS : TRAFFIC_REMOVE_AFTER_MS;
+
+  // FANET first: these are the nearby pilots, and they should never lose
+  // their place to distant ADS-B traffic. No mutex needed: see the
+  // FanetContact comment in DrawPages.h.
+  for (int i = 0; i < MAX_FANET_CONTACTS && count < MAX_DISPLAYED_AIRCRAFT; i++) {
+    FanetContact& contact = fanetContacts[i];
+    if (!contact.valid) continue;
+
+    const unsigned long ageMs = nowMs - contact.lastSeenMs;
+    if (ageMs > TRAFFIC_REMOVE_AFTER_MS) {
+      contact.valid = false;  // also frees the slot for reuse
+      continue;
+    }
+
+    AircraftSnapshot& s = trafficSnapshot[count++];
+    s.speedKt = contact.speedKmh * 0.539957f;  // km/h -> kt
+    s.headingDeg = contact.headingDeg;
+    estimateTrafficPosition(contact.lat, contact.lon, s.speedKt, s.headingDeg, ageMs, s.lat, s.lon);
+    s.altFeet = contact.altitudeM * 3.28084f;
+    s.altKnown = true;
+    s.isFanet = true;
+    s.climbMs = contact.climbMs;
+    s.icon = trafficIconFromFanetType(contact.aircraftType);
+    s.estimated = ageMs > TRAFFIC_ESTIMATED_AFTER_MS;
+    s.distanceKm = getDistanceKM(myLat, myLon, s.lat, s.lon);
+    snprintf(s.label, sizeof(s.label), "%02X:%04X", contact.addr.manufacturer, contact.addr.id);
+  }
+
+  mergeAdsbTracks(myLat, myLon);
+
+  for (int i = 0; i < MAX_ADSB_TRACKS; i++) {
+    AdsbTrack& track = adsbTracks[i];
+    if (!track.used) continue;
+
+    const unsigned long ageMs = nowMs - track.lastPositionMs;
+    if (ageMs > adsbRemoveAfterMs) {
+      track.used = false;
+      continue;
+    }
+    if (count >= MAX_DISPLAYED_AIRCRAFT) continue;
+
+    AircraftSnapshot& s = trafficSnapshot[count++];
+    s.speedKt = track.speedKt;
+    s.headingDeg = track.headingDeg;
+    if (track.headingKnown) {
+      estimateTrafficPosition(track.lat, track.lon, track.speedKt, track.headingDeg, ageMs, s.lat, s.lon);
+    } else {
+      s.lat = track.lat;  // no track reported, so nothing to move it along
+      s.lon = track.lon;
+    }
+    s.altFeet = track.altFeet;
+    s.altKnown = track.altKnown;
+    s.isFanet = false;
+    s.climbMs = 0.0f;
+    s.icon = track.icon;
+    s.estimated = ageMs > TRAFFIC_ESTIMATED_AFTER_MS;
+    s.distanceKm = getDistanceKM(myLat, myLon, s.lat, s.lon);
+    track.lastDistanceKm = s.distanceKm;
+  }
+
+  return count;
+}
+
+// =====================================================
+// TRAFFIC AUTO-ZOOM
+// Picks the smallest range step that comfortably contains the nearest
+// relevant aircraft. Steps never exceed the Range Rings setting, which is
+// also the view when nothing relevant is around. Zooms in at once, but only
+// zooms out once the wider view has been called for throughout
+// TRAFFIC_ZOOM_OUT_HOLD_MS, so the scale doesn't flicker.
+// =====================================================
+#define TRAFFIC_ZOOM_RELEVANT_FT 3000.0f    // relevant = within this of own altitude
+#define TRAFFIC_ZOOM_COMFORT 0.8f           // nearest aircraft sits within 80% of the range
+#define TRAFFIC_ZOOM_OUT_HOLD_MS 10000UL
+
+// nearestRelevantKm is negative if there's no relevant aircraft at all.
+static float updateTrafficZoom(float nearestRelevantKm, unsigned long nowMs) {
+  static const float ZOOM_STEPS_KM[] = { 5.0f, 10.0f, 30.0f, 60.0f };
+  static float currentRangeKm = 0.0f;
+  static bool zoomOutPending = false;
+  static unsigned long zoomOutPendingSinceMs = 0;
+
+  float wantedRangeKm = adsbRingOuterKm;
+  if (nearestRelevantKm >= 0.0f) {
+    for (float stepKm : ZOOM_STEPS_KM) {
+      if (stepKm >= adsbRingOuterKm) break;
+      if (nearestRelevantKm <= stepKm * TRAFFIC_ZOOM_COMFORT) {
+        wantedRangeKm = stepKm;
+        break;
+      }
+    }
+  }
+
+  // First draw, or the Range Rings setting was just reduced below this view.
+  if (currentRangeKm <= 0.0f || currentRangeKm > adsbRingOuterKm) {
+    currentRangeKm = wantedRangeKm;
+    zoomOutPending = false;
+  } else if (wantedRangeKm <= currentRangeKm) {
+    currentRangeKm = wantedRangeKm;
+    zoomOutPending = false;
+  } else if (!zoomOutPending) {
+    zoomOutPending = true;
+    zoomOutPendingSinceMs = nowMs;
+  } else if (nowMs - zoomOutPendingSinceMs >= TRAFFIC_ZOOM_OUT_HOLD_MS) {
+    currentRangeKm = wantedRangeKm;
+    zoomOutPending = false;
+  }
+
+  return currentRangeKm;
+}
+
+// "10km", or "2.5km" for half of the 5 km view.
+static void formatRingLabel(char* buf, size_t buflen, float km) {
+  if (fabsf(km - roundf(km)) < 0.01f) {
+    snprintf(buf, buflen, "%.0fkm", km);
+  } else {
+    snprintf(buf, buflen, "%.1fkm", km);
+  }
+}
+
+// =====================================================
+// TRAFFIC LABELS
+// Every aircraft keeps its label. Each tries the sides of its icon in turn
+// and takes the first clear one. In a tight cluster no side may be clear, so
+// it then tries further out, in rows above and below, and failing all that
+// takes whichever spot overlaps least.
+// =====================================================
+#define TRAFFIC_LABEL_MAX_ROWS_OUT 4
+
+struct ScreenRect {
+  int16_t x, y, w, h;
+};
+
+static int rectOverlapArea(const ScreenRect& a, const ScreenRect& b) {
+  const int w = min(a.x + a.w, b.x + b.w) - max(a.x, b.x);
+  const int h = min(a.y + a.h, b.y + b.h) - max(a.y, b.y);
+  return (w > 0 && h > 0) ? w * h : 0;
+}
+
+static ScreenRect placeTrafficLabel(int iconX, int iconY, int clearPx, int w, int h,
+                                    const ScreenRect* obstacles, int obstacleCount) {
+  const int rightX = iconX + clearPx;
+  const int leftX = iconX - clearPx - w;
+  const int centreX = iconX - w / 2;
+  const int middleY = iconY - h / 2;
+  const int aboveY = iconY - clearPx - h;
+  const int belowY = iconY + clearPx;
+  const int rowPitch = h + 2;
+
+  ScreenRect best = { 0, 0, (int16_t)w, (int16_t)h };
+  int bestOverlap = -1;
+
+  for (int rowsOut = 0; rowsOut <= TRAFFIC_LABEL_MAX_ROWS_OUT; rowsOut++) {
+    const int up = rowsOut * rowPitch;
+    const int candidates[][2] = {
+      // The four sides first, then the same spots moved further out.
+      { rightX, middleY - up }, { leftX, middleY - up }, { centreX, aboveY - up }, { centreX, belowY + up },
+      { rightX, middleY + up }, { leftX, middleY + up }
+    };
+
+    for (const auto& candidate : candidates) {
+      // Keep it on the screen, below the top bar.
+      const ScreenRect rect = {
+        (int16_t)constrain(candidate[0], 0, max(0, SCREEN_W - w)),
+        (int16_t)constrain(candidate[1], TOP_BAR_HEIGHT_PX, SCREEN_H - h),
+        (int16_t)w, (int16_t)h
+      };
+
+      int overlap = 0;
+      for (int i = 0; i < obstacleCount; i++) overlap += rectOverlapArea(rect, obstacles[i]);
+
+      if (bestOverlap < 0 || overlap < bestOverlap) {
+        best = rect;
+        bestOverlap = overlap;
+      }
+      if (overlap == 0) return best;
+    }
+  }
+  return best;
+}
+
+// A message on a cleared background, so the rings don't run through it.
+static void drawTrafficStatus(int cx, int y, const char* text) {
+  u8g2.setFont(u8g2_font_helvB14_tf);
+  const int w = u8g2.getStrWidth(text);
+  u8g2.setDrawColor(0);
+  u8g2.drawBox(cx - w / 2 - 4, y - 18, w + 8, 24);
+  u8g2.setDrawColor(1);
+  u8g2.drawStr(cx - w / 2, y, text);
+}
+
+unsigned long displayRefreshIntervalMs() {
+  // Flashing at 2 Hz takes 4 redraws a second: rings on, rings off, twice.
+  return (!menuActive && currentPage == PAGE_ADSB && trafficHasCloseAircraft) ? 250UL : 1000UL;
+}
+
 void drawADSBPage() {
 
   const int cx = SCREEN_W / 2;
@@ -1490,99 +1836,50 @@ void drawADSBPage() {
   // Pull current altitude (defaults to 0 if GPS is not connected/locked yet)
   float myAltitudeFeet = sharedOwnPressureAltFeet;
 
-  // 2. Snapshot the aircraft list under the mutex, then release it
-  // immediately -- moved up from later in this function so we know, before
-  // drawing the range rings below, whether any traffic is close enough to
-  // justify auto-zooming in. All the trig/SPI rendering below runs without
-  // holding the lock, so a slow redraw can never make the Core 0 background
-  // task wait, and vice versa.
-  AircraftSnapshot snapshotAircraft[MAX_DISPLAYED_AIRCRAFT];
-  int snapshotCount = 0;
-  bool snapshotHasData = hasAdsbData;
+  // 2. Gather every known aircraft at its estimated current position. All
+  // the trig/SPI rendering below runs without holding the mutex, so a slow
+  // redraw can never make the Core 0 background task wait, and vice versa.
+  // Without a GPS fix there's no centre to plot anything around.
+  const unsigned long trafficNowMs = millis();
+  const bool haveGpsFix = sharedPosition.everValid;
+  const int snapshotCount = haveGpsFix ? buildTrafficSnapshot(MY_LAT, MY_LON, trafficNowMs) : 0;
 
-  if (snapshotHasData && backgroundDataMutex != nullptr && xSemaphoreTake(backgroundDataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+  // 3. Work out what those aircraft mean for this frame: the nearest one that
+  // drives the zoom, close traffic, and whether anything's within range.
+  // Close traffic gets the flashing rings. Airborne ADS-B only: an aircraft on
+  // the ground is still shown, but there's no need to flash it. FANET is left
+  // out too, because pilots thermalling together are very often this close,
+  // and the rings would turn into noise. This only affects the display: voice
+  // and siren alerts use the ADSB Settings values, in performADSBUpdate().
+  float nearestRelevantKm = -1.0f;
+  int withinRangeRingsCount = 0;
+  trafficHasCloseAircraft = false;
 
-    JsonArray snapshotSource = adsbDoc["ac"].as<JsonArray>();
-    for (JsonObject ac : snapshotSource) {
-      if (snapshotCount >= MAX_DISPLAYED_AIRCRAFT) break;
-
-      float acLat = ac["lat"];
-      float acLon = ac["lon"];
-      if (acLat == 0.0f || acLon == 0.0f) continue;
-
-      snapshotAircraft[snapshotCount].lat = acLat;
-      snapshotAircraft[snapshotCount].lon = acLon;
-      snapshotAircraft[snapshotCount].altFeet = ac["alt_baro"];
-      snapshotAircraft[snapshotCount].speedKt = ac["gs"];
-      snapshotAircraft[snapshotCount].headingDeg = ac["track"];
-      snapshotAircraft[snapshotCount].isFanet = false;
-      snapshotAircraft[snapshotCount].climbMs = 0.0f;
-      snapshotCount++;
-    }
-
-    xSemaphoreGive(backgroundDataMutex);
-  }
-
-  // ---------------------------------------------------------
-  // Merge in live FANET contacts (paragliders/paramotors broadcasting
-  // Type-1 tracking beacons, decoded by FanetStack -- see
-  // onFanetTracking() in the main .ino). No mutex needed here -- see the
-  // FanetContact comment in DrawPages.h for why.
-  // ---------------------------------------------------------
-  unsigned long fanetNowMs = millis();
-  for (int i = 0; i < MAX_FANET_CONTACTS && snapshotCount < MAX_DISPLAYED_AIRCRAFT; i++) {
-    if (!fanetContacts[i].valid) continue;
-
-    if (fanetNowMs - fanetContacts[i].lastSeenMs > FANET_CONTACT_TIMEOUT_MS) {
-      // Gone quiet long enough to treat as stale -- clearing valid here
-      // (rather than only skipping it) also frees the slot for reuse
-      // instead of it only ever getting reclaimed via eviction.
-      fanetContacts[i].valid = false;
-      continue;
-    }
-
-    snapshotAircraft[snapshotCount].lat = fanetContacts[i].lat;
-    snapshotAircraft[snapshotCount].lon = fanetContacts[i].lon;
-    snapshotAircraft[snapshotCount].altFeet = fanetContacts[i].altitudeM * 3.28084f;
-    snapshotAircraft[snapshotCount].speedKt = fanetContacts[i].speedKmh * 0.539957f;  // km/h -> kt
-    snapshotAircraft[snapshotCount].headingDeg = fanetContacts[i].headingDeg;
-    snapshotAircraft[snapshotCount].isFanet = true;
-    snapshotAircraft[snapshotCount].climbMs = fanetContacts[i].climbMs;
-    snprintf(snapshotAircraft[snapshotCount].label, sizeof(snapshotAircraft[snapshotCount].label),
-             "%02X:%04X", fanetContacts[i].addr.manufacturer, fanetContacts[i].addr.id);
-    snapshotCount++;
-  }
-
-  // 3. Auto-zoom: switch the rings (and the aircraft plot scale) to
-  // 10km/5km if any currently-known aircraft is within 10km, otherwise
-  // fall back to the pilot's chosen far/default rings (adsbRingOuterKm/
-  // adsbRingInnerKm -- ADSB_SETTINGS > Range Rings menu, 30km/15km by
-  // default). Re-evaluated every redraw from the full snapshot above, so
-  // it snaps back out automatically once nothing is close -- no state is
-  // carried between frames.
-  bool anyPlaneWithin10km = false;
   for (int i = 0; i < snapshotCount; i++) {
-    if (getDistanceKM(MY_LAT, MY_LON, snapshotAircraft[i].lat, snapshotAircraft[i].lon) <= 10.0f) {
-      anyPlaneWithin10km = true;
-      break;
+    AircraftSnapshot& s = trafficSnapshot[i];
+
+    if (s.distanceKm <= adsbRingOuterKm) withinRangeRingsCount++;
+
+    if (s.altKnown && fabsf(s.altFeet - myAltitudeFeet) <= TRAFFIC_ZOOM_RELEVANT_FT &&
+        (nearestRelevantKm < 0.0f || s.distanceKm < nearestRelevantKm)) {
+      nearestRelevantKm = s.distanceKm;
+    }
+
+    s.isClose = !s.isFanet && s.altKnown && s.distanceKm <= TRAFFIC_CLOSE_KM &&
+                fabsf(s.altFeet - myAltitudeFeet) <= TRAFFIC_CLOSE_FT;
+    if (s.isClose) {
+      conflictDetectedThisFrame = true;
+      trafficHasCloseAircraft = true;
     }
   }
-  const float MAX_RADIUS_KM = anyPlaneWithin10km ? 10.0f : adsbRingOuterKm;
 
-  // Labels need to be built into buffers now that the far/default ring
-  // (adsbRingOuterKm/adsbRingInnerKm, see the Range Rings menu) is
-  // configurable rather than a fixed "30km"/"15km" pair. The near-zoom
-  // state (anyPlaneWithin10km) is untouched by that setting and still
-  // always shows 10km/5km.
+  const float MAX_RADIUS_KM = updateTrafficZoom(nearestRelevantKm, trafficNowMs);
+
+  // The ring labels always show the current range.
   char outerRingLabelBuf[8];
   char innerRingLabelBuf[8];
-  if (anyPlaneWithin10km) {
-    snprintf(outerRingLabelBuf, sizeof(outerRingLabelBuf), "10km");
-    snprintf(innerRingLabelBuf, sizeof(innerRingLabelBuf), "5km");
-  } else {
-    snprintf(outerRingLabelBuf, sizeof(outerRingLabelBuf), "%.0fkm", adsbRingOuterKm);
-    snprintf(innerRingLabelBuf, sizeof(innerRingLabelBuf), "%.0fkm", adsbRingInnerKm);
-  }
+  formatRingLabel(outerRingLabelBuf, sizeof(outerRingLabelBuf), MAX_RADIUS_KM);
+  formatRingLabel(innerRingLabelBuf, sizeof(innerRingLabelBuf), MAX_RADIUS_KM / 2.0f);
   const char* outerRingLabel = outerRingLabelBuf;
   const char* innerRingLabel = innerRingLabelBuf;
 
@@ -1722,111 +2019,163 @@ void drawADSBPage() {
   // why this isn't in drawDashboard() alongside drawAirspaceWarning().
   drawAirspaceInfoBar();
 
-  // Combined check -- snapshotCount now reflects ADS-B AND FANET
-  // contacts together, so this only reports "nothing at all" once both
-  // sources have had their say. snapshotHasData still distinguishes the
-  // two empty cases: the ADS-B feed itself never having been fetched
-  // (independent of whether any FANET contact is around) vs. a feed that
-  // was fetched but is genuinely empty right now.
-  if (snapshotCount == 0) {
-    u8g2.setFont(u8g2_font_6x10_tf);
-    if (!snapshotHasData) {
-      u8g2.drawStr(cx - 50, cy + 30, "No data fetched");
+  // While the connection is down, say so and say it's being worked on, even
+  // with aircraft still on the page: their positions are only estimates now.
+  // Sits right of the vario box, above where the airspace bar starts.
+  ScreenRect connectionRect = { 0, 0, 0, 0 };
+  if (haveGpsFix && trafficConnectionLost()) {
+    const char* line1 = !wifiEnabled ? "WiFi off" : (!wifiConnected ? "No WiFi" : "No internet");
+    const char* line2 = wifiEnabled ? "Reconnecting..." : "";
+
+    u8g2.setFont(u8g2_font_helvB10_tf);
+    const int textW = max(u8g2.getStrWidth(line1), u8g2.getStrWidth(line2));
+    connectionRect = { (int16_t)(SCREEN_W - textW - 8), 345, (int16_t)(textW + 8), 25 };
+
+    u8g2.setDrawColor(0);
+    u8g2.drawBox(connectionRect.x, connectionRect.y, connectionRect.w, connectionRect.h);
+    u8g2.setDrawColor(1);
+    u8g2.drawStr(connectionRect.x + 4, 356, line1);
+    u8g2.drawStr(connectionRect.x + 4, 368, line2);
+  }
+
+  // Say why the page is empty, rather than leaving it blank. "No traffic" is
+  // only claimed after a good fetch: with no WiFi or no internet nobody knows
+  // what's out there, and saying "no traffic" would be falsely reassuring.
+  if (withinRangeRingsCount == 0) {
+    char statusBuf[32];
+    if (!haveGpsFix) {
+      snprintf(statusBuf, sizeof(statusBuf), "Waiting for GPS fix");
+    } else if (!wifiConnected) {
+      snprintf(statusBuf, sizeof(statusBuf), "No WiFi");
+    } else if (adsbFetchStatus == FETCH_FAILED) {
+      snprintf(statusBuf, sizeof(statusBuf), "No internet");
+    } else if (adsbFetchStatus == FETCH_NOT_TRIED) {
+      snprintf(statusBuf, sizeof(statusBuf), "Checking for traffic");
     } else {
-      u8g2.drawStr(cx - 55, cy + 30, "No local traffic");
+      snprintf(statusBuf, sizeof(statusBuf), "No traffic within %.0f km", adsbRingOuterKm);
     }
+    drawTrafficStatus(cx, cy + 34, statusBuf);
     return;
   }
 
-  // 7. Set Typography: Switch to a Heavy, High-Contrast True Bold Font
-  u8g2.setFont(u8g2_font_helvB14_tf);  // True Helvetica Bold 14px — razor-sharp in direct sunlight!
+  // 7. Work out where the aircraft within the current range go. All their
+  // positions are needed first, so the labels can be placed clear of all of
+  // them. The icons themselves are drawn last, so a label can never hide one.
+  struct PlottedAircraft {
+    int16_t x, y;
+    float displayHeading;
+    int8_t snapshotIndex;
+  };
+  static PlottedAircraft plotted[MAX_DISPLAYED_AIRCRAFT];
+  // Room for a label and an icon per aircraft, plus the own-ship arrow, the
+  // three fixed boxes and the connection message.
+  static ScreenRect obstacles[2 * MAX_DISPLAYED_AIRCRAFT + 5];
+  int plottedCount = 0;
+  int obstacleCount = 0;
+
+  obstacles[obstacleCount++] = { (int16_t)(cx - 8), (int16_t)(cy - 8), 16, 16 };
+  obstacles[obstacleCount++] = { (int16_t)altitudeX, (int16_t)altitudeY, (int16_t)altitudeW, (int16_t)altitudeH };
+  obstacles[obstacleCount++] = { (int16_t)gsX, (int16_t)gsY, (int16_t)gsW, (int16_t)gsH };
+  obstacles[obstacleCount++] = { (int16_t)varioX, (int16_t)varioY, (int16_t)varioW, (int16_t)varioH };
+  obstacles[obstacleCount++] = connectionRect;  // zero-sized if there's no message
 
   for (int i = 0; i < snapshotCount; i++) {
-    float acLat = snapshotAircraft[i].lat;
-    float acLon = snapshotAircraft[i].lon;
+    const AircraftSnapshot& s = trafficSnapshot[i];
+    if (s.distanceKm > MAX_RADIUS_KM) continue;
 
-    float distanceKM = getDistanceKM(MY_LAT, MY_LON, acLat, acLon);
-    if (distanceKM > MAX_RADIUS_KM) continue;
-
-    float absoluteBearing = getBearing(MY_LAT, MY_LON, acLat, acLon);
-
-    float relativeBearing = absoluteBearing;
+    float relativeBearing = getBearing(MY_LAT, MY_LON, s.lat, s.lon);
     if (isMoving) {
-      relativeBearing = absoluteBearing - gliderHeading;
+      relativeBearing -= gliderHeading;
     }
 
-    float angleRad = deg2rad(relativeBearing) - (PI / 2.0f);
-    float pixelDistance = (distanceKM / MAX_RADIUS_KM) * (float)r;
+    const float angleRad = deg2rad(relativeBearing) - (PI / 2.0f);
+    const float pixelDistance = (s.distanceKm / MAX_RADIUS_KM) * (float)r;
 
-    int acX = cx + (int)(pixelDistance * cos(angleRad));
-    int acY = cy + (int)(pixelDistance * sin(angleRad));
+    const int acX = cx + (int)(pixelDistance * cos(angleRad));
+    const int acY = cy + (int)(pixelDistance * sin(angleRad));
 
-    // --- TELEMETRY EXTRACTION (pulled up so heading is available before
-    // we draw the aircraft symbol below) ---
-    float altitudeFeet = snapshotAircraft[i].altFeet;
-    float speedKnots = snapshotAircraft[i].speedKt;
-    float headingDeg = snapshotAircraft[i].headingDeg;
+    // Rotated the same way the crosshair is -- relative to your heading in
+    // track-up mode, or absolute compass heading in north-up mode -- so it
+    // stays visually consistent with the rest of the display.
+    const float acDisplayHeading = fmodf(s.headingDeg - (isMoving ? gliderHeading : 0.0f) + 360.0f, 360.0f);
 
-    // Draw the target as a small heading arrow instead of a plain dot,
-    // rotated the same way the own-ship marker is -- relative to your
-    // heading in track-up mode, or absolute compass heading in north-up
-    // mode -- so it stays visually consistent with the rest of the display.
-    float acDisplayHeading = fmodf(headingDeg - (isMoving ? gliderHeading : 0.0f) + 360.0f, 360.0f);
-    drawGliderHeadingArrow(acX, acY, 5, acDisplayHeading);
+    plotted[plottedCount++] = { (int16_t)acX, (int16_t)acY, acDisplayHeading, (int8_t)i };
+    obstacles[obstacleCount++] = { (int16_t)(acX - 12), (int16_t)(acY - 12), 24, 24 };
+  }
 
-    // Same 5km / 2000ft bubble used for the one-time "new intruder" chirp
-    // in performADSBUpdate(), re-evaluated every redraw so the alarm keeps
-    // re-triggering every ALARM_SILENCE_MS for as long as a conflicting
-    // aircraft remains on screen. Deliberately excludes FANET contacts --
-    // this alarm is tuned for powered ADS-B traffic, and a paraglider/
-    // paramotor pilot thermalling alongside other FANET-equipped pilots
-    // would very often be within 2000ft/5km of one, which would make this
-    // fire constantly and turn it into noise rather than a real alert.
-    if (!snapshotAircraft[i].isFanet &&
-        distanceKM <= 5.0f && fabsf(altitudeFeet - myAltitudeFeet) <= 2000.0f) {
-      conflictDetectedThisFrame = true;
+  // Close traffic picks its label position first, then nearest to furthest.
+  for (int a = 0; a < plottedCount - 1; a++) {
+    for (int b = a + 1; b < plottedCount; b++) {
+      const AircraftSnapshot& sa = trafficSnapshot[plotted[a].snapshotIndex];
+      const AircraftSnapshot& sb = trafficSnapshot[plotted[b].snapshotIndex];
+      if ((sb.isClose && !sa.isClose) ||
+          (sb.isClose == sa.isClose && sb.distanceKm < sa.distanceKm)) {
+        const PlottedAircraft tmp = plotted[a];
+        plotted[a] = plotted[b];
+        plotted[b] = tmp;
+      }
     }
+  }
+
+  // 8. Heavy, high-contrast bold labels: razor-sharp in direct sunlight.
+  u8g2.setFont(u8g2_font_helvB14_tf);
+
+  for (int i = 0; i < plottedCount; i++) {
+    const AircraftSnapshot& s = trafficSnapshot[plotted[i].snapshotIndex];
 
     char dataTag[24];
 
-    if (snapshotAircraft[i].isFanet) {
+    if (s.isFanet) {
       // Climb rate is far more relevant than flight level for a nearby
       // paraglider/paramotor -- and the FANET address doubles as a
       // visual "this is FANET, not ADS-B" cue next to the marker.
-      snprintf(dataTag, sizeof(dataTag), "PG %s %+.1fm/s",
-               snapshotAircraft[i].label, snapshotAircraft[i].climbMs);
+      snprintf(dataTag, sizeof(dataTag), "PG %s %+.1fm/s", s.label, s.climbMs);
     } else {
-      float flightLevelFloat = altitudeFeet / 1000.0f;
+      float flightLevelFloat = s.altFeet / 1000.0f;
       if (flightLevelFloat < 0.0f) flightLevelFloat = 0.0f;
 
-      const char* compassHdg = getCompassDirection(headingDeg);
-
-      snprintf(dataTag, sizeof(dataTag), "FL%.1f %s %.0fkt", flightLevelFloat, compassHdg, speedKnots);
+      snprintf(dataTag, sizeof(dataTag), "FL%.1f %s %.0fkt", flightLevelFloat, getCompassDirection(s.headingDeg), s.speedKt);
     }
 
-    // 8. Render Anti-Clipping Text Box Frame Safely Beside Target Node
-    int textX = acX + 8;  // Offset further out to avoid crowding the icon
+    const int textW = u8g2.getStrWidth(dataTag) + 10;
+    const int textH = 23;
+    const int clearPx = s.isClose ? 21 : 14;  // outside the rings, or the icon
 
-    // FIX: Subtracted 4 from textY to lift the top line of the box up 4 pixels
-    int textY = acY - 10 - 4;  // Moves the top boundary higher up
+    const ScreenRect labelRect = placeTrafficLabel(plotted[i].x, plotted[i].y, clearPx, textW, textH,
+                                                   obstacles, obstacleCount);
+    obstacles[obstacleCount++] = labelRect;
 
-    // Added 10 pixels of horizontal padding to prevent side wall clipping
-    int textW = u8g2.getStrWidth(dataTag) + 10;
+    // A label that had to move away from its icon gets a line back to it.
+    const int nearestX = constrain((int)plotted[i].x, (int)labelRect.x, labelRect.x + labelRect.w - 1);
+    const int nearestY = constrain((int)plotted[i].y, (int)labelRect.y, labelRect.y + labelRect.h - 1);
+    if (abs(nearestX - plotted[i].x) > clearPx + 2 || abs(nearestY - plotted[i].y) > clearPx + 2) {
+      u8g2.drawLine(plotted[i].x, plotted[i].y, nearestX, nearestY);
+    }
 
-    // FIX: Added 4 to textH (from 19 to 23) so the bottom line stays in the same place
-    int textH = 19 + 4;
+    // Steady, whether or not the rings are currently on. Filled either way,
+    // so the rings and crosshair don't run through the text.
+    u8g2.setDrawColor(s.isClose ? 1 : 0);
+    u8g2.drawBox(labelRect.x, labelRect.y, labelRect.w, labelRect.h);
+    u8g2.setDrawColor(1);
+    u8g2.drawFrame(labelRect.x, labelRect.y, labelRect.w, labelRect.h);
 
-    // Screen collision safety limits engine calculations
-    if (textX + textW > SCREEN_W) textX = acX - textW - 4;
-    if (textY < TOP_BAR_HEIGHT_PX) textY = acY + 4;
-    if (textY + textH > SCREEN_H) textY = SCREEN_H - textH - 2;
+    u8g2.setDrawColor(s.isClose ? 0 : 1);
+    u8g2.drawStr(labelRect.x + 5, labelRect.y + 19, dataTag);
+    u8g2.setDrawColor(1);
+  }
 
-    // Draw the auto-scaled frame shield
-    u8g2.drawFrame(textX, textY, textW, textH);
+  // 9. The icons go on top. Rings on for 250 ms, off for 250 ms = 2 Hz.
+  const bool closeRingsOn = ((trafficNowMs / 250UL) % 2UL) == 0;
 
-    // FIX: Shifted the text baseline down by 4 to compensate for lifting textY
-    // This keeps the letters sitting exactly where they were before the change
-    u8g2.drawStr(textX + 5, textY + 15 + 4, dataTag);
+  for (int i = 0; i < plottedCount; i++) {
+    const AircraftSnapshot& s = trafficSnapshot[plotted[i].snapshotIndex];
+
+    drawTrafficIcon(plotted[i].x, plotted[i].y, s.icon, plotted[i].displayHeading, s.estimated);
+
+    if (s.isClose && closeRingsOn) {
+      u8g2.drawCircle(plotted[i].x, plotted[i].y, 15);
+      u8g2.drawCircle(plotted[i].x, plotted[i].y, 18);
+    }
   }
 
   // Drawn again here, on top of the aircraft markers just plotted above

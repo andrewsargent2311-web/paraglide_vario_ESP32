@@ -48,12 +48,11 @@
 // practice, bump it up rather than treating the number as load-bearing.
 #define MAX_FANET_CONTACTS 16
 
-// A contact this quiet is treated as stale and drops off the radar page
-// -- roughly 6 missed beacons at the default 5s interval
-// (FANET_BEACON_INTERVAL_MS, main .ino), enough margin that one or two
-// dropped packets over a marginal RF link don't make a still-present
-// aircraft flicker on and off.
-#define FANET_CONTACT_TIMEOUT_MS 30000UL
+// An aircraft (ADS-B or FANET) with no update for this long drops off the
+// traffic page. It's staleness only, not distance. From 30 s it's already
+// drawn as an outline, to show its position is an estimate. ADS-B traffic
+// gets longer while the connection is down: TRAFFIC_REMOVE_OFFLINE_MS.
+#define TRAFFIC_REMOVE_AFTER_MS 60000UL
 
 // Live FANET weather-station table -- see FanetWeatherStation below.
 // Ground stations are far less numerous than aircraft in range at once,
@@ -188,6 +187,9 @@ void drawWeatherPage();
 void drawADSBPage();
 void drawParamotorPage();
 void drawDashboard();
+
+// How often loop() should redraw the display when nothing else asks for it.
+unsigned long displayRefreshIntervalMs();
 // Returns true if it actually drew a banner (see its header comment in
 // DrawPages.cpp for why drawDashboard() needs to know that).
 bool drawAirspaceWarning();

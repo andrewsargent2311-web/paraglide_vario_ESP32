@@ -234,15 +234,13 @@ extern bool igcAutoStopEnabled;
 // =====================================================
 // ADS-B RANGE RINGS
 // The "far" (default) range rings drawn by drawADSBPage() -- outer and
-// inner -- shown whenever no aircraft is within the near-zoom trigger
-// distance. Chosen from a fixed preset list (see ADSB_RING_OUTER_CHOICES_KM
-// in menu.cpp); inner is always half of outer. Default (30km/15km)
-// matches the app's original hardcoded values.
+// inner -- shown whenever no relevant aircraft is close enough to zoom in
+// on. Chosen from a fixed preset list (see ADSB_RING_OUTER_CHOICES_KM in
+// menu.cpp); inner is always half of outer. Default (30km/15km) matches the
+// app's original hardcoded values.
 //
-// The near-zoom trigger and its own ring pair are a fixed 10km/5km,
-// triggered whenever any aircraft is within 10km -- that's independent
-// of this setting and is NOT changed by it. See drawADSBPage() in the
-// main .ino for both.
+// Auto-zoom steps in from this range to 60, 30, 10 or 5 km, never wider than
+// this setting. See updateTrafficZoom() in DrawPages.cpp.
 //
 // performADSBUpdate() also reads adsbRingOuterKm directly, as the radius
 // it requests from the adsb.fi API -- see the comment there for why that

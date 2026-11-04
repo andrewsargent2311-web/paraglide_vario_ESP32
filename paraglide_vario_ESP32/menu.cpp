@@ -1,5 +1,6 @@
 #include "menu.h"
 #include "wifi_manager.h"
+#include "CrossCoreState.h"  // adsbFetchStatus
 #include "WifiSetup.h"
 #include "FileServer.h"
 #include "FanetMessaging.h"
@@ -495,7 +496,12 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       int slot = wifiListedSlot(index - 1);
       const char* ssid = (slot >= 0) ? wifiSlotSsid((uint8_t)slot) : "";
       if (slot >= 0 && slot == selectedWifiIndex && wifiEnabled) {
-        snprintf(buf, buflen, "%s%s", ssid, wifiConnected ? " * connected" : " * connecting");
+        // "connected" only means joined to the network, so say if the last
+        // download failed rather than implying the internet works.
+        const char* state = !wifiConnected ? " * connecting"
+                            : (adsbFetchStatus == FETCH_FAILED) ? " * no internet"
+                                                                : " * connected";
+        snprintf(buf, buflen, "%s%s", ssid, state);
       } else {
         snprintf(buf, buflen, "%s", ssid);
       }

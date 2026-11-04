@@ -41,7 +41,7 @@ A DIY flight computer for paragliding and paramotoring that costs about **$60 US
 - **Main flight screen:** altitude, height above ground (AGL), ground speed, heading, QNH, battery
 - **Airspace:** warns you about nearby controlled airspace from an OpenAIP file
 - **Cloud base estimate:** a rough guess of how high the cloud base is, worked out from the temperature, humidity and pressure sensors (see [Cloud base estimate](#cloud-base-estimate))
-- **ADS-B page:** shows nearby aircraft on a radar-style display
+- **ADS-B page:** shows nearby aircraft on a radar-style display, with an icon for each aircraft type, smooth movement between updates and automatic zoom (see [The traffic page](#the-traffic-page))
 - **Voice traffic alerts:** when an aircraft comes close, the speaker tells you where it is, e.g. *"Aircraft on your two o'clock, flying north west, at two thousand four hundred feet, one thousand two hundred feet above you, and is eight hundred meters away."* You can switch this to a siren, or turn it off (see [Voice traffic alerts](#voice-traffic-alerts))
 - **Weather page:** wind from nearby weather stations (Zephyr) or from FANET
 - **FANET:** sends and receives FANET radio messages, with preset messages you can broadcast
@@ -330,6 +330,30 @@ Notes:
 - If the setup page won't open, or your phone keeps dropping the `Vario-Setup` WiFi, turn mobile data off until you've finished. The hotspot has no internet, so some phones leave it or try to use mobile data instead. The unit's screen shows this reminder too.
 - Normal WiFi (ADS-B, weather, Export Files) pauses while the hotspot is up.
 - The unit can only use **2.4 GHz** networks. Set phone hotspots to 2.4 GHz.
+
+## The traffic page
+
+The ADS-B page shows aircraft around you, from adsb.fi over WiFi and from FANET radio.
+
+- **Icons:** light aircraft, jet/airliner, helicopter, glider, paraglider and hang glider, each turned to show which way it's heading. If the type isn't known, it shows as a light aircraft. ADS-B can't tell a paraglider from a hang glider or ultralight, so those all show as a paraglider. FANET reports the exact type.
+- **Movement:** between updates, each aircraft moves forward using its last speed and track. After 30 seconds with no update it changes to an **outline**, meaning its position is only an estimate. After 60 seconds it's removed.
+- **Close traffic:** an airborne ADS-B aircraft within 5 km and 4,000 ft gets a flashing double ring and a black label with white text. Aircraft on the ground are still shown, but don't flash. FANET traffic doesn't flash either, because pilots flying together are often this close. Voice and siren alerts have their own distances, in **ADSB Settings**.
+- **Range and zoom:** the widest view is your **Range Rings** setting. The page zooms in to 30, 10 or 5 km to fit the nearest aircraft within 3,000 ft of your altitude. It zooms in straight away, and waits 10 seconds before zooming back out. Other aircraft are still drawn if they're in view, but don't affect the zoom. The ring labels always show the current range.
+- **Labels:** every aircraft has a label, placed on whichever side of its icon is clear. In a tight group a label may sit further out, with a thin line back to its aircraft.
+
+When there's nothing to plot, the page says why:
+
+| Message | Meaning |
+|---|---|
+| **Waiting for GPS fix** | The unit hasn't had a GPS position yet |
+| **No WiFi** | The unit isn't connected to WiFi, so it can't get ADS-B traffic |
+| **No internet** | WiFi is connected, but the last download failed |
+| **Checking for traffic** | Waiting for the first download to finish |
+| **No traffic within N km** | The download worked and nothing is in range. N is your Range Rings setting |
+
+The Weather page uses the same GPS, WiFi and internet messages.
+
+**If the connection drops:** ADS-B aircraft stay on the page for up to 2 minutes, as outlines still moving along their last track, and a message at the bottom right says **Reconnecting...**. Treat these positions as rough estimates: an aircraft may have turned. The unit keeps trying to reconnect by itself, every 20 seconds at first and then every minute. If it's still joined to the network but three traffic downloads in a row fail (about 45 seconds), it restarts the connection, and **Connections → WiFi** shows **no internet** rather than **connected**.
 
 ## Voice traffic alerts
 
