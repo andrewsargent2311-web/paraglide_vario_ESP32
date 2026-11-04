@@ -302,6 +302,13 @@ The unit has **one button**:
 
 **Flight logs:** the unit automatically starts recording an `.IGC` file when you start moving (above about 10 km/h for 10 seconds). To download logs, open **Flight recordings → Export files**. Once the unit is connected to WiFi it shows a web address (something like `http://192.168.x.x/`). Open that in a browser on a phone or computer on the same network and click the file to download.
 
+The same page also lets you:
+- **Delete** old flight recordings (asks to confirm first).
+- **Upload** a new `.ADEM` terrain map or a replacement `AIRSPACE.txt` straight to the SD card, so you don't need to take the card out. Large maps take several minutes over WiFi, so do it on the ground. Then pick the new map from **Menu → Map**.
+- **Delete** maps you no longer need (the map currently in use can't be deleted or replaced; choose a different one in the Map menu first).
+
+Deleting and uploading are switched off while a flight is being recorded.
+
 ---
 
 ## Adding a WiFi network from your phone
