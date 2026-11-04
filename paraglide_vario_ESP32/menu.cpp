@@ -11,6 +11,7 @@
 #include <string.h>
 #include <strings.h>  // strcasecmp
 #include <math.h>     // fabsf
+#include <qrcode.h>   // QR encoder built into the ESP32 framework (esp_qrcode_*)
 
 bool menuActive = false;
 uint8_t menuSelectedIndex = 0;
@@ -295,7 +296,7 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_FANET_MESSAGING: return 1 + FANET_MESSAGE_PRESET_COUNT;
     case MENU_SCREEN_WIFI_LIST:
       return 1 + wifiListedCount() + 1 + (wifiDeviceSavedCount() > 0 ? 1 : 0);
-    case MENU_SCREEN_WIFI_SETUP: return 4;
+    case MENU_SCREEN_WIFI_SETUP: return 1;  // Cancel/Done; the rest is drawWifiSetupScreen()
     case MENU_SCREEN_WIFI_FORGET: return wifiDeviceSavedCount() > 0 ? wifiDeviceSavedCount() : 1;
     case MENU_SCREEN_BLUETOOTH: return 3;
     case MENU_SCREEN_BLUETOOTH_SCAN: return bleScanResultCount() > 0 ? bleScanResultCount() : 1;
@@ -468,23 +469,7 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       break;
     }
     case MENU_SCREEN_WIFI_SETUP:
-      switch (index) {
-        case 0: snprintf(buf, buflen, "1. Join WiFi:"); break;
-        case 1: snprintf(buf, buflen, "   %s", WIFI_SETUP_AP_NAME); break;
-        case 2:
-          switch (wifiSetupState()) {
-            case WIFI_SETUP_STARTING:     snprintf(buf, buflen, "Scanning..."); break;
-            case WIFI_SETUP_WAITING:      snprintf(buf, buflen, "2. Open 192.168.4.1"); break;
-            case WIFI_SETUP_PHONE_JOINED: snprintf(buf, buflen, "Phone joined - set up"); break;
-            case WIFI_SETUP_SAVED:        snprintf(buf, buflen, "Saved: %s", wifiSetupSavedSsid()); break;
-            case WIFI_SETUP_FAILED:       snprintf(buf, buflen, "Hotspot failed"); break;
-            default:                      snprintf(buf, buflen, "Closed"); break;
-          }
-          break;
-        case 3:
-          snprintf(buf, buflen, "%s", isWifiSetupActive() ? "Cancel" : "Done");
-          break;
-      }
+      snprintf(buf, buflen, "%s", isWifiSetupActive() ? "Cancel" : "Done");
       break;
     case MENU_SCREEN_WIFI_FORGET: {
       int slot = wifiDeviceSavedSlot(index);
@@ -800,7 +785,6 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
       if (index == listed + 1) {
         // Add Network -- opens the Vario-Setup hotspot (WifiSetup.h).
         pushMenuScreen(MENU_SCREEN_WIFI_SETUP);
-        menuSelectedIndex = 3;  // park on Cancel/Done, the only action
         startWifiSetup();
         playFeedbackTone(900.0f, 80);
         return;
@@ -822,11 +806,7 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
     }
 
     case MENU_SCREEN_WIFI_SETUP:
-      if (index == 3) {
-        menuGoBack();  // also closes the hotspot if it's still up
-        return;
-      }
-      playFeedbackTone(900.0f, 40);  // instruction/status rows -- informational
+      menuGoBack();  // Cancel/Done -- also closes the hotspot if it's still up
       return;
 
     case MENU_SCREEN_WIFI_FORGET: {
@@ -1158,6 +1138,181 @@ bool menuSelectionIsImmediate() {
 }
 
 // =====================================================
+// ADD NETWORK SCREEN: the two steps side by side (left, then right), each
+// with its own QR code and written fallback, then a status line saying
+// which step to do next, with Cancel/Done as the only selectable row. It
+// has its own layout because the steps must all stay on screen at once,
+// which the big list rows in drawMenu() can't fit.
+//
+// Both QR codes are encoded once, the first time this screen is drawn,
+// then kept: their text never changes, and this runs on Core 1, which
+// mustn't repeat work it doesn't need to.
+// =====================================================
+
+// Version 3 is 29x29 modules. If either string below ever outgrows it,
+// encoding fails, that QR code is left off the screen and the written
+// instructions still work.
+//
+// The two codes should look the same size, but the encoder always picks
+// the smallest version that fits, and the URL is much shorter. So each
+// code gets its own error correction level, chosen to land on version 3:
+//   Join string, 37 bytes: ECC medium (version 3 holds 42; version 2, 26)
+//   URL, 19 bytes:         ECC high   (version 3 holds 24; version 2, 14)
+#define WIFI_SETUP_QR_MAX_VERSION 3
+#define WIFI_SETUP_QR_MAX_MODULES 29
+// 4px per module is about 0.85mm on this panel (~4.7 px/mm), which phones
+// scan comfortably, and leaves each code its blank margin in a half-screen
+// column: 116px wide in 150px, so 17px either side.
+#define WIFI_SETUP_QR_SCALE_PX 4
+
+struct WifiSetupQr {
+  uint8_t size;  // modules per side; 0 = not available
+  uint32_t rows[WIFI_SETUP_QR_MAX_MODULES];  // bit x of rows[y] set = dark
+};
+
+static WifiSetupQr wifiJoinQr;
+static WifiSetupQr wifiPageQr;
+static WifiSetupQr* wifiQrBeingEncoded = nullptr;
+
+// esp_qrcode_generate() hands the finished code to a callback, with no
+// way to pass it a destination -- hence wifiQrBeingEncoded above. The
+// callback runs before esp_qrcode_generate() returns, on the same task.
+static void captureWifiSetupQr(esp_qrcode_handle_t qrcode) {
+  int size = esp_qrcode_get_size(qrcode);
+  if (size > WIFI_SETUP_QR_MAX_MODULES) return;
+
+  for (int y = 0; y < size; y++) {
+    uint32_t row = 0;
+    for (int x = 0; x < size; x++) {
+      if (esp_qrcode_get_module(qrcode, x, y)) row |= (1UL << x);
+    }
+    wifiQrBeingEncoded->rows[y] = row;
+  }
+  wifiQrBeingEncoded->size = (uint8_t)size;
+}
+
+static void encodeWifiSetupQr(WifiSetupQr& qr, const char* text, int eccLevel) {
+  qr.size = 0;
+  wifiQrBeingEncoded = &qr;
+
+  esp_qrcode_config_t config = {};
+  config.display_func = captureWifiSetupQr;
+  config.max_qrcode_version = WIFI_SETUP_QR_MAX_VERSION;
+  config.qrcode_ecc_level = eccLevel;
+
+  if (esp_qrcode_generate(&config, text) != ESP_OK || qr.size == 0) {
+    Serial.printf("[WIFI SETUP] Could not make a QR code for '%s'\n", text);
+  }
+}
+
+// Draws a QR code centred on (centreX, centreY).
+static void drawWifiSetupQr(const WifiSetupQr& qr, int centreX, int centreY) {
+  const int sidePx = qr.size * WIFI_SETUP_QR_SCALE_PX;
+  const int left = centreX - sidePx / 2;
+  const int top = centreY - sidePx / 2;
+
+  u8g2.setDrawColor(1);
+  for (int y = 0; y < qr.size; y++) {
+    for (int x = 0; x < qr.size; x++) {
+      if (qr.rows[y] & (1UL << x)) {
+        u8g2.drawBox(left + x * WIFI_SETUP_QR_SCALE_PX, top + y * WIFI_SETUP_QR_SCALE_PX,
+                     WIFI_SETUP_QR_SCALE_PX, WIFI_SETUP_QR_SCALE_PX);
+      }
+    }
+  }
+}
+
+static void drawCentredStr(int centreX, int baselineY, const char* text) {
+  u8g2.drawStr(centreX - u8g2.getStrWidth(text) / 2, baselineY, text);
+}
+
+static void drawWifiSetupScreen() {
+  static bool qrEncoded = false;
+  if (!qrEncoded) {
+    encodeWifiSetupQr(wifiJoinQr, "WIFI:T:WPA;S:" WIFI_SETUP_AP_NAME
+                                  ";P:" WIFI_SETUP_AP_PASSWORD ";;", ESP_QRCODE_ECC_MED);
+    encodeWifiSetupQr(wifiPageQr, WIFI_SETUP_URL, ESP_QRCODE_ECC_HIGH);
+    qrEncoded = true;
+  }
+
+  // Layout notes: a QR code needs 4 modules (16px) of blank space around
+  // it to scan reliably, which is what sets the gaps above and below the
+  // codes, and why the divider sits exactly between them.
+  const int leftCentreX = SCREEN_W / 4;
+  const int rightCentreX = SCREEN_W * 3 / 4;
+  const int headingY = 62;
+  const int detailLine1Y = 81;
+  const int detailLine2Y = 98;
+  const int qrCentreY = 176;
+  const int captionY = 263;
+  const int stepsBottom = 276;
+  const int statusY = 306;
+  const int noteY = 334;
+  const int cancelTop = 356;
+  const int cancelH = SCREEN_H - cancelTop;
+
+  // The steps are always shown, whatever the status line says.
+  u8g2.setDrawColor(1);
+  u8g2.drawLine(SCREEN_W / 2, 40, SCREEN_W / 2, stepsBottom);
+  u8g2.drawLine(0, stepsBottom, SCREEN_W, stepsBottom);
+
+  u8g2.setFont(u8g2_font_helvB12_tf);
+  drawCentredStr(leftCentreX, headingY, "1. Join WiFi");
+  drawCentredStr(rightCentreX, headingY, "2. Open page");
+
+  drawWifiSetupQr(wifiJoinQr, leftCentreX, qrCentreY);
+  drawWifiSetupQr(wifiPageQr, rightCentreX, qrCentreY);
+
+  u8g2.setFont(u8g2_font_helvR10_tf);
+  drawCentredStr(leftCentreX, detailLine1Y, "Name: " WIFI_SETUP_AP_NAME);
+  drawCentredStr(leftCentreX, detailLine2Y, "Password: " WIFI_SETUP_AP_PASSWORD);
+  drawCentredStr(leftCentreX, captionY, "Scan to join");
+  drawCentredStr(rightCentreX, detailLine1Y, "In a browser, go to:");
+  drawCentredStr(rightCentreX, detailLine2Y, WIFI_SETUP_IP);
+  drawCentredStr(rightCentreX, captionY, "Scan to open");
+
+  // Status gets its own line, so it can't push a step off the screen.
+  char status[48];
+  const WifiSetupState state = wifiSetupState();
+  switch (state) {
+    case WIFI_SETUP_STARTING:     snprintf(status, sizeof(status), "Scanning for networks..."); break;
+    case WIFI_SETUP_WAITING:      snprintf(status, sizeof(status), "Hotspot on: do step 1"); break;
+    case WIFI_SETUP_PHONE_JOINED: snprintf(status, sizeof(status), "Phone joined: now do step 2"); break;
+    case WIFI_SETUP_SAVED:        snprintf(status, sizeof(status), "Saved: %s", wifiSetupSavedSsid()); break;
+    case WIFI_SETUP_FAILED:       snprintf(status, sizeof(status), "Hotspot failed to start"); break;
+    default:                      snprintf(status, sizeof(status), "Hotspot closed"); break;
+  }
+  // A long network name is trimmed to fit rather than running off the edge.
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  size_t statusLen = strlen(status);
+  while (statusLen > 0 && u8g2.getStrWidth(status) > SCREEN_W - 20) {
+    status[--statusLen] = '\0';
+  }
+  drawCentredStr(SCREEN_W / 2, statusY, status);
+
+  // The hotspot has no internet, so a phone with mobile data on may leave
+  // it or send the page over mobile data instead, and the page won't open.
+  // This has to be here, not only on the setup page, because that page is
+  // exactly what can't be reached when it happens.
+  u8g2.setFont(u8g2_font_helvR10_tf);
+  if (state == WIFI_SETUP_SAVED) {
+    drawCentredStr(SCREEN_W / 2, noteY, "You can turn mobile data back on");
+  } else if (state == WIFI_SETUP_STARTING || state == WIFI_SETUP_WAITING ||
+             state == WIFI_SETUP_PHONE_JOINED) {
+    drawCentredStr(SCREEN_W / 2, noteY, "Page won't open? Turn mobile data off");
+  }
+
+  // Cancel/Done is the screen's only item, so it's always highlighted.
+  char label[32];
+  getMenuItemLabel(MENU_SCREEN_WIFI_SETUP, 0, label, sizeof(label));
+  u8g2.setFont(u8g2_font_helvB14_tf);
+  u8g2.drawBox(0, cancelTop, SCREEN_W, cancelH);
+  u8g2.setDrawColor(0);  // inverted text, as on any highlighted menu row
+  u8g2.drawStr(14, cancelTop + cancelH / 2 + 5, label);
+  u8g2.setDrawColor(1);
+}
+
+// =====================================================
 // MENU RENDERING: full-screen list shown instead of the normal top bar +
 // page while menuActive is true. Generic over whichever screen is on top
 // of the navigation stack -- see getMenuTitle()/getMenuItemCount()/
@@ -1170,6 +1325,11 @@ void drawMenu() {
   u8g2.setFont(u8g2_font_helvB14_tf);
   u8g2.drawStr(10, 30, getMenuTitle(screen));
   u8g2.drawLine(0, 40, SCREEN_W, 40);
+
+  if (screen == MENU_SCREEN_WIFI_SETUP) {
+    drawWifiSetupScreen();
+    return;
+  }
 
   const int top = 40;
   const int available = SCREEN_H - top;

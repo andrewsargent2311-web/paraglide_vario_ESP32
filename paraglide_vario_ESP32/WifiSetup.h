@@ -11,10 +11,12 @@
 //
 //   1. Pick "Add Network" in the menu.
 //   2. The vario scans for nearby networks, then turns itself into a
-//      temporary open hotspot called WIFI_SETUP_AP_NAME.
+//      temporary hotspot called WIFI_SETUP_AP_NAME, protected by
+//      WIFI_SETUP_AP_PASSWORD. Both are shown on the screen, along with a
+//      QR code for joining it and a QR code for the setup page.
 //   3. Join that hotspot on the phone. Most phones pop up the setup page
 //      by themselves (captive portal); if not, browse to
-//      http://192.168.4.1/
+//      WIFI_SETUP_URL.
 //   4. Tap a network (or type a hidden one), enter the password, Save.
 //   5. The network is stored in flash (addSavedWifiNetwork(),
 //      wifi_manager.h), the hotspot closes, and the vario connects to it.
@@ -25,11 +27,19 @@
 // the portal is up, and resumes afterwards -- on the new network if one
 // was saved, otherwise on whatever was selected before.
 //
-// Closes itself after WIFI_SETUP_TIMEOUT_MS of no saved network, so an
-// open hotspot can never be left running by accident.
+// Closes itself after WIFI_SETUP_TIMEOUT_MS of no saved network, so the
+// hotspot can never be left running by accident.
 // =====================================================
 
 #define WIFI_SETUP_AP_NAME "Vario-Setup"
+// WPA2 needs at least 8 characters, or softAP() refuses to start. This is
+// deliberately not a secret (it's printed on the screen): it just stops
+// passers-by wandering onto the hotspot during the few minutes it's up.
+#define WIFI_SETUP_AP_PASSWORD "GetHigh!"
+// softAP()'s default address. The IP is what's written on the screen (and
+// what phones display after scanning); the URL is what goes in the QR code.
+#define WIFI_SETUP_IP "192.168.4.1"
+#define WIFI_SETUP_URL "http://" WIFI_SETUP_IP "/"
 #define WIFI_SETUP_TIMEOUT_MS (10UL * 60UL * 1000UL)
 
 enum WifiSetupState {

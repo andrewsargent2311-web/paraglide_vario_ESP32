@@ -183,6 +183,9 @@ static void handleRoot() {
           "2.4&nbsp;GHz &ndash; the vario can't use 5&nbsp;GHz.</p>"
           "<button type=\"submit\">Save &amp; connect</button></form>"
           "<p><a href=\"/rescan\">Scan again</a></p>"
+          "<p class=\"note\"><b>Tips:</b> If this page closes, reopen "
+          "<b>192.168.4.1</b> in your browser. If your phone keeps dropping the "
+          "Vario-Setup WiFi, turn its mobile data off until you've finished.</p>"
           "</body></html>";
 
   setupServer.send(200, "text/html", html);
@@ -319,9 +322,9 @@ static void setupTask(void*) {
     WiFi.scanDelete();
   }
 
-  // 2. Bring up the open hotspot (station side kept on for rescans).
+  // 2. Bring up the WPA2 hotspot (station side kept on for rescans).
   WiFi.mode(WIFI_AP_STA);
-  if (!WiFi.softAP(WIFI_SETUP_AP_NAME)) {
+  if (!WiFi.softAP(WIFI_SETUP_AP_NAME, WIFI_SETUP_AP_PASSWORD)) {
     Serial.println("[WIFI SETUP] Could not start the hotspot");
     setupState = WIFI_SETUP_FAILED;
     finishSetup();

@@ -315,16 +315,19 @@ Deleting and uploading are switched off while a flight is being recorded. Tracks
 
 You can add a network (for example a friend's hotspot, or the WiFi at a new launch site) straight from the unit, with no computer needed.
 
-1. Open **Menu → Connections → WiFi → + Add Network**. The unit scans for nearby networks, then starts its own temporary WiFi hotspot called **`Vario-Setup`**.
-2. On your phone, join the **`Vario-Setup`** WiFi network. Most phones open the setup page automatically. If yours doesn't, open a browser and go to **`http://192.168.4.1`**.
-3. Tap your network in the list (or choose **Other / hidden network** and type its name), enter the password and tap **Save & connect**.
-4. The hotspot closes and the unit connects to the new network. The menu shows **Saved: *network name***. Your phone goes back to its normal WiFi.
+1. Open **Menu → Connections → WiFi → + Add Network**. The unit scans for nearby networks, then starts its own temporary WiFi hotspot called **`Vario-Setup`**. The screen shows two steps side by side, each with a QR code, and a status line underneath that tells you which step to do next.
+2. **Step 1 (left):** on your phone, scan the left QR code to join the hotspot, or join the **`Vario-Setup`** WiFi network by hand using the password **`GetHigh!`**.
+3. **Step 2 (right):** scan the right QR code, or open a browser and go to **`192.168.4.1`**. Some phones open the setup page by themselves after step 1, in which case you can skip this.
+4. Tap your network in the list (or choose **Other / hidden network** and type its name), enter the password and tap **Save & connect**.
+5. The hotspot closes and the unit connects to the new network. The menu shows **Saved: *network name***. Your phone goes back to its normal WiFi.
 
 Notes:
 - The unit remembers up to **5** networks added this way, on top of the ones in `secrets.h`. They are kept through reboots **and** firmware updates. When all 5 are used, the oldest is replaced.
 - Saving a network that is already stored updates its password, so this is also how you fix a wrong password.
 - **Connections → WiFi → − Forget Network** removes a network added this way. Networks in `secrets.h` can only be changed by editing that file and uploading again.
-- The `Vario-Setup` hotspot is open (no password) and only runs while the Add Network screen is in use. It closes on **Cancel**, after a network is saved, or after 10 minutes of inactivity.
+- The `Vario-Setup` hotspot uses WPA2 with the password `GetHigh!`, and only runs while the Add Network screen is in use. It closes on **Cancel**, after a network is saved, or after 10 minutes of inactivity.
+- If the setup page closes on your phone, open **`192.168.4.1`** in your browser again.
+- If the setup page won't open, or your phone keeps dropping the `Vario-Setup` WiFi, turn mobile data off until you've finished. The hotspot has no internet, so some phones leave it or try to use mobile data instead. The unit's screen shows this reminder too.
 - Normal WiFi (ADS-B, weather, Export Files) pauses while the hotspot is up.
 - The unit can only use **2.4 GHz** networks. Set phone hotspots to 2.4 GHz.
 
