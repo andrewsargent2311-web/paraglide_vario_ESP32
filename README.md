@@ -298,7 +298,7 @@ The unit has **one button**:
 - **Map:** choose which terrain map to use
 - **ADS-B settings:** alert radius and vertical threshold, auto-jump to the ADS-B page, **Alarm Sound** (Off / Alarm / Voice), **Alert Volume**, range rings, airspace bars, and **Voice** profile
 - **Weather settings:** update interval, number of stations, data source
-- **Flight recordings:** recording on/off, **Export files** (see below), auto-stop
+- **Flight recordings:** recording on/off, **Export files** (see below), auto-stop, **Flights** (see below)
 
 **Flight logs:** the unit automatically starts recording an `.IGC` file when you start moving (above about 10 km/h for 10 seconds). To download logs, open **Flight recordings → Export files**. Once the unit is connected to WiFi it shows a web address (something like `http://192.168.x.x/`). Open that in a browser on a phone or computer on the same network and click the file to download. If the server can't start, the screen tells you why: **WiFi not connected**, or **No SD card** (insert one and restart the unit, as it only checks for a card when it starts up).
 
@@ -308,6 +308,8 @@ The same page also lets you:
 - **Delete** maps you no longer need (the map currently in use can't be deleted or replaced; choose a different one in the Map menu first).
 
 Deleting and uploading are switched off while a flight is being recorded. Tracks are recorded at **one point per second**.
+
+**Flights:** **Flight recordings → Flights** lists your 12 most recent flights, newest first, with the date, take-off time, duration, maximum altitude and best climb. Take-off time is when recording started, so it may be earlier than your actual take-off if the unit was already moving, for example in a car on the way to launch. Summaries are saved to `FLIGHTS.CSV` on the SD card about once a minute during a flight, so turning the unit off loses at most the last minute of the summary, and the IGC file itself isn't affected. Flights recorded before this feature show only the date, time and duration.
 
 ---
 

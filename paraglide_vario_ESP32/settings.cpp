@@ -17,7 +17,10 @@ int8_t utcOffsetHours = 12;
 void getPilotLocalTime(struct tm* outTm) {
   time_t now;
   time(&now);
+  pilotLocalTimeFromEpoch(now, outTm);
+}
 
+void pilotLocalTimeFromEpoch(time_t now, struct tm* outTm) {
   if (timeZoneMode == TZ_MODE_MANUAL) {
     // Shift the UTC epoch by the fixed offset and read it back out with
     // gmtime_r() (not localtime_r()) so the NZ_TIMEZONE DST rule set at

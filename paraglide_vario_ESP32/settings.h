@@ -55,6 +55,8 @@ extern int8_t utcOffsetHours;  // only used while timeZoneMode == TZ_MODE_MANUAL
 // Fills outTm with the pilot-facing local time (right now), honouring
 // timeZoneMode/utcOffsetHours above. Always reads the live system clock.
 void getPilotLocalTime(struct tm* outTm);
+// The same conversion for any moment, such as when a past flight started.
+void pilotLocalTimeFromEpoch(time_t epoch, struct tm* outTm);
 
 // =====================================================
 // VARIO BEEP TIMING

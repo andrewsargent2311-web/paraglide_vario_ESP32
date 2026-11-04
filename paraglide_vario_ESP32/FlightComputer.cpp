@@ -52,6 +52,7 @@
 #include "WeatherClient.h"
 #include "PageButton.h"
 #include "IgcRecorder.h"
+#include "FlightLog.h"
 #include "BackgroundTask.h"
 
 static TaskHandle_t audioTaskHandle = nullptr;
@@ -673,6 +674,7 @@ void loop() {
   // ---------------------------------------------------------
   const uint32_t igcStartMs = millis();
   updateIgcRecorder();
+  flightLogUpdate();
   const uint32_t igcElapsedMs = (uint32_t)(millis() - igcStartMs);
   if (igcElapsedMs > maxIgcMs) maxIgcMs = igcElapsedMs;
   static uint32_t lastAirspaceAlertMs = 0;

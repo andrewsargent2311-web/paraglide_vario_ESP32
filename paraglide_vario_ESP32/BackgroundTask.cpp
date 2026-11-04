@@ -9,6 +9,7 @@
 #include "wifi_manager.h"
 #include "ble_manager.h"
 #include "FileServer.h"
+#include "FlightLog.h"
 #include "menu.h"
 #include "settings.h"
 #include "VoiceAlert.h"
@@ -192,6 +193,10 @@ void backgroundTask(void* parameter) {
     // 1 must never be delayed (see this function's header comment).
     // No-ops immediately if the server isn't currently started.
     fileServerLoop();
+
+    // Flight summaries and the Flights screen's list (FlightLog.h). Here
+    // because it reads and writes the SD card.
+    flightLogService();
 
     // ---------------------------------------------------------
     // Network state machines
