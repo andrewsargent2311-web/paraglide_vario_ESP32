@@ -196,6 +196,7 @@ static const WifiNetwork WIFI_NETWORKS[WIFI_NETWORK_COUNT] = {
 - Use a **2.4 GHz** network. The ESP32 can't connect to 5 GHz WiFi.
 - Leave unused slots as empty quotes `""`.
 - A **phone hotspot** is handy at the launch site, since that's how the ADS-B traffic and weather pages get their data in the field.
+- You can also add networks later **from your phone, without reflashing**. See [Adding a WiFi network from your phone](#adding-a-wifi-network-from-your-phone).
 
 ## Step 6: Build and upload the code
 
@@ -292,7 +293,7 @@ The unit has **one button**:
 
 - **Main Page:** choose Paraglider or Paramotor as the first page
 - **Config:** time zone, units (altitude / speed), main volume, vario beep (climb and sink volume), screen orientation
-- **Connections:** WiFi on/off and network choice, Bluetooth (engine meter), FANET on/off
+- **Connections:** WiFi on/off, network choice, **Add Network** and **Forget Network** (see below), Bluetooth (engine meter), FANET on/off
 - **FANET Messaging:** messaging on/off, and the preset messages you can broadcast
 - **Map:** choose which terrain map to use
 - **ADS-B settings:** alert radius and vertical threshold, auto-jump to the ADS-B page, **Alarm Sound** (Off / Alarm / Voice), **Alert Volume**, range rings, airspace bars, and **Voice** profile
@@ -302,6 +303,23 @@ The unit has **one button**:
 **Flight logs:** the unit automatically starts recording an `.IGC` file when you start moving (above about 10 km/h for 10 seconds). To download logs, open **Flight recordings → Export files**. Once the unit is connected to WiFi it shows a web address (something like `http://192.168.x.x/`). Open that in a browser on a phone or computer on the same network and click the file to download.
 
 ---
+
+## Adding a WiFi network from your phone
+
+You can add a network (for example a friend's hotspot, or the WiFi at a new launch site) straight from the unit, with no computer needed.
+
+1. Open **Menu → Connections → WiFi → + Add Network**. The unit scans for nearby networks, then starts its own temporary WiFi hotspot called **`Vario-Setup`**.
+2. On your phone, join the **`Vario-Setup`** WiFi network. Most phones open the setup page automatically. If yours doesn't, open a browser and go to **`http://192.168.4.1`**.
+3. Tap your network in the list (or choose **Other / hidden network** and type its name), enter the password and tap **Save & connect**.
+4. The hotspot closes and the unit connects to the new network. The menu shows **Saved: *network name***. Your phone goes back to its normal WiFi.
+
+Notes:
+- The unit remembers up to **5** networks added this way, on top of the ones in `secrets.h`. They are kept through reboots **and** firmware updates. When all 5 are used, the oldest is replaced.
+- Saving a network that is already stored updates its password, so this is also how you fix a wrong password.
+- **Connections → WiFi → − Forget Network** removes a network added this way. Networks in `secrets.h` can only be changed by editing that file and uploading again.
+- The `Vario-Setup` hotspot is open (no password) and only runs while the Add Network screen is in use. It closes on **Cancel**, after a network is saved, or after 10 minutes of inactivity.
+- Normal WiFi (ADS-B, weather, Export Files) pauses while the hotspot is up.
+- The unit can only use **2.4 GHz** networks. Set phone hotspots to 2.4 GHz.
 
 ## Voice traffic alerts
 
@@ -457,6 +475,7 @@ The firmware lives in `paraglide_vario_ESP32/` and is split into one `.h`/`.cpp`
 | `WeatherClient` | Weather station data |
 | `Gps`, `SdCard`, `Display`, `IgcRecorder` | GPS object, SD card, screen, flight logging |
 | `BackgroundTask` | The second processor core: WiFi, Bluetooth, web file server, ADS-B and weather polling, terrain and airspace lookups |
+| `wifi_manager`, `WifiSetup` | WiFi connection and saved networks; the `Vario-Setup` phone portal for adding networks from the device |
 | `PageButton`, `menu`, `settings`, `DrawPages` | The single button, the menus, saved settings and drawing the pages |
 
 ## Credits

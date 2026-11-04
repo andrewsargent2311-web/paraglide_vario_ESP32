@@ -58,6 +58,11 @@ extern uint8_t activePageIndex;
 //   |     |                      (wifi_manager.h) -- then pick a saved
 //   |     |                      network -- see secrets.h; choice is
 //   |     |                      remembered across reboots)
+//   |     |     |-- WIFI_SETUP  ("Add Network" -- opens the Vario-Setup
+//   |     |     |                hotspot so a network + password can be
+//   |     |     |                entered from a phone; see WifiSetup.h)
+//   |     |     `-- WIFI_FORGET (remove a network added from the device;
+//   |     |                      only listed once at least one exists)
 //   |     |-- BLUETOOTH
 //   |     |     |-- (On/Off toggle, cycled in place)
 //   |     |     |-- SCAN        (live-updating list of nearby BLE
@@ -161,7 +166,9 @@ enum MenuScreen {
   MENU_SCREEN_WEATHER_SOURCE,
   MENU_SCREEN_FLIGHT_RECORDINGS,
   MENU_SCREEN_EXPORT_FILES,
-  MENU_SCREEN_FANET_MESSAGING
+  MENU_SCREEN_FANET_MESSAGING,
+  MENU_SCREEN_WIFI_SETUP,
+  MENU_SCREEN_WIFI_FORGET
 };
 
 extern bool menuActive;

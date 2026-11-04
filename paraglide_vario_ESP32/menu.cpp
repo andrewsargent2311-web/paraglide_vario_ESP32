@@ -1,5 +1,6 @@
 #include "menu.h"
 #include "wifi_manager.h"
+#include "WifiSetup.h"
 #include "FileServer.h"
 #include "FanetMessaging.h"
 #include "ble_manager.h"
@@ -59,6 +60,11 @@ void menuGoBack() {
   // nobody's looking at anymore.
   if (currentMenuScreen() == MENU_SCREEN_BLUETOOTH_SCAN) {
     bleStopScan();
+  }
+  // Leaving Add Network closes the setup hotspot (no-op once it has
+  // already closed itself after a save).
+  if (currentMenuScreen() == MENU_SCREEN_WIFI_SETUP) {
+    stopWifiSetup();
   }
 
   if (menuStackDepth > 1) {
@@ -229,6 +235,50 @@ static const uint8_t WEATHER_STATIONS_CHOICE_COUNT = 3;
 // =====================================================
 // SCREEN CONTENT: item counts, titles, and labels
 // =====================================================
+// =====================================================
+// WIFI LIST HELPERS
+// The WiFi screen lists only the networks that actually exist (secrets.h
+// entries plus any added from the device -- see wifi_manager.h), then
+// "Add Network", then "Forget Network" once there's something to forget:
+//   row 0                 WiFi: On/Off
+//   rows 1..N             networks (N = wifiListedCount())
+//   row N+1               Add Network
+//   row N+2               Forget Network   (only if any are device-saved)
+// =====================================================
+static uint8_t wifiListedCount() {
+  uint8_t n = 0;
+  for (uint8_t s = 0; s < wifiTotalSlots(); s++) {
+    if (wifiSlotValid(s)) n++;
+  }
+  return n;
+}
+
+static int wifiListedSlot(uint8_t nth) {  // nth listed network -> slot
+  for (uint8_t s = 0; s < wifiTotalSlots(); s++) {
+    if (!wifiSlotValid(s)) continue;
+    if (nth == 0) return s;
+    nth--;
+  }
+  return -1;
+}
+
+static uint8_t wifiDeviceSavedCount() {
+  uint8_t n = 0;
+  for (uint8_t s = 0; s < wifiTotalSlots(); s++) {
+    if (wifiSlotIsDeviceSaved(s) && wifiSlotValid(s)) n++;
+  }
+  return n;
+}
+
+static int wifiDeviceSavedSlot(uint8_t nth) {  // nth forgettable network -> slot
+  for (uint8_t s = 0; s < wifiTotalSlots(); s++) {
+    if (!wifiSlotIsDeviceSaved(s) || !wifiSlotValid(s)) continue;
+    if (nth == 0) return s;
+    nth--;
+  }
+  return -1;
+}
+
 static uint8_t getMenuItemCount(MenuScreen screen) {
   switch (screen) {
     case MENU_SCREEN_MAIN: return 8;
@@ -243,7 +293,10 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_SCREEN: return 2;
     case MENU_SCREEN_CONNECTIONS: return 3;
     case MENU_SCREEN_FANET_MESSAGING: return 1 + FANET_MESSAGE_PRESET_COUNT;
-    case MENU_SCREEN_WIFI_LIST: return WIFI_NETWORK_COUNT + 1;
+    case MENU_SCREEN_WIFI_LIST:
+      return 1 + wifiListedCount() + 1 + (wifiDeviceSavedCount() > 0 ? 1 : 0);
+    case MENU_SCREEN_WIFI_SETUP: return 4;
+    case MENU_SCREEN_WIFI_FORGET: return wifiDeviceSavedCount() > 0 ? wifiDeviceSavedCount() : 1;
     case MENU_SCREEN_BLUETOOTH: return 3;
     case MENU_SCREEN_BLUETOOTH_SCAN: return bleScanResultCount() > 0 ? bleScanResultCount() : 1;
     case MENU_SCREEN_MAP: return mapFileCount > 0 ? mapFileCount : 1;
@@ -277,6 +330,8 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_CONNECTIONS: return "CONNECTIONS";
     case MENU_SCREEN_FANET_MESSAGING: return "FANET MESSAGING";
     case MENU_SCREEN_WIFI_LIST: return "WIFI";
+    case MENU_SCREEN_WIFI_SETUP: return "ADD NETWORK";
+    case MENU_SCREEN_WIFI_FORGET: return "FORGET NETWORK";
     case MENU_SCREEN_BLUETOOTH: return "BLUETOOTH";
     case MENU_SCREEN_BLUETOOTH_SCAN: return "SCAN DEVICES";
     case MENU_SCREEN_MAP: return "MAP";
@@ -394,15 +449,49 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         snprintf(buf, buflen, "WiFi: %s", wifiEnabled ? "On" : "Off");
         break;
       }
-      const char* ssid = WIFI_NETWORKS[index - 1].ssid;
-      bool isEmpty = (ssid == nullptr || ssid[0] == '\0');
-      bool isSelected = (index - 1 == selectedWifiIndex);
-      if (isEmpty) {
-        snprintf(buf, buflen, "(empty)");
-      } else if (isSelected) {
+      uint8_t listed = wifiListedCount();
+      if (index == listed + 1) {
+        snprintf(buf, buflen, "+ Add Network");
+        break;
+      }
+      if (index == listed + 2) {
+        snprintf(buf, buflen, "- Forget Network");
+        break;
+      }
+      int slot = wifiListedSlot(index - 1);
+      const char* ssid = (slot >= 0) ? wifiSlotSsid((uint8_t)slot) : "";
+      if (slot >= 0 && slot == selectedWifiIndex && wifiEnabled) {
         snprintf(buf, buflen, "%s%s", ssid, wifiConnected ? " * connected" : " * connecting");
       } else {
         snprintf(buf, buflen, "%s", ssid);
+      }
+      break;
+    }
+    case MENU_SCREEN_WIFI_SETUP:
+      switch (index) {
+        case 0: snprintf(buf, buflen, "1. Join WiFi:"); break;
+        case 1: snprintf(buf, buflen, "   %s", WIFI_SETUP_AP_NAME); break;
+        case 2:
+          switch (wifiSetupState()) {
+            case WIFI_SETUP_STARTING:     snprintf(buf, buflen, "Scanning..."); break;
+            case WIFI_SETUP_WAITING:      snprintf(buf, buflen, "2. Open 192.168.4.1"); break;
+            case WIFI_SETUP_PHONE_JOINED: snprintf(buf, buflen, "Phone joined - set up"); break;
+            case WIFI_SETUP_SAVED:        snprintf(buf, buflen, "Saved: %s", wifiSetupSavedSsid()); break;
+            case WIFI_SETUP_FAILED:       snprintf(buf, buflen, "Hotspot failed"); break;
+            default:                      snprintf(buf, buflen, "Closed"); break;
+          }
+          break;
+        case 3:
+          snprintf(buf, buflen, "%s", isWifiSetupActive() ? "Cancel" : "Done");
+          break;
+      }
+      break;
+    case MENU_SCREEN_WIFI_FORGET: {
+      int slot = wifiDeviceSavedSlot(index);
+      if (slot < 0) {
+        snprintf(buf, buflen, "(none saved)");
+      } else {
+        snprintf(buf, buflen, "%s", wifiSlotSsid((uint8_t)slot));
       }
       break;
     }
@@ -707,14 +796,48 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
         playFeedbackTone(600.0f, 50);
         return;
       }
-      const char* ssid = WIFI_NETWORKS[index - 1].ssid;
-      if (ssid != nullptr && ssid[0] != '\0') {
-        selectWifiNetwork(index - 1);
+      uint8_t listed = wifiListedCount();
+      if (index == listed + 1) {
+        // Add Network -- opens the Vario-Setup hotspot (WifiSetup.h).
+        pushMenuScreen(MENU_SCREEN_WIFI_SETUP);
+        menuSelectedIndex = 3;  // park on Cancel/Done, the only action
+        startWifiSetup();
+        playFeedbackTone(900.0f, 80);
+        return;
+      }
+      if (index == listed + 2) {
+        pushMenuScreen(MENU_SCREEN_WIFI_FORGET);
+        playFeedbackTone(900.0f, 80);
+        return;
+      }
+      int slot = wifiListedSlot(index - 1);
+      if (slot >= 0) {
+        selectWifiNetwork((uint8_t)slot);
         playFeedbackTone(1100.0f, 120);
       } else {
-        playFeedbackTone(300.0f, 60);  // empty slot -- nothing to connect to
+        playFeedbackTone(300.0f, 60);
       }
       menuGoBack();  // back to Connections
+      return;
+    }
+
+    case MENU_SCREEN_WIFI_SETUP:
+      if (index == 3) {
+        menuGoBack();  // also closes the hotspot if it's still up
+        return;
+      }
+      playFeedbackTone(900.0f, 40);  // instruction/status rows -- informational
+      return;
+
+    case MENU_SCREEN_WIFI_FORGET: {
+      int slot = wifiDeviceSavedSlot(index);
+      if (slot >= 0) {
+        forgetSavedWifiNetwork((uint8_t)slot);
+        playFeedbackTone(600.0f, 120);
+      } else {
+        playFeedbackTone(300.0f, 60);
+      }
+      menuGoBack();  // back to the WiFi list
       return;
     }
 
