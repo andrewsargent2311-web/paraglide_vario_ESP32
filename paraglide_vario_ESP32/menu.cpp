@@ -200,6 +200,13 @@ static const uint8_t VOLUME_CHOICE_COUNT = 10;
 #define VARIO_VOLUME_PREVIEW_SINK_MS 700UL
 
 // =====================================================
+// LIFT THRESHOLD CHOICES
+// 0.0-1.0 m/s in 0.1 m/s steps for liftThresholdTenths (settings.h) --
+// choice[index] = index tenths of a m/s.
+// =====================================================
+#define LIFT_THRESHOLD_CHOICE_COUNT (LIFT_THRESHOLD_MAX_TENTHS + 1)
+
+// =====================================================
 // ADS-B ALERT CHOICES
 // =====================================================
 static const float ADSB_RADIUS_CHOICES_KM[] = { 3.0f, 5.0f, 8.0f, 10.0f };
@@ -284,7 +291,8 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
   switch (screen) {
     case MENU_SCREEN_MAIN: return 8;
     case MENU_SCREEN_MAIN_PAGE_SELECT: return 2;
-    case MENU_SCREEN_CONFIG: return 5;
+    case MENU_SCREEN_CONFIG: return 6;
+    case MENU_SCREEN_LIFT_THRESHOLD: return LIFT_THRESHOLD_CHOICE_COUNT;
     case MENU_SCREEN_CONFIG_TIME: return TIMEZONE_CHOICE_COUNT;
     case MENU_SCREEN_UNITS: return 2;
     case MENU_SCREEN_CONFIG_VOLUME: return VOLUME_CHOICE_COUNT;
@@ -321,6 +329,7 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_MAIN: return "MENU";
     case MENU_SCREEN_MAIN_PAGE_SELECT: return "MAIN PAGE";
     case MENU_SCREEN_CONFIG: return "CONFIG";
+    case MENU_SCREEN_LIFT_THRESHOLD: return "LIFT THRESHOLD";
     case MENU_SCREEN_CONFIG_TIME: return "TIME";
     case MENU_SCREEN_UNITS: return "UNITS";
     case MENU_SCREEN_CONFIG_VOLUME: return "VOLUME";
@@ -370,8 +379,13 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         case 1: snprintf(buf, buflen, "Units"); break;
         case 2: snprintf(buf, buflen, "Volume"); break;
         case 3: snprintf(buf, buflen, "Vario Beep"); break;
-        case 4: snprintf(buf, buflen, "Screen"); break;
+        case 4: snprintf(buf, buflen, "Lift Threshold"); break;
+        case 5: snprintf(buf, buflen, "Screen"); break;
       }
+      break;
+    case MENU_SCREEN_LIFT_THRESHOLD:
+      snprintf(buf, buflen, "%u.%u m/s%s", index / 10, index % 10,
+               (liftThresholdTenths == index) ? " *" : "");
       break;
     case MENU_SCREEN_CONFIG_TIME:
       if (index == 0) {
@@ -673,9 +687,20 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           if (menuSelectedIndex >= VOLUME_CHOICE_COUNT) menuSelectedIndex = VOLUME_CHOICE_COUNT - 1;
           break;
         case 3: pushMenuScreen(MENU_SCREEN_VARIO_BEEP); break;
-        case 4: pushMenuScreen(MENU_SCREEN_SCREEN); break;
+        case 4:
+          pushMenuScreen(MENU_SCREEN_LIFT_THRESHOLD);
+          menuSelectedIndex = liftThresholdTenths;  // start on the current value
+          break;
+        case 5: pushMenuScreen(MENU_SCREEN_SCREEN); break;
       }
       playFeedbackTone(900.0f, 80);
+      return;
+
+    case MENU_SCREEN_LIFT_THRESHOLD:
+      liftThresholdTenths = index;  // takes effect on the next audio update
+      saveVarioVolumes();  // shares their NVS keys (see settings.h)
+      playFeedbackTone(1100.0f, 120);
+      menuGoBack();  // back to Config
       return;
 
     case MENU_SCREEN_CONFIG_TIME:

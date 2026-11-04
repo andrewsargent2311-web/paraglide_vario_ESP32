@@ -2,7 +2,7 @@
 #include "Vario.h"
 #include "Utils.h"
 #include "VoiceAlert.h"
-#include "DrawPages.h"  // CLIMB_DEADBAND_MS
+#include "DrawPages.h"
 #include <Wire.h>
 #include <math.h>
 #include <freertos/FreeRTOS.h>
@@ -82,6 +82,7 @@ static bool interceptToneFallback = false;
 
 unsigned long pageBeepUntil = 0;  // while set, updateBuzzer() yields the pin to the page-change beep
 
+uint8_t liftThresholdTenths = LIFT_THRESHOLD_DEFAULT_TENTHS;
 uint8_t climbVolumePercent = VARIO_VOLUME_DEFAULT_CLIMB_PERCENT;
 uint8_t sinkVolumePercent = VARIO_VOLUME_DEFAULT_SINK_PERCENT;
 
@@ -169,10 +170,12 @@ void loadVarioVolumes() {
     climbVolumePercent = prefs.getUChar("climbVol", VARIO_VOLUME_DEFAULT_CLIMB_PERCENT);
     sinkVolumePercent = prefs.getUChar("sinkVol", VARIO_VOLUME_DEFAULT_SINK_PERCENT);
     volScheme = prefs.getUChar("volScheme", 0);
+    liftThresholdTenths = prefs.getUChar("liftTenths", LIFT_THRESHOLD_DEFAULT_TENTHS);
     prefs.end();
   }
   if (climbVolumePercent > 100) climbVolumePercent = 100;
   if (sinkVolumePercent > 100) sinkVolumePercent = 100;
+  if (liftThresholdTenths > LIFT_THRESHOLD_MAX_TENTHS) liftThresholdTenths = LIFT_THRESHOLD_MAX_TENTHS;
 
   if (volScheme < 1) {
     // First boot on the dB-scaled master volume: convert the old value.
@@ -196,6 +199,7 @@ void saveVarioVolumes() {
   if (prefs.begin("vario", false)) {
     prefs.putUChar("climbVol", climbVolumePercent);
     prefs.putUChar("sinkVol", sinkVolumePercent);
+    prefs.putUChar("liftTenths", liftThresholdTenths);
     prefs.end();
   }
 }
@@ -472,10 +476,11 @@ void updateI2sAudioBuzzer(){
 
 
   // ============================================================
-  // CLIMB DEAD BAND
+  // CLIMB DEAD BAND: no beeps until lift exceeds the pilot's threshold
+  // (Config > Lift Threshold).
   // ============================================================
 
-  if (currentClimbRateMS <= CLIMB_DEADBAND_MS) {
+  if (currentClimbRateMS <= liftThresholdTenths / 10.0f) {
 
     climbAudioActive = false;
     climbToneOn = false;

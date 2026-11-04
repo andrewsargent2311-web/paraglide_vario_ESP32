@@ -292,7 +292,7 @@ The unit has **one button**:
 **Menu contents**
 
 - **Main Page:** choose Paraglider or Paramotor as the first page
-- **Config:** time zone, units (altitude / speed), main volume, vario beep (climb and sink volume), screen orientation
+- **Config:** time zone, units (altitude / speed), main volume, vario beep (climb and sink volume), lift threshold (climb beeps start above this: 0.0–1.0 m/s in 0.1 steps, default 0.1), screen orientation
 - **Connections:** WiFi on/off, network choice, **Add Network** and **Forget Network** (see below), Bluetooth (engine meter), FANET on/off
 - **FANET Messaging:** messaging on/off, and the preset messages you can broadcast
 - **Map:** choose which terrain map to use
