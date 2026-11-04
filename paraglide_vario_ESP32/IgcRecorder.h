@@ -17,7 +17,14 @@
 #define IGC_AUTOSTOP_SPEED_KPH 5.0f
 #define IGC_AUTOSTOP_SUSTAIN_MS 20000UL
 
-#define IGC_FIX_INTERVAL_MS 4000UL
+// One B-record (track point) per second -- matches the GPS's 1 Hz fix
+// rate, the usual setting for competition/XContest-grade tracklogs.
+// (Was 4000 -- too coarse for thermalling turns.)
+#define IGC_FIX_INTERVAL_MS 1000UL
+// The file is flushed to the card at most this often rather than after
+// every record, so 1 Hz logging doesn't put an SD write on the main loop
+// every second. A sudden power loss can cost at most this much track.
+#define IGC_FLUSH_INTERVAL_MS 5000UL
 
 // Recorder-side GPS sanity limits. A bad fix is logged as invalid using the
 // last accepted position instead of adding a jump to the flight track.

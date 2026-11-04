@@ -307,7 +307,7 @@ The same page also lets you:
 - **Upload** a new `.ADEM` terrain map or a replacement `AIRSPACE.txt` straight to the SD card, so you don't need to take the card out. Large maps take several minutes over WiFi, so do it on the ground. Then pick the new map from **Menu → Map**.
 - **Delete** maps you no longer need (the map currently in use can't be deleted or replaced; choose a different one in the Map menu first).
 
-Deleting and uploading are switched off while a flight is being recorded.
+Deleting and uploading are switched off while a flight is being recorded. Tracks are recorded at **one point per second**.
 
 ---
 

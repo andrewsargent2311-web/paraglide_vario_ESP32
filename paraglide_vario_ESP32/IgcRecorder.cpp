@@ -26,7 +26,9 @@ bool latestPositionAccepted = false;
 // failure). Written in time order as soon as the file is writable again;
 // cleared when a new recording starts so they can never leak into another
 // flight's file.
-static constexpr uint8_t kPendingIgcMax = 8;
+// Sized for about 30 s of 1 Hz records (was 8 at the old 4 s interval).
+static constexpr uint8_t kPendingIgcMax = 32;
+static unsigned long lastIgcFlushMs = 0;
 static char pendingIgcRecords[kPendingIgcMax][40];
 static uint8_t pendingIgcRecordCount = 0;
 
@@ -383,8 +385,9 @@ void writeIgcBRecord() {
     bool wrote = false;
     if (drainPendingIgcLocked()) {
       wrote = writeIgcRecordLocked(bRecord);
-      if (wrote) {
-        igcFile.flush();  // flush every fix -- a lost flight log is worse than the SD write cost
+      if (wrote && millis() - lastIgcFlushMs >= IGC_FLUSH_INTERVAL_MS) {
+        igcFile.flush();  // see IGC_FLUSH_INTERVAL_MS
+        lastIgcFlushMs = millis();
       }
     }
     if (!wrote) enqueuePendingIgcRecord(bRecord);
