@@ -1491,6 +1491,13 @@ void drawGliderHeadingArrow(int cx, int cy, int arrowRadius, float headingDeg) {
 // Close traffic: 4,000 ft allows for others climbing well above or below you.
 #define TRAFFIC_CLOSE_KM 5.0f
 #define TRAFFIC_CLOSE_FT 4000.0f
+// Ground Traffic: Hide also removes anything below both of these.
+#define TRAFFIC_GROUND_BELOW_FT 200.0f
+#define TRAFFIC_GROUND_BELOW_KT 40.0f
+// Labels: Relevant labels aircraft within this of own altitude (the zoom rule
+// is separate: TRAFFIC_ZOOM_RELEVANT_FT). Every mode stops at the label cap.
+#define TRAFFIC_LABEL_RELEVANT_FT 7000.0f
+#define TRAFFIC_MAX_LABELS 8
 // Removal after 60 s is TRAFFIC_REMOVE_AFTER_MS, in DrawPages.h.
 #define TRAFFIC_REMOVE_OFFLINE_MS 120000UL  // removal while the connection is down
 
@@ -1499,6 +1506,7 @@ struct AdsbTrack {
   char hex[9];
   float lat, lon, altFeet, speedKt, headingDeg;
   bool altKnown;
+  bool onGround;
   bool headingKnown;
   TrafficIconType icon;
   unsigned long lastPositionMs;
@@ -1514,6 +1522,16 @@ static bool trafficHasCloseAircraft = false;
 
 // Static rather than on the stack: Core 1's stack is small and these are big.
 static AircraftSnapshot trafficSnapshot[MAX_DISPLAYED_AIRCRAFT];
+
+// The Ground Traffic setting: see adsbHideGroundTraffic in settings.h. A
+// helicopter (only ever ADS-B category A7 here) can hover low and slow, so
+// it's always shown. Airborne traffic otherwise shows at any altitude.
+static bool adsbTrackHidden(bool onGround, bool altKnown, float altFeet, float speedKt,
+                            TrafficIconType icon) {
+  if (!adsbHideGroundTraffic || icon == TRAFFIC_ICON_HELICOPTER) return false;
+  if (onGround) return true;
+  return altKnown && altFeet < TRAFFIC_GROUND_BELOW_FT && speedKt < TRAFFIC_GROUND_BELOW_KT;
+}
 
 // Brings adsbTracks[] up to date if a new poll has been published. If the
 // mutex is busy, the next redraw simply tries again.
@@ -1540,6 +1558,15 @@ static void mergeAdsbTracks(float myLat, float myLon) {
     if (seenPosSeconds * 1000.0f >= (float)TRAFFIC_REMOVE_AFTER_MS) continue;
     const unsigned long positionMs = fetchMs - (unsigned long)(seenPosSeconds * 1000.0f);
 
+    // alt_baro is the word "ground" for an aircraft on the ground.
+    const char* altText = ac["alt_baro"].as<const char*>();
+    const bool onGround = altText != nullptr && strcmp(altText, "ground") == 0;
+    const bool altKnown = ac["alt_baro"].is<float>();
+    const float altFeet = ac["alt_baro"];
+    const float speedKt = ac["gs"];
+    const TrafficIconType icon = trafficIconFromAdsbCategory(ac["category"].as<const char*>());
+    const bool hidden = adsbTrackHidden(onGround, altKnown, altFeet, speedKt, icon);
+
     int slot = -1;
     int freeSlot = -1;
     int farthestSlot = 0;
@@ -1557,6 +1584,8 @@ static void mergeAdsbTracks(float myLat, float myLon) {
 
     float distanceKm = -1.0f;
     if (slot < 0) {
+      // Don't let parked aircraft at a nearby airport use up the table.
+      if (hidden) continue;
       distanceKm = getDistanceKM(myLat, myLon, acLat, acLon);
       if (freeSlot >= 0) {
         slot = freeSlot;
@@ -1573,13 +1602,13 @@ static void mergeAdsbTracks(float myLat, float myLon) {
     AdsbTrack& track = adsbTracks[slot];
     track.lat = acLat;
     track.lon = acLon;
-    // alt_baro is the word "ground" for an aircraft on the ground.
-    track.altKnown = ac["alt_baro"].is<float>();
-    track.altFeet = ac["alt_baro"];
-    track.speedKt = ac["gs"];
+    track.onGround = onGround;
+    track.altKnown = altKnown;
+    track.altFeet = altFeet;
+    track.speedKt = speedKt;
     track.headingKnown = ac["track"].is<float>();
     track.headingDeg = ac["track"];
-    track.icon = trafficIconFromAdsbCategory(ac["category"].as<const char*>());
+    track.icon = icon;
     track.lastPositionMs = positionMs;
   }
 
@@ -1651,6 +1680,7 @@ static int buildTrafficSnapshot(float myLat, float myLon, unsigned long nowMs) {
       track.used = false;
       continue;
     }
+    if (adsbTrackHidden(track.onGround, track.altKnown, track.altFeet, track.speedKt, track.icon)) continue;
     if (count >= MAX_DISPLAYED_AIRCRAFT) continue;
 
     AircraftSnapshot& s = trafficSnapshot[count++];
@@ -1791,6 +1821,16 @@ static ScreenRect placeTrafficLabel(int iconX, int iconY, int clearPx, int w, in
     }
   }
   return best;
+}
+
+// Compass letters and ring distances: text on a small cleared box, drawn over
+// everything so labels and icons can never cover it.
+static void drawTrafficMapText(int x, int baselineY, const char* text) {
+  const int ascent = u8g2.getAscent();
+  u8g2.setDrawColor(0);
+  u8g2.drawBox(x - 1, baselineY - ascent - 1, u8g2.getStrWidth(text) + 2, ascent + 2);
+  u8g2.setDrawColor(1);
+  u8g2.drawStr(x, baselineY, text);
 }
 
 // A message on a cleared background, so the rings don't run through it.
@@ -1962,24 +2002,24 @@ void drawADSBPage() {
   int wY = cy - (int)(r * sin(crosshairAngleRad));
   u8g2.drawLine(eX, eY, wX, wY);
 
-  // Compass Typography Markers -- bumped up one size from 7x14_tf
-  u8g2.setFont(u8g2_font_8x13_tf);
-  u8g2.drawStr(nX - 2, nY - 2, "N");
-  u8g2.drawStr(sX - 2, sY + 8, "S");
-  u8g2.drawStr(eX + 4, eY + 3, "E");
-  u8g2.drawStr(wX - 8, wY + 3, "W");
+  // Compass letters and range ring labels, drawn at the end of this function
+  // so nothing can cover them. The ring labels sit along the same N radial as
+  // the "N" marker, so they rotate together with it in track-up mode rather
+  // than staying fixed to the top of the screen.
+  const int innerNX = cx + (int)((r / 2) * sin(crosshairAngleRad));
+  const int innerNY = cy - (int)((r / 2) * cos(crosshairAngleRad));
 
-  // Range ring labels -- placed along the same N radial as the "N" marker
-  // itself, so they rotate together with it in track-up mode rather than
-  // staying fixed to the top of the screen. Text now reflects whichever
-  // scale is active this frame (the pilot's chosen far/default rings, or
-  // 10km/5km when zoomed in).
-  int innerNX = cx + (int)((r / 2) * sin(crosshairAngleRad));
-  int innerNY = cy - (int)((r / 2) * cos(crosshairAngleRad));
+  auto drawCompassAndRingLabels = [&]() {
+    u8g2.setFont(u8g2_font_8x13_tf);  // bumped up one size from 7x14_tf
+    drawTrafficMapText(nX - 2, nY - 2, "N");
+    drawTrafficMapText(sX - 2, sY + 8, "S");
+    drawTrafficMapText(eX + 4, eY + 3, "E");
+    drawTrafficMapText(wX - 8, wY + 3, "W");
 
-  u8g2.setFont(u8g2_font_7x13_tf);  // bumped up one size from 6x10_tf
-  u8g2.drawStr(nX + 10, nY - 2, outerRingLabel);
-  u8g2.drawStr(innerNX + 10, innerNY - 2, innerRingLabel);
+    u8g2.setFont(u8g2_font_7x13_tf);  // bumped up one size from 6x10_tf
+    drawTrafficMapText(nX + 10, nY - 2, outerRingLabel);
+    drawTrafficMapText(innerNX + 10, innerNY - 2, innerRingLabel);
+  };
 
   // 5. Draw Center Navigation Reference Symbol
   drawGliderHeadingArrow(cx, cy, 6, isMoving ? 0.0f : -1.0f);
@@ -2055,6 +2095,7 @@ void drawADSBPage() {
       snprintf(statusBuf, sizeof(statusBuf), "No traffic within %.0f km", adsbRingOuterKm);
     }
     drawTrafficStatus(cx, cy + 34, statusBuf);
+    drawCompassAndRingLabels();
     return;
   }
 
@@ -2103,7 +2144,8 @@ void drawADSBPage() {
     obstacles[obstacleCount++] = { (int16_t)(acX - 12), (int16_t)(acY - 12), 24, 24 };
   }
 
-  // Close traffic picks its label position first, then nearest to furthest.
+  // Close traffic comes first, then nearest to furthest. That's the order
+  // labels are placed in, and so who gets one if there are more than the cap.
   for (int a = 0; a < plottedCount - 1; a++) {
     for (int b = a + 1; b < plottedCount; b++) {
       const AircraftSnapshot& sa = trafficSnapshot[plotted[a].snapshotIndex];
@@ -2117,11 +2159,21 @@ void drawADSBPage() {
     }
   }
 
-  // 8. Heavy, high-contrast bold labels: razor-sharp in direct sunlight.
-  u8g2.setFont(u8g2_font_helvB14_tf);
+  // 8. Bold labels, for sunlight, in the smaller font so they crowd less.
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  int labelCount = 0;
 
-  for (int i = 0; i < plottedCount; i++) {
+  for (int i = 0; i < plottedCount && labelCount < TRAFFIC_MAX_LABELS; i++) {
     const AircraftSnapshot& s = trafficSnapshot[plotted[i].snapshotIndex];
+
+    if (adsbLabelMode == ADSB_LABELS_OFF) break;
+    // Anything else in this mode shows as an icon only. An aircraft on the
+    // ground counts as altitude 0 here.
+    if (adsbLabelMode == ADSB_LABELS_RELEVANT &&
+        fabsf(s.altFeet - myAltitudeFeet) > TRAFFIC_LABEL_RELEVANT_FT) {
+      continue;
+    }
+    labelCount++;
 
     char dataTag[24];
 
@@ -2137,8 +2189,8 @@ void drawADSBPage() {
       snprintf(dataTag, sizeof(dataTag), "FL%.1f %s %.0fkt", flightLevelFloat, getCompassDirection(s.headingDeg), s.speedKt);
     }
 
-    const int textW = u8g2.getStrWidth(dataTag) + 10;
-    const int textH = 23;
+    const int textW = u8g2.getStrWidth(dataTag) + 8;
+    const int textH = 17;
     const int clearPx = s.isClose ? 21 : 14;  // outside the rings, or the icon
 
     const ScreenRect labelRect = placeTrafficLabel(plotted[i].x, plotted[i].y, clearPx, textW, textH,
@@ -2160,7 +2212,7 @@ void drawADSBPage() {
     u8g2.drawFrame(labelRect.x, labelRect.y, labelRect.w, labelRect.h);
 
     u8g2.setDrawColor(s.isClose ? 0 : 1);
-    u8g2.drawStr(labelRect.x + 5, labelRect.y + 19, dataTag);
+    u8g2.drawStr(labelRect.x + 4, labelRect.y + 13, dataTag);
     u8g2.setDrawColor(1);
   }
 
@@ -2177,6 +2229,8 @@ void drawADSBPage() {
       u8g2.drawCircle(plotted[i].x, plotted[i].y, 18);
     }
   }
+
+  drawCompassAndRingLabels();
 
   // Drawn again here, on top of the aircraft markers just plotted above
   // -- the earlier call (before the no-traffic early return) only

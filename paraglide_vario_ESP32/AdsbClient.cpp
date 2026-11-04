@@ -247,25 +247,8 @@ void performADSBUpdate() {
     "[ADS-B] Total fetched aircraft: %d\n",
     aircraftList.size());
 
-  // ---------------------------------------------------------
-  // Remove slow ground traffic
-  // ---------------------------------------------------------
-
-  for (int i = aircraftList.size() - 1;
-       i >= 0;
-       i--) {
-
-    JsonObject ac = aircraftList[i];
-
-    if (!ac["gs"].is<float>() || (float)ac["gs"] < 10.0f) {
-
-      aircraftList.remove(i);
-    }
-  }
-
-  Serial.printf(
-    "[ADS-B] Mapped %d aircraft after 10kt speed filter.\n",
-    aircraftList.size());
+  // Everything stays in the document: the traffic page decides what to show,
+  // using the Ground Traffic setting (adsbTrackHidden(), DrawPages.cpp).
 
   // ---------------------------------------------------------
   // Threat detection
@@ -292,6 +275,8 @@ void performADSBUpdate() {
       continue;
     }
     if (!ac["alt_baro"].is<float>()) continue;
+    // Voice and siren alerts have always ignored anything this slow.
+    if (!ac["gs"].is<float>() || (float)ac["gs"] < 10.0f) continue;
 
     float acLat = ac["lat"];
     float acLon = ac["lon"];

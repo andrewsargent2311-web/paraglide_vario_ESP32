@@ -174,6 +174,24 @@ extern float adsbAlertVerticalFt;  // vertical trigger distance, ft
 // the audio alert.
 extern bool adsbAutoJumpEnabled;
 
+// Traffic page declutter (ADSB Settings). Both only change what's drawn:
+// voice and siren alerts are unaffected.
+//
+// Hide (the default) removes ADS-B aircraft the feed reports on the ground, or
+// that are below 200 ft pressure altitude AND below 40 kt. Helicopters and
+// FANET contacts are never hidden. See adsbTrackHidden() in DrawPages.cpp.
+extern bool adsbHideGroundTraffic;
+
+// Relevant = aircraft within 7,000 ft of you, All = every aircraft, Off = icons
+// only. Either way, no more than 8 labels are drawn.
+enum AdsbLabelMode {
+  ADSB_LABELS_RELEVANT = 0,
+  ADSB_LABELS_ALL,
+  ADSB_LABELS_OFF,
+  ADSB_LABEL_MODE_COUNT
+};
+extern uint8_t adsbLabelMode;
+
 // ADS-B audio alert mode: cycles Off -> Alarm -> Voice -> Off (the
 // "Alarm Sound" menu item). Off mutes both; Alarm plays the existing 5s
 // two-tone siren; Voice speaks the traffic's clock position, heading,
