@@ -300,7 +300,7 @@ The unit has **one button**:
 - **Weather settings:** update interval, number of stations, data source
 - **Flight recordings:** recording on/off, **Export files** (see below), auto-stop
 
-**Flight logs:** the unit automatically starts recording an `.IGC` file when you start moving (above about 10 km/h for 10 seconds). To download logs, open **Flight recordings → Export files**. Once the unit is connected to WiFi it shows a web address (something like `http://192.168.x.x/`). Open that in a browser on a phone or computer on the same network and click the file to download.
+**Flight logs:** the unit automatically starts recording an `.IGC` file when you start moving (above about 10 km/h for 10 seconds). To download logs, open **Flight recordings → Export files**. Once the unit is connected to WiFi it shows a web address (something like `http://192.168.x.x/`). Open that in a browser on a phone or computer on the same network and click the file to download. If the server can't start, the screen tells you why: **WiFi not connected**, or **No SD card** (insert one and restart the unit, as it only checks for a card when it starts up).
 
 The same page also lets you:
 - **Delete** old flight recordings (asks to confirm first).

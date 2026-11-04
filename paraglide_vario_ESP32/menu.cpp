@@ -200,6 +200,24 @@ static const uint8_t VOLUME_CHOICE_COUNT = 10;
 #define VARIO_VOLUME_PREVIEW_SINK_MS 700UL
 
 // =====================================================
+// EXPORT FILES: WHY THE SERVER WON'T START
+// Set when Start Server fails, cleared on the next attempt or when the
+// screen is reopened. The reason is worked out afresh each time it's drawn,
+// so "WiFi not connected" goes away by itself once WiFi connects. The SD
+// card is only checked at boot (sdCardOK), so inserting one needs a restart.
+// =====================================================
+static bool exportStartFailed = false;
+
+// The text to show, or nullptr if there's currently nothing to report.
+static const char* exportStartProblem() {
+  if (!exportStartFailed) return nullptr;
+  if (!sdCardOK && !wifiConnected) return "No SD card or WiFi";
+  if (!sdCardOK) return "No SD card: insert, restart";
+  if (!wifiConnected) return "WiFi not connected";
+  return nullptr;
+}
+
+// =====================================================
 // LIFT THRESHOLD CHOICES
 // 0.0-1.0 m/s in 0.1 m/s steps for liftThresholdTenths (settings.h) --
 // choice[index] = index tenths of a m/s.
@@ -319,7 +337,8 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN: return WEATHER_STATIONS_CHOICE_COUNT;
     case MENU_SCREEN_WEATHER_SOURCE: return 2;
     case MENU_SCREEN_FLIGHT_RECORDINGS: return 3;
-    case MENU_SCREEN_EXPORT_FILES: return isFileServerRunning() ? 2 : 1;
+    case MENU_SCREEN_EXPORT_FILES:
+      return (isFileServerRunning() || exportStartProblem() != nullptr) ? 2 : 1;
     default: return 1;
   }
 }
@@ -633,11 +652,14 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
     case MENU_SCREEN_EXPORT_FILES: {
       if (index == 0) {
         snprintf(buf, buflen, "%s", isFileServerRunning() ? "Stop Server" : "Start Server");
-      } else {
-        // index == 1 -- only present while running (see the dynamic
-        // count above); informational, not actionable.
+      } else if (isFileServerRunning()) {
+        // index == 1 -- only present while running, or after a failed start
+        // (see the dynamic count above); informational, not actionable.
         String url = getFileServerURL();
         snprintf(buf, buflen, "%s", url.c_str());
+      } else {
+        const char* problem = exportStartProblem();
+        snprintf(buf, buflen, "%s", problem != nullptr ? problem : "");
       }
       break;
     }
@@ -1072,6 +1094,7 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           playFeedbackTone(600.0f, 50);
           return;
         case 1:
+          exportStartFailed = false;  // don't show an old failure on arrival
           pushMenuScreen(MENU_SCREEN_EXPORT_FILES);
           playFeedbackTone(900.0f, 80);
           return;
@@ -1094,15 +1117,15 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
         } else {
           bool started = startFileServer();
           // startFileServer() fails cleanly (does nothing) if WiFi isn't
-          // connected or the SD card isn't mounted -- the low tone here
-          // is the only feedback for that, same as an empty WiFi slot
-          // elsewhere in this menu; Serial has the specific reason.
+          // connected or the SD card isn't mounted -- the low tone goes
+          // with a row saying why, see exportStartProblem().
+          exportStartFailed = !started;
           playFeedbackTone(started ? 1100.0f : 300.0f, started ? 120 : 60);
         }
         displayDirty = true;  // item count (1 <-> 2) and label both change
         return;
       }
-      // index == 1 -- the URL row, informational only.
+      // index == 1 -- the URL or problem row, informational only.
       playFeedbackTone(900.0f, 40);
       return;
 
@@ -1346,6 +1369,10 @@ static void drawWifiSetupScreen() {
 void drawMenu() {
   MenuScreen screen = currentMenuScreen();
   uint8_t itemCount = getMenuItemCount(screen);
+
+  // A row can vanish while it's highlighted (Export Files' URL or problem
+  // row), which would leave nothing selected.
+  if (menuSelectedIndex >= itemCount) menuSelectedIndex = 0;
 
   u8g2.setFont(u8g2_font_helvB14_tf);
   u8g2.drawStr(10, 30, getMenuTitle(screen));
