@@ -346,7 +346,7 @@ The ADS-B page shows aircraft around you, from adsb.fi over WiFi and from FANET 
 - **Ground traffic:** **ADSB Settings → Ground Traffic: Hide/Show** (default Hide). Hide removes ADS-B aircraft reported as on the ground, or below 200 ft and slower than 40 kt. Helicopters and FANET traffic are never hidden, and airborne traffic shows at any altitude. This doesn't change voice or siren alerts.
 - **Labels:** **ADSB Settings → Labels: Relevant/All/Off** (default Relevant). Relevant labels aircraft within 7,000 ft of your altitude, All labels every aircraft, and Off shows icons only. Relevant and All both stop at **8 labels**: close traffic first, then the nearest, and the rest show as icons. Each label goes on whichever side of its icon is clear. In a tight group it may sit further out, with a thin line back to its aircraft.
 - **Whole-screen view:** aircraft and airspace lines fill the area below the top bar, past the outer range ring and into the corners. The altitude, speed and climb boxes move clear of the banners.
-- **Airspace lines:** **ADSB Settings → Airspace Lines: On/Off** (default On). Dashed outlines of the airspace in `AIRSPACE.txt` fill the area below the top bar, behind the traffic, turning and zooming with it. All altitudes are shown, and they need a GPS fix. With **Airspace Info** on, the bottom bar steps through up to 8 nearby airspaces, every 4 seconds, and the one it's describing turns solid and thick on the map. It shows the name, class, limits and either its distance and direction or where you are relative to it (**IN IT**, **BELOW IT**, **ABOVE IT**), with its place in the list at the right. Airspace you're in comes first and stays up for 8 seconds. This is information only, based on your altitude reading: airspace warnings work the same with this on or off.
+- **Airspace lines:** **ADSB Settings → Airspace Lines: On/Off** (default On). Dashed outlines of the airspace in `AIRSPACE.txt` fill the area below the top bar, behind the traffic, turning and zooming with it. All altitudes are shown, and they need a GPS fix. With **Airspace Info** on, the bottom bar steps through up to 8 nearby airspaces, 8 seconds each, and the one it's describing turns solid and thick on the map. It shows the name, class, limits and either its distance and direction or where you are relative to it (**IN IT**, **BELOW IT**, **ABOVE IT**), with its place in the list at the right. Airspace you're in comes first. This is information only, based on your altitude reading: airspace warnings work the same with this on or off.
 - **Compass and range:** the N, E, S and W letters and the ring distances are drawn on top of everything, so aircraft and labels can't cover them.
 
 When there's nothing to plot, the page says why:
@@ -354,12 +354,14 @@ When there's nothing to plot, the page says why:
 | Message | Meaning |
 |---|---|
 | **Waiting for GPS fix** | The unit hasn't had a GPS position yet |
-| **No WiFi** | The unit isn't connected to WiFi, so it can't get ADS-B traffic |
-| **No internet** | WiFi is connected, but the last download failed |
+| **Reconnecting to WiFi / No traffic data** | The unit isn't connected to WiFi, so it can't get ADS-B traffic |
+| **No internet / No traffic data** | WiFi is connected, but the last download failed |
+| **Reconnecting / No traffic data** | WiFi is connected, but there's been no good download for over 35 seconds |
+| **WiFi off / No traffic data** | WiFi is turned off in the menu |
 | **Checking for traffic** | Waiting for the first download to finish |
-| **No traffic within N km** | The download worked and nothing is in range. N is your Range Rings setting |
+| **No traffic within N km** | A recent download worked and nothing is in range. N is your Range Rings setting |
 
-The Weather page uses the same GPS, WiFi and internet messages.
+"No traffic data" means the unit can't tell, so aircraft may still be there. The Weather page has its own GPS, WiFi and internet messages.
 
 **If the connection drops:** ADS-B aircraft stay on the page for up to 2 minutes, as outlines still moving along their last track, and a message at the bottom right says **Reconnecting...**. Treat these positions as rough estimates: an aircraft may have turned. The unit keeps trying to reconnect by itself, every 20 seconds at first and then every minute. If it's still joined to the network but three traffic downloads in a row fail (about 45 seconds), it restarts the connection, and **Connections → WiFi** shows **no internet** rather than **connected**.
 

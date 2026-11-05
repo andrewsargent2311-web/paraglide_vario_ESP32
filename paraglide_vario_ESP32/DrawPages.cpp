@@ -1630,10 +1630,17 @@ static void estimateTrafficPosition(float lat, float lon, float speedKt, float h
   outLon = (cosLat > 0.01f) ? lon + (distanceKm * sinf(headingRad)) / (111.32f * cosLat) : lon;
 }
 
+// Two missed polls, plus time for a slow download to finish.
+#define TRAFFIC_FRESH_MS (2UL * ADSB_INTERVAL_MS + 5000UL)
+
 // True while the ADS-B feed can't be reached, so a silent aircraft may well
-// still be flying rather than gone.
+// still be flying rather than gone. A stalled link doesn't report anything
+// until a download times out, and after reconnecting the last result is out of
+// date until the next poll, so this also goes by how old the last good one is.
 static bool trafficConnectionLost() {
-  return !wifiConnected || adsbFetchStatus == FETCH_FAILED;
+  if (!wifiConnected || adsbFetchStatus == FETCH_FAILED) return true;
+  if (adsbFetchStatus == FETCH_NOT_TRIED) return false;  // nothing to be out of date yet
+  return millis() - adsbDocFetchMs > TRAFFIC_FRESH_MS;
 }
 
 // Fills trafficSnapshot[] with every aircraft to consider this frame, at its
@@ -1863,8 +1870,8 @@ unsigned long displayRefreshIntervalMs() {
 //
 // The bottom bar (Airspace Info setting) steps through nearby airspace to say
 // what each outline is, and that outline is drawn solid and thick while it's
-// described. Airspace at your position and altitude comes first and stays up
-// longer. Nothing here is an alert: it's for information only.
+// described. Airspace at your position and altitude comes first. Nothing here
+// is an alert: it's for information only.
 //
 // Positions use a flat east/north approximation around the pilot. That's well
 // within a pixel at these ranges, and much cheaper than a bearing and distance
@@ -1876,8 +1883,7 @@ unsigned long displayRefreshIntervalMs() {
 #define AIRSPACE_KM_PER_DEG_LON_EQUATOR 111.32f
 #define NM_TO_KM 1.852f
 #define AIRSPACE_CYCLE_MAX 8            // nearest few, so a full cycle stays short
-#define AIRSPACE_CYCLE_MS 4000UL
-#define AIRSPACE_CYCLE_INSIDE_MS 8000UL
+#define AIRSPACE_CYCLE_MS 8000UL
 #define AIRSPACE_NONE 0xFFFF
 
 struct AirspaceProjection {
@@ -2218,8 +2224,7 @@ static void drawAirspaceOutlines(int cx, int cy, int r, float myLat, float myLon
     if (position < 0) {
       position = 0;
       shownSinceMs = nowMs;
-    } else if (nowMs - shownSinceMs >= (candidates[position].rank == 0 ? AIRSPACE_CYCLE_INSIDE_MS
-                                                                       : AIRSPACE_CYCLE_MS)) {
+    } else if (nowMs - shownSinceMs >= AIRSPACE_CYCLE_MS) {
       position = (position + 1) % candidateCount;
       shownSinceMs = nowMs;
     }
@@ -2505,7 +2510,7 @@ void drawADSBPage() {
   // with aircraft still on the page: their positions are only estimates now.
   // Sits right of the vario box, above where the airspace bar starts.
   ScreenRect connectionRect = { 0, 0, 0, 0 };
-  if (haveGpsFix && trafficConnectionLost()) {
+  if (haveGpsFix && trafficConnectionLost() && withinRangeRingsCount > 0) {
     const char* line1 = !wifiEnabled ? "WiFi off" : (!wifiConnected ? "No WiFi" : "No internet");
     const char* line2 = wifiEnabled ? "Reconnecting..." : "";
 
@@ -2520,25 +2525,40 @@ void drawADSBPage() {
     u8g2.drawStr(connectionRect.x + 4, 368, line2);
   }
 
-  // Say why the page is empty, rather than leaving it blank. "No traffic" is
-  // only claimed after a good fetch: with no WiFi or no internet nobody knows
-  // what's out there, and saying "no traffic" would be falsely reassuring.
+  // Say why the range rings are empty, rather than leaving them blank. "No
+  // traffic" is only claimed after a recent good download: during a dropout
+  // nobody knows what's out there, and saying so would be falsely reassuring.
+  ScreenRect statusRect = { 0, 0, 0, 0 };
   if (withinRangeRingsCount == 0) {
     char statusBuf[32];
+    const char* statusLine2 = nullptr;
     if (!haveGpsFix) {
       snprintf(statusBuf, sizeof(statusBuf), "Waiting for GPS fix");
-    } else if (!wifiConnected) {
-      snprintf(statusBuf, sizeof(statusBuf), "No WiFi");
-    } else if (adsbFetchStatus == FETCH_FAILED) {
-      snprintf(statusBuf, sizeof(statusBuf), "No internet");
+    } else if (trafficConnectionLost()) {
+      statusLine2 = "No traffic data";
+      if (!wifiEnabled) {
+        snprintf(statusBuf, sizeof(statusBuf), "WiFi off");
+      } else if (!wifiConnected) {
+        snprintf(statusBuf, sizeof(statusBuf), "Reconnecting to WiFi");
+      } else if (adsbFetchStatus == FETCH_FAILED) {
+        snprintf(statusBuf, sizeof(statusBuf), "No internet");
+      } else {
+        snprintf(statusBuf, sizeof(statusBuf), "Reconnecting");
+      }
     } else if (adsbFetchStatus == FETCH_NOT_TRIED) {
       snprintf(statusBuf, sizeof(statusBuf), "Checking for traffic");
     } else {
       snprintf(statusBuf, sizeof(statusBuf), "No traffic within %.0f km", adsbRingOuterKm);
     }
     drawTrafficStatus(cx, cy + 34, statusBuf);
-    drawCompassAndRingLabels();
-    return;
+    if (statusLine2 != nullptr) drawTrafficStatus(cx, cy + 58, statusLine2);
+    statusRect = { (int16_t)(cx - 115), (int16_t)(cy + 16), 230, (int16_t)(statusLine2 != nullptr ? 48 : 24) };
+
+    // Aircraft beyond the ring can still be on screen, in the corners.
+    if (snapshotCount == 0) {
+      drawCompassAndRingLabels();
+      return;
+    }
   }
 
   // 7. Work out where the aircraft within the current range go. All their
@@ -2551,8 +2571,8 @@ void drawADSBPage() {
   };
   static PlottedAircraft plotted[MAX_DISPLAYED_AIRCRAFT];
   // Room for a label and an icon per aircraft, plus the own-ship arrow, the
-  // three fixed boxes, the connection message and the two banners.
-  static ScreenRect obstacles[2 * MAX_DISPLAYED_AIRCRAFT + 7];
+  // three fixed boxes, the connection and status messages and the two banners.
+  static ScreenRect obstacles[2 * MAX_DISPLAYED_AIRCRAFT + 8];
   int plottedCount = 0;
   int obstacleCount = 0;
 
@@ -2561,6 +2581,7 @@ void drawADSBPage() {
   obstacles[obstacleCount++] = { (int16_t)gsX, (int16_t)gsY, (int16_t)gsW, (int16_t)gsH };
   obstacles[obstacleCount++] = { (int16_t)varioX, (int16_t)varioY, (int16_t)varioW, (int16_t)varioH };
   obstacles[obstacleCount++] = connectionRect;  // zero-sized if there's no message
+  obstacles[obstacleCount++] = statusRect;      // likewise
   obstacles[obstacleCount++] = { 0, (int16_t)TOP_BAR_HEIGHT_PX, (int16_t)SCREEN_W, (int16_t)topBannerH };
   obstacles[obstacleCount++] = { 0, (int16_t)(SCREEN_H - bottomBarH), (int16_t)SCREEN_W, (int16_t)bottomBarH };
 
@@ -2683,9 +2704,8 @@ void drawADSBPage() {
 
   // Drawn again here, on top of the aircraft markers just plotted above
   // -- the earlier call (before the no-traffic early return) only
-  // covers the case where that return fires; this call and that one are
-  // mutually exclusive per frame (snapshotCount == 0 takes the early
-  // return and never reaches here), so this never double-draws.
+  // covers the case where that return fires. Both can run in a frame with
+  // aircraft only beyond the rings, which just draws the same bar again.
   drawAirspaceInfoBar();
 }
 
