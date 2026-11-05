@@ -15,6 +15,9 @@
 #include "TrafficIcons.h"
 #include "wifi_manager.h"  // wifiConnected
 
+// How much of the page the top banner covers this frame: see the definition.
+static int topBannerHeightPx();
+
 static AglDisplayBuffer aglDisplayBuffer;
 
 static bool airspaceScanIsFresh() {
@@ -456,7 +459,7 @@ static void drawBoxRow(int xLabel, int y, const char* label, const char* value) 
 }
 
 void drawParagliderPage() {
-  const int top = TOP_BAR_HEIGHT_PX;
+  const int top = TOP_BAR_HEIGHT_PX + topBannerHeightPx();
   const int colW = SCREEN_W / 2;
   const int rowH = (SCREEN_H - top) / 3;
 
@@ -887,7 +890,7 @@ void drawWeatherPage() {
   // below (see step 7), rather than every line being a fixed offset
   // stacked from the top the way it used to be.
   // ---------------------------------------------------------
-  const int startY = TOP_BAR_HEIGHT_PX;
+  const int startY = TOP_BAR_HEIGHT_PX + topBannerHeightPx();
   const int availableHeight = SCREEN_H - startY;
 
   const int rowHeight =
@@ -2244,14 +2247,20 @@ static void drawAirspaceOutlines(int cx, int cy, int r, float myLat, float myLon
 }
 
 // Will drawDashboard() put a banner across the top of the page this frame? Same
-// conditions as drawAirspaceWarning() and drawFanetMessageBanner().
-static bool trafficTopBannerShowing() {
+// conditions as drawAirspaceWarning() and drawFanetMessageBanner(). The banner is
+// drawn after the page, on top of it, so each page lays itself out below this
+// height rather than having its top row hidden.
+static int topBannerHeightPx() {
+  const int TOP_BANNER_H = 30;
   AirspaceResult result;
   if (airspaceAlertBarEnabled && getAirspaceSnapshot(result) && result.insideHoriz &&
       (!result.vertKnown || result.insideVert)) {
-    return true;
+    return TOP_BANNER_H;
   }
-  return lastFanetMessage.valid && millis() - lastFanetMessage.receivedMs < FANET_MESSAGE_BANNER_MS;
+  if (lastFanetMessage.valid && millis() - lastFanetMessage.receivedMs < FANET_MESSAGE_BANNER_MS) {
+    return TOP_BANNER_H;
+  }
+  return 0;
 }
 
 void drawADSBPage() {
@@ -2343,7 +2352,7 @@ void drawADSBPage() {
   // pilot needs to read clear of them. The bar is on all the time if it's
   // enabled, and the top banner comes and goes.
   const int TRAFFIC_BANNER_H = 30;
-  const int topBannerH = trafficTopBannerShowing() ? TRAFFIC_BANNER_H : 0;
+  const int topBannerH = topBannerHeightPx();
   const int bottomBarH = airspaceInfoBarEnabled ? TRAFFIC_BANNER_H : 0;
 
   // =========================================================
@@ -2693,7 +2702,7 @@ void drawADSBPage() {
 // has an EGT bung), so this page doesn't touch engineEgtC yet.
 // =====================================================
 void drawParamotorPage() {
-  const int top = TOP_BAR_HEIGHT_PX;
+  const int top = TOP_BAR_HEIGHT_PX + topBannerHeightPx();
   const int colW = SCREEN_W / 2;
   const int rowH = (SCREEN_H - top) / 3;
   char buffer[32];
