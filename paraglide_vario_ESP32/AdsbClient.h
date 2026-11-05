@@ -6,6 +6,9 @@
 #include <ArduinoJson.h>
 
 const unsigned long ADSB_INTERVAL_MS = 15000;  // Poll the server every 15 seconds
+// Longest to spend receiving one response, so a stalled link can't hold up
+// the rest of the background task for long.
+const unsigned long ADSB_BODY_READ_TIMEOUT_MS = 8000;
 
 // Re-alerts (siren or voice, whichever is selected) every this many ms
 // while any aircraft remains inside the alert radius/vertical band --

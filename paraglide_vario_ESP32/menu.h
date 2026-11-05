@@ -107,8 +107,12 @@ extern uint8_t activePageIndex;
 //   |     |    drawAirspaceInfoBar() -- ADS-B page only, bottom of
 //   |     |    screen, current airspace name/frequency including CFZ,
 //   |     |    or "Class G" if not inside anything charted)
-//   |     `-- (Voice profile -- cycles through Default and available
-//   |          /VOICE/<NAME>/ folders; saves successfully loaded choice)
+//   |     |-- (Voice profile -- cycles through Default and available
+//   |     |    /VOICE/<NAME>/ folders; saves successfully loaded choice)
+//   |     |-- (Ground Traffic: Hide/Show, cycled in place -- persisted; see
+//   |     |    adsbHideGroundTraffic in settings.h)
+//   |     `-- (Labels: Relevant/All/Off, cycled in place -- persisted; see
+//   |          adsbLabelMode in settings.h)
 //   |-- WEATHER_SETTINGS
 //   |     |-- WEATHER_POLL_INTERVAL   (Zephyr station poll cadence)
 //   |     |-- WEATHER_STATIONS_SHOWN  (how many stations to display)

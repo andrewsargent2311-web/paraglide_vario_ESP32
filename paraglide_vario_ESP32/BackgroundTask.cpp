@@ -209,6 +209,10 @@ void backgroundTask(void* parameter) {
         adsbTaskRunning = true;
         performADSBUpdate();
         adsbTaskRunning = false;
+        // Still "not tried" if it skipped the fetch for want of a GPS fix.
+        if (adsbFetchStatus != FETCH_NOT_TRIED) {
+          wifiReportFetchResult(adsbFetchStatus == FETCH_OK);
+        }
       }
       // Weather: first poll fires WEATHER_FIRST_POLL_DELAY_MS after boot;
       // every poll after that reverts to the menu-adjustable weatherPollIntervalMs cadence.

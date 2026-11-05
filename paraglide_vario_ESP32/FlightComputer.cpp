@@ -683,10 +683,11 @@ void loop() {
     updateAirspaceAlert();
   }
   // ---------------------------------------------------------
-  // 8. Display - 1 Hz, or immediately when something changed (page
-  //     cycle, menu open/navigate/select) so the menu feels responsive.
+  // 8. Display - 1 Hz (faster while close traffic is flashing on the
+  //     traffic page), or immediately when something changed (page cycle,
+  //     menu open/navigate/select) so the menu feels responsive.
   // ---------------------------------------------------------
-  if (displayDirty || now - lastDisplayUpdate >= 1000) {
+  if (displayDirty || now - lastDisplayUpdate >= displayRefreshIntervalMs()) {
     lastDisplayUpdate = now;
     displayDirty = false;
     const uint32_t drawStartMs = millis();
