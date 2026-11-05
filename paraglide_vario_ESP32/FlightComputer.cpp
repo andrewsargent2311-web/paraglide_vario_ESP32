@@ -77,6 +77,10 @@ static TaskHandle_t audioTaskHandle = nullptr;
 
 void setup() {
   Serial.begin(115200);
+  // Plugged into a PC with nothing reading the port, the default 100 ms timeout
+  // lets each print wait up to 2 s (the core tries 20 times), which stalls the
+  // whole unit. Drop log text instead: about 20 ms at worst per print.
+  Serial.setTxTimeoutMs(1);
   delay(1000);  // give the USB CDC host a moment to attach before the first print, or it's often lost
   Serial.println("BOOTING FLIGHT COMPUTER...");
   Serial.printf("[BOOT] Free heap: %u | Min heap: %u\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
