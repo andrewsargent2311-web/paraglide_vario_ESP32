@@ -124,6 +124,9 @@ void updateWeather() {
     return;
   }
 
+  // From here on, leaving early counts as a failed fetch (see FetchStatusScope).
+  FetchStatusScope fetchResult(weatherFetchStatus);
+
   // ---------------------------------------------------------
   // Initialise TLS client once
   // ---------------------------------------------------------
@@ -646,6 +649,7 @@ void updateWeather() {
   // ---------------------------------------------------------
   // Determine whether we have usable weather data.
   // ---------------------------------------------------------
+  fetchResult.ok = true;
   hasWeatherData = false;
 
   for (int i = 0; i < TRACKED_METERS; i++) {

@@ -39,6 +39,34 @@ struct NearestThreatSnapshot {
   float headingDeg = 0;        // aircraft's own track/heading, if the feed has it
 };
 
+// How the last ADS-B or weather fetch went, for the "No internet" message on
+// those pages. Each is written on Core 0 and read on Core 1: a single aligned
+// value, so no mutex is needed.
+enum FetchStatus {
+  FETCH_NOT_TRIED = 0,
+  FETCH_OK,
+  FETCH_FAILED
+};
+
+// Reports FETCH_FAILED when it goes out of scope, unless ok was set to true
+// first -- so every early return in a long fetch function counts as a failure
+// without each one having to say so.
+struct FetchStatusScope {
+  volatile FetchStatus& status;
+  bool ok = false;
+  explicit FetchStatusScope(volatile FetchStatus& s) : status(s) {}
+  ~FetchStatusScope() { status = ok ? FETCH_OK : FETCH_FAILED; }
+};
+
+extern volatile FetchStatus adsbFetchStatus;
+extern volatile FetchStatus weatherFetchStatus;
+
+// Goes up by one each time performADSBUpdate() publishes a new adsbDoc, with
+// the time it did so. Both are written and read under backgroundDataMutex,
+// which is how the traffic page knows there's something new to merge.
+extern uint32_t adsbFetchGeneration;
+extern unsigned long adsbDocFetchMs;
+
 extern PositionSnapshot sharedPosition;
 extern NearestThreatSnapshot sharedNearestThreat;
 extern SemaphoreHandle_t backgroundDataMutex;

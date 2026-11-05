@@ -7,16 +7,19 @@
 #include <string.h>
 
 // How often wifiManagerLoop() retries a dropped/never-established
-// connection, and how many times it'll retry before giving up until the
-// next reboot -- unchanged from the values that used to live directly in
-// the main .ino.
-#define WIFI_RETRY_MS 50000UL
+// connection, and how many quick attempts it makes first.
+#define WIFI_RETRY_MS 20000UL
 #define MAX_WIFI_RETRIES 10
 // After MAX_WIFI_RETRIES quick attempts, keep trying at this slower pace
 // instead of switching WiFi off until reboot: a phone hotspot that was off or
 // out of reach for a while must not cost the pilot ADS-B and weather for the
-// rest of the flight.
-#define WIFI_SLOW_RETRY_MS 300000UL
+// rest of the flight, and should be picked up soon after it comes back.
+#define WIFI_SLOW_RETRY_MS 60000UL
+// A network can stay joined while nothing gets through (a hotspot that's lost
+// its signal, say), which WiFi.status() can't see. After this many ADS-B
+// fetches in a row fail, about 45 s at one every 15 s, start the connection
+// again from scratch. See wifiReportFetchResult().
+#define WIFI_MAX_FAILED_FETCHES 3
 
 volatile bool wifiConnected = false;
 uint8_t selectedWifiIndex = 0;
@@ -239,6 +242,23 @@ void wifiManagerLoop() {
   } else {
     Serial.println("WIFI RETRY (slow)");
   }
+}
+
+void wifiReportFetchResult(bool ok) {
+  static uint8_t failedFetches = 0;
+
+  if (ok) {
+    failedFetches = 0;
+    return;
+  }
+  if (++failedFetches < WIFI_MAX_FAILED_FETCHES) return;
+  failedFetches = 0;
+
+  Serial.println("[WIFI] Joined, but fetches keep failing -- reconnecting");
+  wifiConnected = false;
+  WiFi.disconnect();
+  beginConnect(selectedWifiIndex);
+  lastWifiRetry = millis();  // give this attempt time before the next retry
 }
 
 void selectWifiNetwork(uint8_t index) {

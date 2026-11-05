@@ -72,6 +72,8 @@ uint8_t buzzerVolumePercent = 80;
 float adsbAlertRadiusKm = 5.0f;
 float adsbAlertVerticalFt = 2000.0f;
 bool adsbAutoJumpEnabled = true;
+bool adsbHideGroundTraffic = true;
+uint8_t adsbLabelMode = ADSB_LABELS_RELEVANT;
 uint8_t adsbAlarmMode = ADSB_ALARM_TONE;  // preserves the old default (alarm audible, not muted)
 uint8_t adsbAlertVolumePercent = 100;
 
@@ -158,6 +160,10 @@ static void sanitizeLoadedSettings() {
     buzzerVolumePercent = 80;
     reject("volPct");
   }
+  if (adsbLabelMode >= ADSB_LABEL_MODE_COUNT) {
+    adsbLabelMode = ADSB_LABELS_RELEVANT;
+    reject("adsbLabels");
+  }
   if (!(adsbAlertRadiusKm >= 1.0f && adsbAlertRadiusKm <= 50.0f)) {
     adsbAlertRadiusKm = 5.0f;
     reject("adsbRadius");
@@ -221,6 +227,8 @@ void loadSettings() {
   adsbAlertRadiusKm = prefs.getFloat("adsbRadius", adsbAlertRadiusKm);
   adsbAlertVerticalFt = prefs.getFloat("adsbVert", adsbAlertVerticalFt);
   adsbAutoJumpEnabled = prefs.getBool("adsbJump", adsbAutoJumpEnabled);
+  adsbHideGroundTraffic = prefs.getBool("adsbHideGnd", adsbHideGroundTraffic);
+  adsbLabelMode = prefs.getUChar("adsbLabels", adsbLabelMode);
   adsbAlarmMode = prefs.getUChar("adsbAlarmMode", adsbAlarmMode);
   adsbAlertVolumePercent = prefs.getUChar("adsbAlertVol", adsbAlertVolumePercent);
 
@@ -300,6 +308,8 @@ void saveSettings() {
   prefs.putFloat("adsbRadius", adsbAlertRadiusKm);
   prefs.putFloat("adsbVert", adsbAlertVerticalFt);
   prefs.putBool("adsbJump", adsbAutoJumpEnabled);
+  prefs.putBool("adsbHideGnd", adsbHideGroundTraffic);
+  prefs.putUChar("adsbLabels", adsbLabelMode);
   prefs.putUChar("adsbAlarmMode", adsbAlarmMode);
   prefs.putUChar("adsbAlertVol", adsbAlertVolumePercent);
 

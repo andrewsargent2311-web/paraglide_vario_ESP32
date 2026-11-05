@@ -1,5 +1,6 @@
 #include "menu.h"
 #include "wifi_manager.h"
+#include "CrossCoreState.h"  // adsbFetchStatus
 #include "WifiSetup.h"
 #include "FileServer.h"
 #include "FanetMessaging.h"
@@ -327,7 +328,7 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_BLUETOOTH: return 3;
     case MENU_SCREEN_BLUETOOTH_SCAN: return bleScanResultCount() > 0 ? bleScanResultCount() : 1;
     case MENU_SCREEN_MAP: return mapFileCount > 0 ? mapFileCount : 1;
-    case MENU_SCREEN_ADSB_SETTINGS: return 9;
+    case MENU_SCREEN_ADSB_SETTINGS: return 11;
     case MENU_SCREEN_ADSB_RADIUS: return ADSB_RADIUS_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_VERTICAL: return ADSB_VERTICAL_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_ALERT_VOLUME: return ADSB_ALERT_VOLUME_CHOICE_COUNT;
@@ -495,7 +496,12 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
       int slot = wifiListedSlot(index - 1);
       const char* ssid = (slot >= 0) ? wifiSlotSsid((uint8_t)slot) : "";
       if (slot >= 0 && slot == selectedWifiIndex && wifiEnabled) {
-        snprintf(buf, buflen, "%s%s", ssid, wifiConnected ? " * connected" : " * connecting");
+        // "connected" only means joined to the network, so say if the last
+        // download failed rather than implying the internet works.
+        const char* state = !wifiConnected ? " * connecting"
+                            : (adsbFetchStatus == FETCH_FAILED) ? " * no internet"
+                                                                : " * connected";
+        snprintf(buf, buflen, "%s%s", ssid, state);
       } else {
         snprintf(buf, buflen, "%s", ssid);
       }
@@ -580,6 +586,12 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
           snprintf(buf, buflen, "Voice: %s",
                    profile[0] == '\0' ? "Default" : profile);
         }
+      } else if (index == 9) {
+        snprintf(buf, buflen, "Ground Traffic: %s", adsbHideGroundTraffic ? "Hide" : "Show");
+      } else if (index == 10) {
+        const char* modeStr = (adsbLabelMode == ADSB_LABELS_ALL) ? "All"
+                             : (adsbLabelMode == ADSB_LABELS_OFF) ? "Off" : "Relevant";
+        snprintf(buf, buflen, "Labels: %s", modeStr);
       } else {
         static const char* items[] = { "Alert Radius", "Vertical Threshold" };
         snprintf(buf, buflen, "%s", items[index]);
@@ -962,6 +974,19 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           // Unlike airspaceAlertBarEnabled above, this one IS saved --
           // see its comment in settings.h.
           airspaceInfoBarEnabled = !airspaceInfoBarEnabled;
+          saveSettings();
+          displayDirty = true;
+          playFeedbackTone(600.0f, 50);
+          return;
+        case 9:
+          adsbHideGroundTraffic = !adsbHideGroundTraffic;
+          saveSettings();
+          displayDirty = true;
+          playFeedbackTone(600.0f, 50);
+          return;
+        case 10:
+          // Relevant -> All -> Off -> Relevant. Cycles in place.
+          adsbLabelMode = (adsbLabelMode + 1) % ADSB_LABEL_MODE_COUNT;
           saveSettings();
           displayDirty = true;
           playFeedbackTone(600.0f, 50);

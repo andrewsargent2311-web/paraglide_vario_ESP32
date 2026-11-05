@@ -43,6 +43,11 @@ void startWifiConnect();
 // WIFI_RETRY_MS/MAX_WIFI_RETRIES backoff the old code had.
 void wifiManagerLoop();
 
+// Call from backgroundTask() on Core 0 after each ADS-B fetch. Repeated
+// failures while joined to the network restart the connection, because
+// wifiManagerLoop() only notices when the network itself is lost.
+void wifiReportFetchResult(bool ok);
+
 // Called by the menu (Connections > WiFi) when the pilot picks a
 // different saved network. No-ops on an empty slot. Persists the new
 // index to flash, then disconnects and kicks off a fresh (non-blocking)

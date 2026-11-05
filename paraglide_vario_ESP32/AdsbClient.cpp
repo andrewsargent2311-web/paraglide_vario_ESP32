@@ -54,6 +54,9 @@ void performADSBUpdate() {
     return;
   }
 
+  // From here on, leaving early counts as a failed fetch (see FetchStatusScope).
+  FetchStatusScope fetchResult(adsbFetchStatus);
+
   HTTPClient http;
   WiFiClientSecure client;
 
@@ -168,12 +171,37 @@ void performADSBUpdate() {
       return;
     }
   } else {
-    bodyLength = adsbStream->readBytes(adsbBody, adsbBodyCap - 1);
+    // No length given, so the only sign of the end is the server closing the
+    // connection. readBytes() would just stop at the first pause of over
+    // 2.5 s, and a slow link would then look like a complete but broken
+    // download. This runs on Core 0, so waiting here delays nothing critical.
+    const unsigned long startMs = millis();
+    bool closedByServer = false;
+    while (millis() - startMs < ADSB_BODY_READ_TIMEOUT_MS && bodyLength < adsbBodyCap - 1) {
+      const int waiting = adsbStream->available();
+      if (waiting > 0) {
+        const size_t room = adsbBodyCap - 1 - bodyLength;
+        const int got = adsbStream->read((uint8_t*)adsbBody + bodyLength,
+                                         min((size_t)waiting, room));
+        if (got > 0) bodyLength += (size_t)got;
+      } else if (!adsbStream->connected()) {
+        closedByServer = true;
+        break;
+      } else {
+        vTaskDelay(pdMS_TO_TICKS(10));
+      }
+    }
     if (bodyLength == adsbBodyCap - 1 && adsbStream->available() > 0) {
       if (!overflowLogged) {
         Serial.println("[ADS-B] Response body exceeds buffer capacity");
         overflowLogged = true;
       }
+      hasAdsbData = false;
+      http.end();
+      return;
+    }
+    if (!closedByServer && bodyLength < adsbBodyCap - 1) {
+      Serial.printf("[ADS-B] Download timed out after %u bytes\n", (unsigned)bodyLength);
       hasAdsbData = false;
       http.end();
       return;
@@ -219,25 +247,8 @@ void performADSBUpdate() {
     "[ADS-B] Total fetched aircraft: %d\n",
     aircraftList.size());
 
-  // ---------------------------------------------------------
-  // Remove slow ground traffic
-  // ---------------------------------------------------------
-
-  for (int i = aircraftList.size() - 1;
-       i >= 0;
-       i--) {
-
-    JsonObject ac = aircraftList[i];
-
-    if (!ac["gs"].is<float>() || (float)ac["gs"] < 10.0f) {
-
-      aircraftList.remove(i);
-    }
-  }
-
-  Serial.printf(
-    "[ADS-B] Mapped %d aircraft after 10kt speed filter.\n",
-    aircraftList.size());
+  // Everything stays in the document: the traffic page decides what to show,
+  // using the Ground Traffic setting (adsbTrackHidden(), DrawPages.cpp).
 
   // ---------------------------------------------------------
   // Threat detection
@@ -264,6 +275,8 @@ void performADSBUpdate() {
       continue;
     }
     if (!ac["alt_baro"].is<float>()) continue;
+    // Voice and siren alerts have always ignored anything this slow.
+    if (!ac["gs"].is<float>() || (float)ac["gs"] < 10.0f) continue;
 
     float acLat = ac["lat"];
     float acLon = ac["lon"];
@@ -365,6 +378,9 @@ void performADSBUpdate() {
   // ---------------------------------------------------------
   // adsbDoc is already the published document; no deep copy is needed.
   hasAdsbData = (aircraftList.size() > 0);
+  adsbDocFetchMs = millis();
+  adsbFetchGeneration++;  // even if empty: that's still a good answer
+  fetchResult.ok = true;
 
   if (backgroundDataMutex != nullptr) {
     xSemaphoreGive(backgroundDataMutex);

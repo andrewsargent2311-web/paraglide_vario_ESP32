@@ -10,6 +10,12 @@ PositionSnapshot sharedPosition;
 
 NearestThreatSnapshot sharedNearestThreat;
 
+volatile FetchStatus adsbFetchStatus = FETCH_NOT_TRIED;
+volatile FetchStatus weatherFetchStatus = FETCH_NOT_TRIED;
+
+uint32_t adsbFetchGeneration = 0;
+unsigned long adsbDocFetchMs = 0;
+
 // gps.altitude.feet() is written by loop() (Core 1) via gps.encode() and
 // would otherwise be read directly by performADSBUpdate() running on the
 // background task (Core 0) -- an unsynchronized cross-core read/write on the
