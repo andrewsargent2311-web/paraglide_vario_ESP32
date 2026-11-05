@@ -25,10 +25,12 @@
 // unauthenticated read-only server doesn't sit reachable on the network
 // indefinitely just because turning it off was forgotten.
 //
-// Read-only by design -- no upload/delete routes. Downloads are served
-// directly out of the SD root (where startIgcRecording(), main .ino,
-// writes *.IGC files); the requested filename is validated against path
-// traversal before ever reaching SD_MMC.open().
+// Besides downloading recordings, the page can delete *.IGC files, delete
+// *.ADEM maps / AIRSPACE.txt, and upload new ones (written to a temp file
+// and only swapped in once complete). All of that is refused while a
+// flight is being recorded, and the map currently in use (selectedDemFile)
+// can't be replaced or deleted. Everything works in the SD root only;
+// filenames are validated against path traversal before reaching SD_MMC.
 // =====================================================
 
 // How long the server stays up with no requests before it stops itself.

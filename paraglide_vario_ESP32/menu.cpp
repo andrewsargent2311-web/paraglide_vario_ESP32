@@ -1,5 +1,6 @@
 #include "menu.h"
 #include "wifi_manager.h"
+#include "WifiSetup.h"
 #include "FileServer.h"
 #include "FanetMessaging.h"
 #include "ble_manager.h"
@@ -10,6 +11,7 @@
 #include <string.h>
 #include <strings.h>  // strcasecmp
 #include <math.h>     // fabsf
+#include <qrcode.h>   // QR encoder built into the ESP32 framework (esp_qrcode_*)
 
 bool menuActive = false;
 uint8_t menuSelectedIndex = 0;
@@ -59,6 +61,11 @@ void menuGoBack() {
   // nobody's looking at anymore.
   if (currentMenuScreen() == MENU_SCREEN_BLUETOOTH_SCAN) {
     bleStopScan();
+  }
+  // Leaving Add Network closes the setup hotspot (no-op once it has
+  // already closed itself after a save).
+  if (currentMenuScreen() == MENU_SCREEN_WIFI_SETUP) {
+    stopWifiSetup();
   }
 
   if (menuStackDepth > 1) {
@@ -193,6 +200,31 @@ static const uint8_t VOLUME_CHOICE_COUNT = 10;
 #define VARIO_VOLUME_PREVIEW_SINK_MS 700UL
 
 // =====================================================
+// EXPORT FILES: WHY THE SERVER WON'T START
+// Set when Start Server fails, cleared on the next attempt or when the
+// screen is reopened. The reason is worked out afresh each time it's drawn,
+// so "WiFi not connected" goes away by itself once WiFi connects. The SD
+// card is only checked at boot (sdCardOK), so inserting one needs a restart.
+// =====================================================
+static bool exportStartFailed = false;
+
+// The text to show, or nullptr if there's currently nothing to report.
+static const char* exportStartProblem() {
+  if (!exportStartFailed) return nullptr;
+  if (!sdCardOK && !wifiConnected) return "No SD card or WiFi";
+  if (!sdCardOK) return "No SD card: insert, restart";
+  if (!wifiConnected) return "WiFi not connected";
+  return nullptr;
+}
+
+// =====================================================
+// LIFT THRESHOLD CHOICES
+// 0.0-1.0 m/s in 0.1 m/s steps for liftThresholdTenths (settings.h) --
+// choice[index] = index tenths of a m/s.
+// =====================================================
+#define LIFT_THRESHOLD_CHOICE_COUNT (LIFT_THRESHOLD_MAX_TENTHS + 1)
+
+// =====================================================
 // ADS-B ALERT CHOICES
 // =====================================================
 static const float ADSB_RADIUS_CHOICES_KM[] = { 3.0f, 5.0f, 8.0f, 10.0f };
@@ -229,11 +261,56 @@ static const uint8_t WEATHER_STATIONS_CHOICE_COUNT = 3;
 // =====================================================
 // SCREEN CONTENT: item counts, titles, and labels
 // =====================================================
+// =====================================================
+// WIFI LIST HELPERS
+// The WiFi screen lists only the networks that actually exist (secrets.h
+// entries plus any added from the device -- see wifi_manager.h), then
+// "Add Network", then "Forget Network" once there's something to forget:
+//   row 0                 WiFi: On/Off
+//   rows 1..N             networks (N = wifiListedCount())
+//   row N+1               Add Network
+//   row N+2               Forget Network   (only if any are device-saved)
+// =====================================================
+static uint8_t wifiListedCount() {
+  uint8_t n = 0;
+  for (uint8_t s = 0; s < wifiTotalSlots(); s++) {
+    if (wifiSlotValid(s)) n++;
+  }
+  return n;
+}
+
+static int wifiListedSlot(uint8_t nth) {  // nth listed network -> slot
+  for (uint8_t s = 0; s < wifiTotalSlots(); s++) {
+    if (!wifiSlotValid(s)) continue;
+    if (nth == 0) return s;
+    nth--;
+  }
+  return -1;
+}
+
+static uint8_t wifiDeviceSavedCount() {
+  uint8_t n = 0;
+  for (uint8_t s = 0; s < wifiTotalSlots(); s++) {
+    if (wifiSlotIsDeviceSaved(s) && wifiSlotValid(s)) n++;
+  }
+  return n;
+}
+
+static int wifiDeviceSavedSlot(uint8_t nth) {  // nth forgettable network -> slot
+  for (uint8_t s = 0; s < wifiTotalSlots(); s++) {
+    if (!wifiSlotIsDeviceSaved(s) || !wifiSlotValid(s)) continue;
+    if (nth == 0) return s;
+    nth--;
+  }
+  return -1;
+}
+
 static uint8_t getMenuItemCount(MenuScreen screen) {
   switch (screen) {
     case MENU_SCREEN_MAIN: return 8;
     case MENU_SCREEN_MAIN_PAGE_SELECT: return 2;
-    case MENU_SCREEN_CONFIG: return 5;
+    case MENU_SCREEN_CONFIG: return 6;
+    case MENU_SCREEN_LIFT_THRESHOLD: return LIFT_THRESHOLD_CHOICE_COUNT;
     case MENU_SCREEN_CONFIG_TIME: return TIMEZONE_CHOICE_COUNT;
     case MENU_SCREEN_UNITS: return 2;
     case MENU_SCREEN_CONFIG_VOLUME: return VOLUME_CHOICE_COUNT;
@@ -243,7 +320,10 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_SCREEN: return 2;
     case MENU_SCREEN_CONNECTIONS: return 3;
     case MENU_SCREEN_FANET_MESSAGING: return 1 + FANET_MESSAGE_PRESET_COUNT;
-    case MENU_SCREEN_WIFI_LIST: return WIFI_NETWORK_COUNT + 1;
+    case MENU_SCREEN_WIFI_LIST:
+      return 1 + wifiListedCount() + 1 + (wifiDeviceSavedCount() > 0 ? 1 : 0);
+    case MENU_SCREEN_WIFI_SETUP: return 1;  // Cancel/Done; the rest is drawWifiSetupScreen()
+    case MENU_SCREEN_WIFI_FORGET: return wifiDeviceSavedCount() > 0 ? wifiDeviceSavedCount() : 1;
     case MENU_SCREEN_BLUETOOTH: return 3;
     case MENU_SCREEN_BLUETOOTH_SCAN: return bleScanResultCount() > 0 ? bleScanResultCount() : 1;
     case MENU_SCREEN_MAP: return mapFileCount > 0 ? mapFileCount : 1;
@@ -257,7 +337,8 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN: return WEATHER_STATIONS_CHOICE_COUNT;
     case MENU_SCREEN_WEATHER_SOURCE: return 2;
     case MENU_SCREEN_FLIGHT_RECORDINGS: return 3;
-    case MENU_SCREEN_EXPORT_FILES: return isFileServerRunning() ? 2 : 1;
+    case MENU_SCREEN_EXPORT_FILES:
+      return (isFileServerRunning() || exportStartProblem() != nullptr) ? 2 : 1;
     default: return 1;
   }
 }
@@ -267,6 +348,7 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_MAIN: return "MENU";
     case MENU_SCREEN_MAIN_PAGE_SELECT: return "MAIN PAGE";
     case MENU_SCREEN_CONFIG: return "CONFIG";
+    case MENU_SCREEN_LIFT_THRESHOLD: return "LIFT THRESHOLD";
     case MENU_SCREEN_CONFIG_TIME: return "TIME";
     case MENU_SCREEN_UNITS: return "UNITS";
     case MENU_SCREEN_CONFIG_VOLUME: return "VOLUME";
@@ -277,6 +359,8 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_CONNECTIONS: return "CONNECTIONS";
     case MENU_SCREEN_FANET_MESSAGING: return "FANET MESSAGING";
     case MENU_SCREEN_WIFI_LIST: return "WIFI";
+    case MENU_SCREEN_WIFI_SETUP: return "ADD NETWORK";
+    case MENU_SCREEN_WIFI_FORGET: return "FORGET NETWORK";
     case MENU_SCREEN_BLUETOOTH: return "BLUETOOTH";
     case MENU_SCREEN_BLUETOOTH_SCAN: return "SCAN DEVICES";
     case MENU_SCREEN_MAP: return "MAP";
@@ -314,8 +398,13 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         case 1: snprintf(buf, buflen, "Units"); break;
         case 2: snprintf(buf, buflen, "Volume"); break;
         case 3: snprintf(buf, buflen, "Vario Beep"); break;
-        case 4: snprintf(buf, buflen, "Screen"); break;
+        case 4: snprintf(buf, buflen, "Lift Threshold"); break;
+        case 5: snprintf(buf, buflen, "Screen"); break;
       }
+      break;
+    case MENU_SCREEN_LIFT_THRESHOLD:
+      snprintf(buf, buflen, "%u.%u m/s%s", index / 10, index % 10,
+               (liftThresholdTenths == index) ? " *" : "");
       break;
     case MENU_SCREEN_CONFIG_TIME:
       if (index == 0) {
@@ -394,15 +483,33 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         snprintf(buf, buflen, "WiFi: %s", wifiEnabled ? "On" : "Off");
         break;
       }
-      const char* ssid = WIFI_NETWORKS[index - 1].ssid;
-      bool isEmpty = (ssid == nullptr || ssid[0] == '\0');
-      bool isSelected = (index - 1 == selectedWifiIndex);
-      if (isEmpty) {
-        snprintf(buf, buflen, "(empty)");
-      } else if (isSelected) {
+      uint8_t listed = wifiListedCount();
+      if (index == listed + 1) {
+        snprintf(buf, buflen, "+ Add Network");
+        break;
+      }
+      if (index == listed + 2) {
+        snprintf(buf, buflen, "- Forget Network");
+        break;
+      }
+      int slot = wifiListedSlot(index - 1);
+      const char* ssid = (slot >= 0) ? wifiSlotSsid((uint8_t)slot) : "";
+      if (slot >= 0 && slot == selectedWifiIndex && wifiEnabled) {
         snprintf(buf, buflen, "%s%s", ssid, wifiConnected ? " * connected" : " * connecting");
       } else {
         snprintf(buf, buflen, "%s", ssid);
+      }
+      break;
+    }
+    case MENU_SCREEN_WIFI_SETUP:
+      snprintf(buf, buflen, "%s", isWifiSetupActive() ? "Cancel" : "Done");
+      break;
+    case MENU_SCREEN_WIFI_FORGET: {
+      int slot = wifiDeviceSavedSlot(index);
+      if (slot < 0) {
+        snprintf(buf, buflen, "(none saved)");
+      } else {
+        snprintf(buf, buflen, "%s", wifiSlotSsid((uint8_t)slot));
       }
       break;
     }
@@ -545,11 +652,14 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
     case MENU_SCREEN_EXPORT_FILES: {
       if (index == 0) {
         snprintf(buf, buflen, "%s", isFileServerRunning() ? "Stop Server" : "Start Server");
-      } else {
-        // index == 1 -- only present while running (see the dynamic
-        // count above); informational, not actionable.
+      } else if (isFileServerRunning()) {
+        // index == 1 -- only present while running, or after a failed start
+        // (see the dynamic count above); informational, not actionable.
         String url = getFileServerURL();
         snprintf(buf, buflen, "%s", url.c_str());
+      } else {
+        const char* problem = exportStartProblem();
+        snprintf(buf, buflen, "%s", problem != nullptr ? problem : "");
       }
       break;
     }
@@ -599,9 +709,20 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           if (menuSelectedIndex >= VOLUME_CHOICE_COUNT) menuSelectedIndex = VOLUME_CHOICE_COUNT - 1;
           break;
         case 3: pushMenuScreen(MENU_SCREEN_VARIO_BEEP); break;
-        case 4: pushMenuScreen(MENU_SCREEN_SCREEN); break;
+        case 4:
+          pushMenuScreen(MENU_SCREEN_LIFT_THRESHOLD);
+          menuSelectedIndex = liftThresholdTenths;  // start on the current value
+          break;
+        case 5: pushMenuScreen(MENU_SCREEN_SCREEN); break;
       }
       playFeedbackTone(900.0f, 80);
+      return;
+
+    case MENU_SCREEN_LIFT_THRESHOLD:
+      liftThresholdTenths = index;  // takes effect on the next audio update
+      saveVarioVolumes();  // shares their NVS keys (see settings.h)
+      playFeedbackTone(1100.0f, 120);
+      menuGoBack();  // back to Config
       return;
 
     case MENU_SCREEN_CONFIG_TIME:
@@ -707,14 +828,43 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
         playFeedbackTone(600.0f, 50);
         return;
       }
-      const char* ssid = WIFI_NETWORKS[index - 1].ssid;
-      if (ssid != nullptr && ssid[0] != '\0') {
-        selectWifiNetwork(index - 1);
+      uint8_t listed = wifiListedCount();
+      if (index == listed + 1) {
+        // Add Network -- opens the Vario-Setup hotspot (WifiSetup.h).
+        pushMenuScreen(MENU_SCREEN_WIFI_SETUP);
+        startWifiSetup();
+        playFeedbackTone(900.0f, 80);
+        return;
+      }
+      if (index == listed + 2) {
+        pushMenuScreen(MENU_SCREEN_WIFI_FORGET);
+        playFeedbackTone(900.0f, 80);
+        return;
+      }
+      int slot = wifiListedSlot(index - 1);
+      if (slot >= 0) {
+        selectWifiNetwork((uint8_t)slot);
         playFeedbackTone(1100.0f, 120);
       } else {
-        playFeedbackTone(300.0f, 60);  // empty slot -- nothing to connect to
+        playFeedbackTone(300.0f, 60);
       }
       menuGoBack();  // back to Connections
+      return;
+    }
+
+    case MENU_SCREEN_WIFI_SETUP:
+      menuGoBack();  // Cancel/Done -- also closes the hotspot if it's still up
+      return;
+
+    case MENU_SCREEN_WIFI_FORGET: {
+      int slot = wifiDeviceSavedSlot(index);
+      if (slot >= 0) {
+        forgetSavedWifiNetwork((uint8_t)slot);
+        playFeedbackTone(600.0f, 120);
+      } else {
+        playFeedbackTone(300.0f, 60);
+      }
+      menuGoBack();  // back to the WiFi list
       return;
     }
 
@@ -944,6 +1094,7 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           playFeedbackTone(600.0f, 50);
           return;
         case 1:
+          exportStartFailed = false;  // don't show an old failure on arrival
           pushMenuScreen(MENU_SCREEN_EXPORT_FILES);
           playFeedbackTone(900.0f, 80);
           return;
@@ -966,15 +1117,15 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
         } else {
           bool started = startFileServer();
           // startFileServer() fails cleanly (does nothing) if WiFi isn't
-          // connected or the SD card isn't mounted -- the low tone here
-          // is the only feedback for that, same as an empty WiFi slot
-          // elsewhere in this menu; Serial has the specific reason.
+          // connected or the SD card isn't mounted -- the low tone goes
+          // with a row saying why, see exportStartProblem().
+          exportStartFailed = !started;
           playFeedbackTone(started ? 1100.0f : 300.0f, started ? 120 : 60);
         }
         displayDirty = true;  // item count (1 <-> 2) and label both change
         return;
       }
-      // index == 1 -- the URL row, informational only.
+      // index == 1 -- the URL or problem row, informational only.
       playFeedbackTone(900.0f, 40);
       return;
 
@@ -1035,6 +1186,181 @@ bool menuSelectionIsImmediate() {
 }
 
 // =====================================================
+// ADD NETWORK SCREEN: the two steps side by side (left, then right), each
+// with its own QR code and written fallback, then a status line saying
+// which step to do next, with Cancel/Done as the only selectable row. It
+// has its own layout because the steps must all stay on screen at once,
+// which the big list rows in drawMenu() can't fit.
+//
+// Both QR codes are encoded once, the first time this screen is drawn,
+// then kept: their text never changes, and this runs on Core 1, which
+// mustn't repeat work it doesn't need to.
+// =====================================================
+
+// Version 3 is 29x29 modules. If either string below ever outgrows it,
+// encoding fails, that QR code is left off the screen and the written
+// instructions still work.
+//
+// The two codes should look the same size, but the encoder always picks
+// the smallest version that fits, and the URL is much shorter. So each
+// code gets its own error correction level, chosen to land on version 3:
+//   Join string, 37 bytes: ECC medium (version 3 holds 42; version 2, 26)
+//   URL, 19 bytes:         ECC high   (version 3 holds 24; version 2, 14)
+#define WIFI_SETUP_QR_MAX_VERSION 3
+#define WIFI_SETUP_QR_MAX_MODULES 29
+// 4px per module is about 0.85mm on this panel (~4.7 px/mm), which phones
+// scan comfortably, and leaves each code its blank margin in a half-screen
+// column: 116px wide in 150px, so 17px either side.
+#define WIFI_SETUP_QR_SCALE_PX 4
+
+struct WifiSetupQr {
+  uint8_t size;  // modules per side; 0 = not available
+  uint32_t rows[WIFI_SETUP_QR_MAX_MODULES];  // bit x of rows[y] set = dark
+};
+
+static WifiSetupQr wifiJoinQr;
+static WifiSetupQr wifiPageQr;
+static WifiSetupQr* wifiQrBeingEncoded = nullptr;
+
+// esp_qrcode_generate() hands the finished code to a callback, with no
+// way to pass it a destination -- hence wifiQrBeingEncoded above. The
+// callback runs before esp_qrcode_generate() returns, on the same task.
+static void captureWifiSetupQr(esp_qrcode_handle_t qrcode) {
+  int size = esp_qrcode_get_size(qrcode);
+  if (size > WIFI_SETUP_QR_MAX_MODULES) return;
+
+  for (int y = 0; y < size; y++) {
+    uint32_t row = 0;
+    for (int x = 0; x < size; x++) {
+      if (esp_qrcode_get_module(qrcode, x, y)) row |= (1UL << x);
+    }
+    wifiQrBeingEncoded->rows[y] = row;
+  }
+  wifiQrBeingEncoded->size = (uint8_t)size;
+}
+
+static void encodeWifiSetupQr(WifiSetupQr& qr, const char* text, int eccLevel) {
+  qr.size = 0;
+  wifiQrBeingEncoded = &qr;
+
+  esp_qrcode_config_t config = {};
+  config.display_func = captureWifiSetupQr;
+  config.max_qrcode_version = WIFI_SETUP_QR_MAX_VERSION;
+  config.qrcode_ecc_level = eccLevel;
+
+  if (esp_qrcode_generate(&config, text) != ESP_OK || qr.size == 0) {
+    Serial.printf("[WIFI SETUP] Could not make a QR code for '%s'\n", text);
+  }
+}
+
+// Draws a QR code centred on (centreX, centreY).
+static void drawWifiSetupQr(const WifiSetupQr& qr, int centreX, int centreY) {
+  const int sidePx = qr.size * WIFI_SETUP_QR_SCALE_PX;
+  const int left = centreX - sidePx / 2;
+  const int top = centreY - sidePx / 2;
+
+  u8g2.setDrawColor(1);
+  for (int y = 0; y < qr.size; y++) {
+    for (int x = 0; x < qr.size; x++) {
+      if (qr.rows[y] & (1UL << x)) {
+        u8g2.drawBox(left + x * WIFI_SETUP_QR_SCALE_PX, top + y * WIFI_SETUP_QR_SCALE_PX,
+                     WIFI_SETUP_QR_SCALE_PX, WIFI_SETUP_QR_SCALE_PX);
+      }
+    }
+  }
+}
+
+static void drawCentredStr(int centreX, int baselineY, const char* text) {
+  u8g2.drawStr(centreX - u8g2.getStrWidth(text) / 2, baselineY, text);
+}
+
+static void drawWifiSetupScreen() {
+  static bool qrEncoded = false;
+  if (!qrEncoded) {
+    encodeWifiSetupQr(wifiJoinQr, "WIFI:T:WPA;S:" WIFI_SETUP_AP_NAME
+                                  ";P:" WIFI_SETUP_AP_PASSWORD ";;", ESP_QRCODE_ECC_MED);
+    encodeWifiSetupQr(wifiPageQr, WIFI_SETUP_URL, ESP_QRCODE_ECC_HIGH);
+    qrEncoded = true;
+  }
+
+  // Layout notes: a QR code needs 4 modules (16px) of blank space around
+  // it to scan reliably, which is what sets the gaps above and below the
+  // codes, and why the divider sits exactly between them.
+  const int leftCentreX = SCREEN_W / 4;
+  const int rightCentreX = SCREEN_W * 3 / 4;
+  const int headingY = 62;
+  const int detailLine1Y = 81;
+  const int detailLine2Y = 98;
+  const int qrCentreY = 176;
+  const int captionY = 263;
+  const int stepsBottom = 276;
+  const int statusY = 306;
+  const int noteY = 334;
+  const int cancelTop = 356;
+  const int cancelH = SCREEN_H - cancelTop;
+
+  // The steps are always shown, whatever the status line says.
+  u8g2.setDrawColor(1);
+  u8g2.drawLine(SCREEN_W / 2, 40, SCREEN_W / 2, stepsBottom);
+  u8g2.drawLine(0, stepsBottom, SCREEN_W, stepsBottom);
+
+  u8g2.setFont(u8g2_font_helvB12_tf);
+  drawCentredStr(leftCentreX, headingY, "1. Join WiFi");
+  drawCentredStr(rightCentreX, headingY, "2. Open page");
+
+  drawWifiSetupQr(wifiJoinQr, leftCentreX, qrCentreY);
+  drawWifiSetupQr(wifiPageQr, rightCentreX, qrCentreY);
+
+  u8g2.setFont(u8g2_font_helvR10_tf);
+  drawCentredStr(leftCentreX, detailLine1Y, "Name: " WIFI_SETUP_AP_NAME);
+  drawCentredStr(leftCentreX, detailLine2Y, "Password: " WIFI_SETUP_AP_PASSWORD);
+  drawCentredStr(leftCentreX, captionY, "Scan to join");
+  drawCentredStr(rightCentreX, detailLine1Y, "In a browser, go to:");
+  drawCentredStr(rightCentreX, detailLine2Y, WIFI_SETUP_IP);
+  drawCentredStr(rightCentreX, captionY, "Scan to open");
+
+  // Status gets its own line, so it can't push a step off the screen.
+  char status[48];
+  const WifiSetupState state = wifiSetupState();
+  switch (state) {
+    case WIFI_SETUP_STARTING:     snprintf(status, sizeof(status), "Scanning for networks..."); break;
+    case WIFI_SETUP_WAITING:      snprintf(status, sizeof(status), "Hotspot on: do step 1"); break;
+    case WIFI_SETUP_PHONE_JOINED: snprintf(status, sizeof(status), "Phone joined: now do step 2"); break;
+    case WIFI_SETUP_SAVED:        snprintf(status, sizeof(status), "Saved: %s", wifiSetupSavedSsid()); break;
+    case WIFI_SETUP_FAILED:       snprintf(status, sizeof(status), "Hotspot failed to start"); break;
+    default:                      snprintf(status, sizeof(status), "Hotspot closed"); break;
+  }
+  // A long network name is trimmed to fit rather than running off the edge.
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  size_t statusLen = strlen(status);
+  while (statusLen > 0 && u8g2.getStrWidth(status) > SCREEN_W - 20) {
+    status[--statusLen] = '\0';
+  }
+  drawCentredStr(SCREEN_W / 2, statusY, status);
+
+  // The hotspot has no internet, so a phone with mobile data on may leave
+  // it or send the page over mobile data instead, and the page won't open.
+  // This has to be here, not only on the setup page, because that page is
+  // exactly what can't be reached when it happens.
+  u8g2.setFont(u8g2_font_helvR10_tf);
+  if (state == WIFI_SETUP_SAVED) {
+    drawCentredStr(SCREEN_W / 2, noteY, "You can turn mobile data back on");
+  } else if (state == WIFI_SETUP_STARTING || state == WIFI_SETUP_WAITING ||
+             state == WIFI_SETUP_PHONE_JOINED) {
+    drawCentredStr(SCREEN_W / 2, noteY, "Page won't open? Turn mobile data off");
+  }
+
+  // Cancel/Done is the screen's only item, so it's always highlighted.
+  char label[32];
+  getMenuItemLabel(MENU_SCREEN_WIFI_SETUP, 0, label, sizeof(label));
+  u8g2.setFont(u8g2_font_helvB14_tf);
+  u8g2.drawBox(0, cancelTop, SCREEN_W, cancelH);
+  u8g2.setDrawColor(0);  // inverted text, as on any highlighted menu row
+  u8g2.drawStr(14, cancelTop + cancelH / 2 + 5, label);
+  u8g2.setDrawColor(1);
+}
+
+// =====================================================
 // MENU RENDERING: full-screen list shown instead of the normal top bar +
 // page while menuActive is true. Generic over whichever screen is on top
 // of the navigation stack -- see getMenuTitle()/getMenuItemCount()/
@@ -1044,9 +1370,18 @@ void drawMenu() {
   MenuScreen screen = currentMenuScreen();
   uint8_t itemCount = getMenuItemCount(screen);
 
+  // A row can vanish while it's highlighted (Export Files' URL or problem
+  // row), which would leave nothing selected.
+  if (menuSelectedIndex >= itemCount) menuSelectedIndex = 0;
+
   u8g2.setFont(u8g2_font_helvB14_tf);
   u8g2.drawStr(10, 30, getMenuTitle(screen));
   u8g2.drawLine(0, 40, SCREEN_W, 40);
+
+  if (screen == MENU_SCREEN_WIFI_SETUP) {
+    drawWifiSetupScreen();
+    return;
+  }
 
   const int top = 40;
   const int available = SCREEN_H - top;

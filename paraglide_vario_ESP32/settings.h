@@ -111,6 +111,19 @@ void loadVarioVolumes();
 void saveVarioVolumes();
 
 // =====================================================
+// LIFT THRESHOLD (Config > Lift Threshold)
+// Climb beeps start once lift is above this. Stored as whole tenths of a
+// m/s (1 = 0.1 m/s) so it stays on an exact 0.1 step, from 0.0 to 1.0 m/s.
+// Loaded and saved with the volumes above, by loadVarioVolumes() and
+// saveVarioVolumes(). The sink indicator on the Paraglider page doesn't
+// use this: it keeps CLIMB_DEADBAND_MS (DrawPages.h).
+// =====================================================
+#define LIFT_THRESHOLD_DEFAULT_TENTHS 1
+#define LIFT_THRESHOLD_MAX_TENTHS 10
+
+extern uint8_t liftThresholdTenths;
+
+// =====================================================
 // BUZZER VOLUME (main / master volume)
 // Applied to the ES8311 codec's DAC digital volume register (0x32) by
 // applyBuzzerVolume() (main .ino) -- called once at boot (es8311Init())

@@ -50,7 +50,9 @@ extern uint8_t activePageIndex;
 //   |     |     |-- VARIO_BEEP_CLIMB_VOL   (climb beep volume, 0-100%
 //   |     |     |                           in 10% steps, dB-scaled)
 //   |     |     `-- VARIO_BEEP_SINK_VOL    (sink tone volume, same scale)
-//   |     `-- SCREEN          ("GPS Top" / "GPS Bottom" -- 180-degree
+//   |     |-- LIFT_THRESHOLD  (climb beeps start above this, 0.0-1.0 m/s
+//   |     |                    in 0.1 m/s steps; default 0.1)
+//   |     `-- SCREEN         ("GPS Top" / "GPS Bottom" -- 180-degree
 //   |                          display flip; see applyScreenOrientation())
 //   |-- CONNECTIONS
 //   |     |-- WIFI              (On/Off toggle, cycled in place --
@@ -58,6 +60,11 @@ extern uint8_t activePageIndex;
 //   |     |                      (wifi_manager.h) -- then pick a saved
 //   |     |                      network -- see secrets.h; choice is
 //   |     |                      remembered across reboots)
+//   |     |     |-- WIFI_SETUP  ("Add Network" -- opens the Vario-Setup
+//   |     |     |                hotspot so a network + password can be
+//   |     |     |                entered from a phone; see WifiSetup.h)
+//   |     |     `-- WIFI_FORGET (remove a network added from the device;
+//   |     |                      only listed once at least one exists)
 //   |     |-- BLUETOOTH
 //   |     |     |-- (On/Off toggle, cycled in place)
 //   |     |     |-- SCAN        (live-updating list of nearby BLE
@@ -144,6 +151,7 @@ enum MenuScreen {
   MENU_SCREEN_VARIO_BEEP,
   MENU_SCREEN_VARIO_BEEP_CLIMB_VOL,
   MENU_SCREEN_VARIO_BEEP_SINK_VOL,
+  MENU_SCREEN_LIFT_THRESHOLD,
   MENU_SCREEN_SCREEN,
   MENU_SCREEN_CONNECTIONS,
   MENU_SCREEN_WIFI_LIST,
@@ -161,7 +169,9 @@ enum MenuScreen {
   MENU_SCREEN_WEATHER_SOURCE,
   MENU_SCREEN_FLIGHT_RECORDINGS,
   MENU_SCREEN_EXPORT_FILES,
-  MENU_SCREEN_FANET_MESSAGING
+  MENU_SCREEN_FANET_MESSAGING,
+  MENU_SCREEN_WIFI_SETUP,
+  MENU_SCREEN_WIFI_FORGET
 };
 
 extern bool menuActive;

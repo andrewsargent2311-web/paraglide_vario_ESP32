@@ -196,6 +196,7 @@ static const WifiNetwork WIFI_NETWORKS[WIFI_NETWORK_COUNT] = {
 - Use a **2.4 GHz** network. The ESP32 can't connect to 5 GHz WiFi.
 - Leave unused slots as empty quotes `""`.
 - A **phone hotspot** is handy at the launch site, since that's how the ADS-B traffic and weather pages get their data in the field.
+- You can also add networks later **from your phone, without reflashing**. See [Adding a WiFi network from your phone](#adding-a-wifi-network-from-your-phone).
 
 ## Step 6: Build and upload the code
 
@@ -291,17 +292,44 @@ The unit has **one button**:
 **Menu contents**
 
 - **Main Page:** choose Paraglider or Paramotor as the first page
-- **Config:** time zone, units (altitude / speed), main volume, vario beep (climb and sink volume), screen orientation
-- **Connections:** WiFi on/off and network choice, Bluetooth (engine meter), FANET on/off
+- **Config:** time zone, units (altitude / speed), main volume, vario beep (climb and sink volume), lift threshold (climb beeps start above this: 0.0–1.0 m/s in 0.1 steps, default 0.1), screen orientation
+- **Connections:** WiFi on/off, network choice, **Add Network** and **Forget Network** (see below), Bluetooth (engine meter), FANET on/off
 - **FANET Messaging:** messaging on/off, and the preset messages you can broadcast
 - **Map:** choose which terrain map to use
 - **ADS-B settings:** alert radius and vertical threshold, auto-jump to the ADS-B page, **Alarm Sound** (Off / Alarm / Voice), **Alert Volume**, range rings, airspace bars, and **Voice** profile
 - **Weather settings:** update interval, number of stations, data source
 - **Flight recordings:** recording on/off, **Export files** (see below), auto-stop
 
-**Flight logs:** the unit automatically starts recording an `.IGC` file when you start moving (above about 10 km/h for 10 seconds). To download logs, open **Flight recordings → Export files**. Once the unit is connected to WiFi it shows a web address (something like `http://192.168.x.x/`). Open that in a browser on a phone or computer on the same network and click the file to download.
+**Flight logs:** the unit automatically starts recording an `.IGC` file when you start moving (above about 10 km/h for 10 seconds). To download logs, open **Flight recordings → Export files**. Once the unit is connected to WiFi it shows a web address (something like `http://192.168.x.x/`). Open that in a browser on a phone or computer on the same network and click the file to download. If the server can't start, the screen tells you why: **WiFi not connected**, or **No SD card** (insert one and restart the unit, as it only checks for a card when it starts up).
+
+The same page also lets you:
+- **Delete** old flight recordings (asks to confirm first).
+- **Upload** a new `.ADEM` terrain map or a replacement `AIRSPACE.txt` straight to the SD card, so you don't need to take the card out. Large maps take several minutes over WiFi, so do it on the ground. Then pick the new map from **Menu → Map**.
+- **Delete** maps you no longer need (the map currently in use can't be deleted or replaced; choose a different one in the Map menu first).
+
+Deleting and uploading are switched off while a flight is being recorded. Tracks are recorded at **one point per second**.
 
 ---
+
+## Adding a WiFi network from your phone
+
+You can add a network (for example a friend's hotspot, or the WiFi at a new launch site) straight from the unit, with no computer needed.
+
+1. Open **Menu → Connections → WiFi → + Add Network**. The unit scans for nearby networks, then starts its own temporary WiFi hotspot called **`Vario-Setup`**. The screen shows two steps side by side, each with a QR code, and a status line underneath that tells you which step to do next.
+2. **Step 1 (left):** on your phone, scan the left QR code to join the hotspot, or join the **`Vario-Setup`** WiFi network by hand using the password **`GetHigh!`**.
+3. **Step 2 (right):** scan the right QR code, or open a browser and go to **`192.168.4.1`**. Some phones open the setup page by themselves after step 1, in which case you can skip this.
+4. Tap your network in the list (or choose **Other / hidden network** and type its name), enter the password and tap **Save & connect**.
+5. The hotspot closes and the unit connects to the new network. The menu shows **Saved: *network name***. Your phone goes back to its normal WiFi.
+
+Notes:
+- The unit remembers up to **5** networks added this way, on top of the ones in `secrets.h`. They are kept through reboots **and** firmware updates. When all 5 are used, the oldest is replaced.
+- Saving a network that is already stored updates its password, so this is also how you fix a wrong password.
+- **Connections → WiFi → − Forget Network** removes a network added this way. Networks in `secrets.h` can only be changed by editing that file and uploading again.
+- The `Vario-Setup` hotspot uses WPA2 with the password `GetHigh!`, and only runs while the Add Network screen is in use. It closes on **Cancel**, after a network is saved, or after 10 minutes of inactivity.
+- If the setup page closes on your phone, open **`192.168.4.1`** in your browser again.
+- If the setup page won't open, or your phone keeps dropping the `Vario-Setup` WiFi, turn mobile data off until you've finished. The hotspot has no internet, so some phones leave it or try to use mobile data instead. The unit's screen shows this reminder too.
+- Normal WiFi (ADS-B, weather, Export Files) pauses while the hotspot is up.
+- The unit can only use **2.4 GHz** networks. Set phone hotspots to 2.4 GHz.
 
 ## Voice traffic alerts
 
@@ -457,6 +485,7 @@ The firmware lives in `paraglide_vario_ESP32/` and is split into one `.h`/`.cpp`
 | `WeatherClient` | Weather station data |
 | `Gps`, `SdCard`, `Display`, `IgcRecorder` | GPS object, SD card, screen, flight logging |
 | `BackgroundTask` | The second processor core: WiFi, Bluetooth, web file server, ADS-B and weather polling, terrain and airspace lookups |
+| `wifi_manager`, `WifiSetup` | WiFi connection and saved networks; the `Vario-Setup` phone portal for adding networks from the device |
 | `PageButton`, `menu`, `settings`, `DrawPages` | The single button, the menus, saved settings and drawing the pages |
 
 ## Credits

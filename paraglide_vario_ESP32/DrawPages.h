@@ -38,6 +38,8 @@
 #define TOP_BAR_HEIGHT_PX 32
 #define WEATHER_STATION_NAME_MAX 20
 #define TRACKED_METERS 6
+// Only used by drawParagliderPage()'s sink indicator now. The climb beeps
+// have their own setting: liftThresholdTenths (settings.h).
 #define CLIMB_DEADBAND_MS 0.15f
 
 // Live FANET traffic table -- see FanetContact below. Sized well above

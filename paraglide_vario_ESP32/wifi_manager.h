@@ -64,4 +64,41 @@ void selectWifiNetwork(uint8_t index);
 // intent to turn it back on.
 void setWifiRadioEnabled(bool enabled);
 
+// =====================================================
+// NETWORKS SAVED FROM THE DEVICE (Connections > WiFi > Add Network)
+// On top of the fixed list compiled in from secrets.h, up to
+// WIFI_SAVED_MAX extra networks can be added from a phone through the
+// setup portal (WifiSetup.h) -- stored in flash (NVS), so they survive
+// reboots AND firmware updates, no reflash needed to add one.
+//
+// One combined "slot" numbering covers both lists, so selectedWifiIndex
+// and the existing NVS key keep working unchanged:
+//   0 .. WIFI_NETWORK_COUNT-1                       -> secrets.h entries
+//   WIFI_NETWORK_COUNT .. WIFI_TOTAL_SLOTS-1        -> device-saved entries
+// =====================================================
+#define WIFI_SAVED_MAX 5
+#define WIFI_SSID_MAX_LEN 32      // 802.11 limit
+#define WIFI_PASSWORD_MAX_LEN 64  // WPA2 passphrase limit (63) + spare
+
+uint8_t wifiTotalSlots();
+// True if the slot holds a usable network (non-empty SSID).
+bool wifiSlotValid(uint8_t slot);
+// SSID for a slot, or "" if the slot is empty/out of range. Never null.
+const char* wifiSlotSsid(uint8_t slot);
+// True for slots added from the device (and so forgettable from the device).
+bool wifiSlotIsDeviceSaved(uint8_t slot);
+
+// Stores a network added through the setup portal. If that SSID is
+// already device-saved its password is updated in place; otherwise the
+// first free slot is used, or -- once all WIFI_SAVED_MAX are used -- the
+// oldest one is replaced. Returns the combined slot index, or -1 if the
+// SSID/password is invalid. Does NOT connect -- call selectWifiNetwork()
+// with the returned slot for that.
+int addSavedWifiNetwork(const char* ssid, const char* password);
+
+// Removes a device-saved network (combined slot index). If it was the
+// selected one, falls back to the first remaining network (if any).
+// No-op for secrets.h slots, which can only be changed by reflashing.
+void forgetSavedWifiNetwork(uint8_t slot);
+
 #endif  // WIFI_MANAGER_H
