@@ -307,6 +307,8 @@ The same page also lets you:
 - **Upload** a new `.ADEM` terrain map or a replacement `AIRSPACE.txt` straight to the SD card, so you don't need to take the card out. Large maps take several minutes over WiFi, so do it on the ground. Then pick the new map from **Menu → Map**.
 - **Delete** maps you no longer need (the map currently in use can't be deleted or replaced; choose a different one in the Map menu first).
 
+A script can load the rest of a card over the same connection. `POST /upload?path=ROY.BIN` or `POST /upload?path=VOICE/US_LESSAC/V000.PCM` (a multipart form with a `file` field) adds the splash image and voice files, creating the voice folders if needed. `GET /list` returns every file's path and size for checking. Restart the unit afterwards so it loads them.
+
 Deleting and uploading are switched off while a flight is being recorded. Tracks are recorded at **one point per second**.
 
 **Flights:** **Flight recordings → Flights** lists your 12 most recent flights, newest first, with the date, take-off time, duration, maximum altitude and best climb. Take-off time is when recording started, so it may be earlier than your actual take-off if the unit was already moving, for example in a car on the way to launch. Summaries are saved to `FLIGHTS.CSV` on the SD card about once a minute during a flight, so turning the unit off loses at most the last minute of the summary, and the IGC file itself isn't affected. Flights recorded before this feature show only the date, time and duration.

@@ -40,6 +40,41 @@ static bool isAirspaceName(const String& name) {
   lower.toLowerCase();
   return lower == "airspace.txt";
 }
+static bool isSplashName(const String& name) { return name.equalsIgnoreCase("ROY.BIN"); }
+
+// A file that belongs in a voice folder: V000.PCM ... V059.PCM style clips
+// (VoiceAlert.cpp), or the manifest.txt listing that sits beside them.
+static bool isVoiceFileName(const String& file) {
+  if (file.equalsIgnoreCase("manifest.txt")) return true;
+  if (file.length() != 8 || (file[0] != 'V' && file[0] != 'v')) return false;
+  for (int i = 1; i <= 3; i++) {
+    if (!isdigit((unsigned char)file[i])) return false;
+  }
+  return file.substring(4).equalsIgnoreCase(".PCM");
+}
+
+// "VOICE/<file>" (Default voice) or "VOICE/<PROFILE>/<file>". The profile name
+// follows the same rule as the voice loader: letters, numbers, '_' and '-', up
+// to 12 characters. Only those characters get through, so a path that passes
+// can't climb out of /VOICE. Returns the profile in *profile ("" for Default).
+static bool parseVoicePath(const String& path, String* profile) {
+  if (!path.startsWith("VOICE/")) return false;
+  String rest = path.substring(6);
+  int slash = rest.indexOf('/');
+  String prof = "";
+  if (slash >= 0) {
+    prof = rest.substring(0, slash);
+    rest = rest.substring(slash + 1);
+    if (prof.length() == 0 || prof.length() > 12) return false;
+    for (size_t i = 0; i < prof.length(); i++) {
+      char c = prof[i];
+      if (!isalnum((unsigned char)c) && c != '_' && c != '-') return false;
+    }
+  }
+  if (!isVoiceFileName(rest)) return false;
+  if (profile != nullptr) *profile = prof;
+  return true;
+}
 
 // The map the vario is currently reading from (selectedDemFile, settings.h,
 // stored with a leading '/'). It's held open by the terrain lookup, so it
@@ -231,10 +266,20 @@ static void handleDelete() {
 }
 
 // ---------------------------------------------------------------------------
-// Map / airspace upload. Written to a temporary file first and only swapped
-// in once it has fully arrived, so an interrupted upload never leaves a
-// half-written map or airspace file behind.
+// Upload of maps, airspace, the splash image and voice files. Written to a
+// temporary file first and only swapped in once it has fully arrived, so an
+// interrupted upload never leaves a half-written file behind.
+//
+// The page's form sends a bare filename, which is how maps and airspace
+// arrive. ROY.BIN and voice files are for a script loading a whole card: it
+// names the destination with /upload?path=VOICE/US_LESSAC/V000.PCM, because
+// those files don't all live in the SD root.
 // ---------------------------------------------------------------------------
+
+// The WebServer library drops an upload after 5 s with no data, which a short
+// pause on a phone hotspot can trigger, losing a large map most of the way
+// through. Applies to this upload's connection only.
+#define UPLOAD_CLIENT_TIMEOUT_MS 30000UL
 
 static const char* UPLOAD_TEMP_PATH = "/UPLOAD.TMP";
 static File uploadFile;
@@ -257,18 +302,27 @@ static void handleUploadChunk() {
     uploadError = "";
     uploadTarget = "";
     uploadBytes = 0;
+    server.client().setTimeout(UPLOAD_CLIENT_TIMEOUT_MS);
 
-    String name = up.filename;
-    int slash = name.lastIndexOf('/');           // some browsers send a path
-    if (slash >= 0) name = name.substring(slash + 1);
-    slash = name.lastIndexOf('\\');
-    if (slash >= 0) name = name.substring(slash + 1);
+    String name;
+    if (server.hasArg("path")) {
+      name = server.arg("path");                 // destination named by a script
+    } else {
+      name = up.filename;
+      int slash = name.lastIndexOf('/');         // some browsers send a path
+      if (slash >= 0) name = name.substring(slash + 1);
+      slash = name.lastIndexOf('\\');
+      if (slash >= 0) name = name.substring(slash + 1);
+    }
+    String voiceProfile;
+    bool isVoice = parseVoicePath(name, &voiceProfile);
 
     if (igcRecording) {
       uploadError = "A flight is being recorded &ndash; try again after landing.";
-    } else if (!isSafeRootName(name) || !(isMapName(name) || isAirspaceName(name))) {
-      uploadError = "Only .ADEM map files and AIRSPACE.txt can be uploaded.";
-    } else if (name.length() >= DEM_FILENAME_MAX_LEN - 1) {
+    } else if (!isVoice && (!isSafeRootName(name) ||
+                            !(isMapName(name) || isAirspaceName(name) || isSplashName(name)))) {
+      uploadError = "Only .ADEM maps, AIRSPACE.txt, ROY.BIN and VOICE files can be uploaded.";
+    } else if (!isVoice && name.length() >= DEM_FILENAME_MAX_LEN - 1) {
       uploadError = "That file name is too long &ndash; rename it to under 30 characters.";
     } else if (isMapName(name) && isSelectedMap(name)) {
       uploadError = "A map with that name is in use. Choose a different map in the Map menu first, "
@@ -276,10 +330,19 @@ static void handleUploadChunk() {
     }
     if (uploadError.length() > 0) return;
 
-    uploadTarget = "/" + (isAirspaceName(name) ? String("AIRSPACE.txt") : name);
+    uploadTarget = "/" + (isAirspaceName(name) ? String("AIRSPACE.txt")
+                          : isSplashName(name) ? String("ROY.BIN") : name);
     if (!takeSd(1000)) {
       uploadError = "The SD card is busy &ndash; try again in a moment.";
       return;
+    }
+    if (isVoice) {
+      // A new card has no voice folders yet, and the final rename needs them.
+      if (!SD_MMC.exists("/VOICE")) SD_MMC.mkdir("/VOICE");
+      if (voiceProfile.length() > 0) {
+        String dir = "/VOICE/" + voiceProfile;
+        if (!SD_MMC.exists(dir)) SD_MMC.mkdir(dir);
+      }
     }
     SD_MMC.remove(UPLOAD_TEMP_PATH);
     uploadFile = SD_MMC.open(UPLOAD_TEMP_PATH, FILE_WRITE);
@@ -336,10 +399,52 @@ static void handleUploadDone() {
   String msg = htmlEscapeFs(name) + " (" + sizeLabel(uploadBytes) + ") is on the SD card.";
   if (isMapName(name)) {
     msg += " Choose it from the vario's <b>Map</b> menu to use it.";
-  } else {
+  } else if (isAirspaceName(name)) {
     msg += " The new airspace is picked up automatically.";
+  } else {
+    msg += " Restart the vario to use it.";  // splash and voice load at start-up
   }
   sendMessagePage("Uploaded", msg);
+}
+
+// ---------------------------------------------------------------------------
+// Plain-text list of what's on the card, one "path<TAB>size" per line, so a
+// script loading a whole card can check every file arrived at its full size.
+// Covers the root, /VOICE and /VOICE/<PROFILE>, the deepest the card uses.
+// ---------------------------------------------------------------------------
+
+#define FILE_LIST_MAX_ENTRIES 500
+
+static void appendFileList(const char* dirPath, int depth, String& out, int& count) {
+  File dir = SD_MMC.open(dirPath);
+  if (!dir || !dir.isDirectory()) return;
+  File f = dir.openNextFile();
+  while (f && count < FILE_LIST_MAX_ENTRIES) {
+    if (f.isDirectory()) {
+      if (depth < 2) appendFileList(f.path(), depth + 1, out, count);
+    } else {
+      out += f.path();
+      out += '\t';
+      out += String((unsigned long)f.size());
+      out += '\n';
+      count++;
+    }
+    f = dir.openNextFile();
+  }
+}
+
+static void handleList() {
+  lastActivityMs = millis();
+  if (!takeSd(1000)) {
+    server.send(503, "text/plain", "SD card busy -- try again in a moment");
+    return;
+  }
+  String out;
+  out.reserve(6144);
+  int count = 0;
+  appendFileList("/", 0, out, count);
+  giveSd();
+  server.send(200, "text/plain", out);
 }
 
 // ---------------------------------------------------------------------------
@@ -428,6 +533,7 @@ bool startFileServer() {
   if (!routesRegistered) {
     server.on("/", HTTP_GET, handleRoot);
     server.on("/download", HTTP_GET, handleDownload);
+    server.on("/list", HTTP_GET, handleList);
     server.on("/delete", HTTP_POST, handleDelete);
     server.on("/upload", HTTP_POST, handleUploadDone, handleUploadChunk);
     server.onNotFound(handleNotFound);

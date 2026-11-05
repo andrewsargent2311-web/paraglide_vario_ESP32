@@ -29,8 +29,13 @@
 // *.ADEM maps / AIRSPACE.txt, and upload new ones (written to a temp file
 // and only swapped in once complete). All of that is refused while a
 // flight is being recorded, and the map currently in use (selectedDemFile)
-// can't be replaced or deleted. Everything works in the SD root only;
-// filenames are validated against path traversal before reaching SD_MMC.
+// can't be replaced or deleted. Filenames are validated against path
+// traversal before reaching SD_MMC.
+//
+// For loading a whole card without taking it out, a script can also upload
+// ROY.BIN and voice files with /upload?path=VOICE/<PROFILE>/V000.PCM (only
+// those names are accepted outside the SD root; missing voice folders are
+// created), and read back every file's path and size from /list.
 // =====================================================
 
 // How long the server stays up with no requests before it stops itself.
