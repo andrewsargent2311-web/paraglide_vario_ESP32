@@ -2243,6 +2243,17 @@ static void drawAirspaceOutlines(int cx, int cy, int r, float myLat, float myLon
   }
 }
 
+// Will drawDashboard() put a banner across the top of the page this frame? Same
+// conditions as drawAirspaceWarning() and drawFanetMessageBanner().
+static bool trafficTopBannerShowing() {
+  AirspaceResult result;
+  if (airspaceAlertBarEnabled && getAirspaceSnapshot(result) && result.insideHoriz &&
+      (!result.vertKnown || result.insideVert)) {
+    return true;
+  }
+  return lastFanetMessage.valid && millis() - lastFanetMessage.receivedMs < FANET_MESSAGE_BANNER_MS;
+}
+
 void drawADSBPage() {
 
   const int cx = SCREEN_W / 2;
@@ -2328,6 +2339,13 @@ void drawADSBPage() {
                          isMoving ? gliderHeading : 0.0f, myAltFeetForAirspace);
   }
 
+  // The banners cover 30 px at the top and bottom of the page: keep what the
+  // pilot needs to read clear of them. The bar is on all the time if it's
+  // enabled, and the top banner comes and goes.
+  const int TRAFFIC_BANNER_H = 30;
+  const int topBannerH = trafficTopBannerShowing() ? TRAFFIC_BANNER_H : 0;
+  const int bottomBarH = airspaceInfoBarEnabled ? TRAFFIC_BANNER_H : 0;
+
   // =========================================================
   // ALTITUDE OVERLAY BOX -- top-left
   // =========================================================
@@ -2346,7 +2364,7 @@ void drawADSBPage() {
   int altitudeH = u8g2.getFontAscent() - u8g2.getFontDescent() + 6;
 
   int altitudeX = 5;                           // left side, 5px in from the left edge
-  int altitudeY = TOP_BAR_HEIGHT_PX + 10 - 4;  // 4px higher than the old top-right box
+  int altitudeY = TOP_BAR_HEIGHT_PX + topBannerH + 10 - 4;  // 4px higher than the old top-right box
 
   u8g2.setDrawColor(0);
   u8g2.drawBox(altitudeX, altitudeY, altitudeW, altitudeH);
@@ -2377,7 +2395,7 @@ void drawADSBPage() {
   int gsH = u8g2.getFontAscent() - u8g2.getFontDescent() + 6;
 
   int gsX = SCREEN_W - gsW - 20;
-  int gsY = TOP_BAR_HEIGHT_PX + 10 - 4;  // top-right corner, just below the top bar
+  int gsY = TOP_BAR_HEIGHT_PX + topBannerH + 10 - 4;  // top-right corner, just below the top bar
 
   u8g2.setDrawColor(0);
   u8g2.drawBox(gsX, gsY, gsW, gsH);
@@ -2447,7 +2465,8 @@ void drawADSBPage() {
 
   // A. CALCULATE POSITION LOGIC
   int varioX = 4 + 20;                // Moved 20 pixels inwards
-  int varioY = (SCREEN_H - 26) - 13;  // Shifted 10 pixels up
+  int varioY = bottomBarH > 0 ? SCREEN_H - bottomBarH - 25 - 3  // sits just above the bar
+                             : (SCREEN_H - 26) - 13;  // Shifted 10 pixels up
 
   // B. COMPUTE AUTO-SCALING BOUNDARIES FOR BOLD TEXT
   // Measures exact bold text string pixel width and adds 10 pixels padding
@@ -2523,8 +2542,8 @@ void drawADSBPage() {
   };
   static PlottedAircraft plotted[MAX_DISPLAYED_AIRCRAFT];
   // Room for a label and an icon per aircraft, plus the own-ship arrow, the
-  // three fixed boxes and the connection message.
-  static ScreenRect obstacles[2 * MAX_DISPLAYED_AIRCRAFT + 5];
+  // three fixed boxes, the connection message and the two banners.
+  static ScreenRect obstacles[2 * MAX_DISPLAYED_AIRCRAFT + 7];
   int plottedCount = 0;
   int obstacleCount = 0;
 
@@ -2533,10 +2552,11 @@ void drawADSBPage() {
   obstacles[obstacleCount++] = { (int16_t)gsX, (int16_t)gsY, (int16_t)gsW, (int16_t)gsH };
   obstacles[obstacleCount++] = { (int16_t)varioX, (int16_t)varioY, (int16_t)varioW, (int16_t)varioH };
   obstacles[obstacleCount++] = connectionRect;  // zero-sized if there's no message
+  obstacles[obstacleCount++] = { 0, (int16_t)TOP_BAR_HEIGHT_PX, (int16_t)SCREEN_W, (int16_t)topBannerH };
+  obstacles[obstacleCount++] = { 0, (int16_t)(SCREEN_H - bottomBarH), (int16_t)SCREEN_W, (int16_t)bottomBarH };
 
   for (int i = 0; i < snapshotCount; i++) {
     const AircraftSnapshot& s = trafficSnapshot[i];
-    if (s.distanceKm > MAX_RADIUS_KM) continue;
 
     float relativeBearing = getBearing(MY_LAT, MY_LON, s.lat, s.lon);
     if (isMoving) {
@@ -2548,6 +2568,12 @@ void drawADSBPage() {
 
     const int acX = cx + (int)(pixelDistance * cos(angleRad));
     const int acY = cy + (int)(pixelDistance * sin(angleRad));
+
+    // Anywhere the pilot can see, past the range ring and into the corners.
+    if (acX < 0 || acX >= SCREEN_W || acY < TOP_BAR_HEIGHT_PX + topBannerH ||
+        acY >= SCREEN_H - bottomBarH) {
+      continue;
+    }
 
     // Rotated the same way the crosshair is -- relative to your heading in
     // track-up mode, or absolute compass heading in north-up mode -- so it
@@ -2931,7 +2957,9 @@ bool drawAirspaceWarning() {
   char line1[40];
   char line2[40];
 
-  snprintf(line1, sizeof(line1), "INSIDE %s", result.name);
+  char shortName[OAS_MAX_NAME_LEN];
+  formatAirspaceName(shortName, sizeof(shortName), result.name);
+  snprintf(line1, sizeof(line1), "INSIDE %s", shortName);
   snprintf(line2, sizeof(line2), "Class %s", result.classId);
   if (altUnknown) {
     snprintf(line2, sizeof(line2), "Class %s  ALT UNKNOWN", result.classId);

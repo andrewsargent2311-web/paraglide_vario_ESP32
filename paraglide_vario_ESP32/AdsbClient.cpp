@@ -26,6 +26,13 @@ int activeThreatCount = 0;
 static char* adsbBody = nullptr;
 static size_t adsbBodyCap = 0;
 
+// The traffic page plots aircraft out to the screen's corners, which are this
+// much further away than the outer range ring. If a wider request ever overflows
+// the response buffer, drop back to the ring: a smaller area beats losing the
+// whole update, because the voice and siren alerts come from it too.
+#define ADSB_QUERY_SCREEN_FACTOR 1.85f
+static bool adsbWideQueryOk = true;
+
 // =====================================================
 // ADSB data handling
 // =====================================================
@@ -65,14 +72,13 @@ void performADSBUpdate() {
   String domain = "https://opendata.adsb.fi";
   String apiPath = "/api/v3/lat/";
 
-  // Requests exactly the current far/default range ring's outer radius
-  // (see the Range Rings menu, ADSB_SETTINGS > Range Rings) -- adsb.fi
-  // filters server-side by this "dist" value, so it must be at least as
-  // large as whatever drawADSBPage() might draw out to, or the outer part
-  // of a wider ring would always appear empty regardless of real traffic.
-  // A menu change here takes effect on the next scheduled poll, not
-  // instantly.
-  int queryRadiusKm = (int)adsbRingOuterKm;
+  // Based on the current far/default range ring's outer radius (see the
+  // Range Rings menu, ADSB_SETTINGS > Range Rings) -- adsb.fi filters
+  // server-side by this "dist" value, so it must be at least as large as
+  // whatever drawADSBPage() might draw out to, or the outer part of the
+  // screen would always appear empty regardless of real traffic. A menu
+  // change here takes effect on the next scheduled poll, not instantly.
+  int queryRadiusKm = (int)ceilf(adsbRingOuterKm * (adsbWideQueryOk ? ADSB_QUERY_SCREEN_FACTOR : 1.0f));
 
   String url =
     domain + apiPath + String(myPos.lat, 4) + "/lon/" + String(myPos.lon, 4) + "/dist/" + String(queryRadiusKm);
@@ -154,6 +160,7 @@ void performADSBUpdate() {
   size_t bodyLength = 0;
   if (responseSize > 0) {
     if ((size_t)responseSize >= adsbBodyCap) {
+      adsbWideQueryOk = false;
       if (!overflowLogged) {
         Serial.println("[ADS-B] Response body exceeds buffer capacity");
         overflowLogged = true;
@@ -192,6 +199,7 @@ void performADSBUpdate() {
       }
     }
     if (bodyLength == adsbBodyCap - 1 && adsbStream->available() > 0) {
+      adsbWideQueryOk = false;
       if (!overflowLogged) {
         Serial.println("[ADS-B] Response body exceeds buffer capacity");
         overflowLogged = true;
