@@ -119,17 +119,56 @@ static void sendMessagePage(const String& title, const String& message) {
 // (delete / upload).
 // ---------------------------------------------------------------------------
 
+// The directory is read into this table first, so the SD card isn't held while
+// the page goes out over WiFi, which would stall a recording. The table lives
+// in PSRAM, and the page goes out in pieces rather than being built in memory:
+// with a delete button on every row, a card with a lot of recordings could need
+// more heap than there is, and a failed String append silently loses the rows.
+#define FILE_SERVER_MAX_MAPS 32
+#define PAGE_CHUNK_BYTES 1200
+
+struct ListedFile {
+  char name[64];
+  uint32_t size;
+};
+static ListedFile* listedFiles = nullptr;  // recordings, then maps. Only this task uses it.
+
+static String pageChunk;
+
+static void addToPage(const String& text) {
+  pageChunk += text;
+  if (pageChunk.length() >= PAGE_CHUNK_BYTES) {
+    server.sendContent(pageChunk);
+    pageChunk = "";
+  }
+}
+
+// The red delete button, with its "are you sure" prompt.
+static String deleteForm(const String& esc) {
+  return " <form class=\"d\" method=\"POST\" action=\"/delete\" "
+         "onsubmit=\"return confirm('Delete " + esc + "?')\">"
+         "<input type=\"hidden\" name=\"file\" value=\"" + esc + "\">"
+         "<button>Delete</button></form>";
+}
+
 static void handleRoot() {
   lastActivityMs = millis();
+
+  if (listedFiles == nullptr) {
+    listedFiles = (ListedFile*)ps_malloc((FILE_SERVER_MAX_LISTED + FILE_SERVER_MAX_MAPS) * sizeof(ListedFile));
+    if (listedFiles == nullptr) {
+      server.send(503, "text/plain", "Not enough memory to list the files");
+      return;
+    }
+  }
+  ListedFile* igcFiles = listedFiles;
+  ListedFile* mapFiles = listedFiles + FILE_SERVER_MAX_LISTED;
 
   if (sdMutex == nullptr || xSemaphoreTake(sdMutex, pdMS_TO_TICKS(200)) != pdTRUE) {
     server.send(503, "text/plain", "SD card busy -- try again in a moment");
     return;
   }
 
-  String igcRows;
-  String mapRows;
-  igcRows.reserve(2048);
   int igcCount = 0;
   int mapCount = 0;
   bool igcTruncated = false;
@@ -143,34 +182,18 @@ static void handleRoot() {
       // leading-slash path depending on core version -- normalize.
       if (name.startsWith("/")) name.remove(0, 1);
 
-      if (!f.isDirectory()) {
-        String esc = htmlEscapeFs(name);
+      if (!f.isDirectory() && name.length() < sizeof(ListedFile::name)) {
         if (isIgcName(name)) {
           if (igcCount >= FILE_SERVER_MAX_LISTED) {
             igcTruncated = true;
           } else {
-            igcRows += "<li><a href=\"/download?file=" + esc + "\">" + esc + "</a> (" +
-                       sizeLabel(f.size()) + ")";
-            if (!igcRecording) {
-              igcRows += " <form class=\"d\" method=\"POST\" action=\"/delete\" "
-                         "onsubmit=\"return confirm('Delete " + esc + "?')\">"
-                         "<input type=\"hidden\" name=\"file\" value=\"" + esc + "\">"
-                         "<button>Delete</button></form>";
-            }
-            igcRows += "</li>";
+            strlcpy(igcFiles[igcCount].name, name.c_str(), sizeof(ListedFile::name));
+            igcFiles[igcCount].size = f.size();
             igcCount++;
           }
-        } else if (isMapName(name) || isAirspaceName(name)) {
-          mapRows += "<li>" + esc + " (" + sizeLabel(f.size()) + ")";
-          if (isSelectedMap(name)) {
-            mapRows += " <i>in use</i>";
-          } else if (!igcRecording) {
-            mapRows += " <form class=\"d\" method=\"POST\" action=\"/delete\" "
-                       "onsubmit=\"return confirm('Delete " + esc + "?')\">"
-                       "<input type=\"hidden\" name=\"file\" value=\"" + esc + "\">"
-                       "<button>Delete</button></form>";
-          }
-          mapRows += "</li>";
+        } else if ((isMapName(name) || isAirspaceName(name)) && mapCount < FILE_SERVER_MAX_MAPS) {
+          strlcpy(mapFiles[mapCount].name, name.c_str(), sizeof(ListedFile::name));
+          mapFiles[mapCount].size = f.size();
           mapCount++;
         }
       }
@@ -179,53 +202,79 @@ static void handleRoot() {
   }
   xSemaphoreGive(sdMutex);
 
-  String html;
-  html.reserve(igcRows.length() + mapRows.length() + 2048);
-  html += "<!doctype html><html><head><meta charset=\"utf-8\"><title>Vario Files</title>";
-  html += "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">";
-  html += "<style>body{font-family:sans-serif;margin:2em;max-width:520px}"
-          "li{margin:0.7em 0}a{text-decoration:none;color:#0645AD;font-size:1.1em}"
-          "form.d{display:inline;margin-left:.6em}"
-          "form.d button{color:#b00020;background:none;border:1px solid #b00020;"
-          "border-radius:4px;padding:.1em .5em}"
-          ".note{color:#666;font-size:.9em}</style>";
-  html += "</head><body>";
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+  pageChunk = "";
+  pageChunk.reserve(PAGE_CHUNK_BYTES + 512);
+
+  addToPage("<!doctype html><html><head><meta charset=\"utf-8\"><title>Vario Files</title>"
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+            "<style>body{font-family:sans-serif;margin:2em;max-width:520px}"
+            "li{margin:0.7em 0}a{text-decoration:none;color:#0645AD;font-size:1.1em}"
+            "form.d{display:inline;margin-left:.6em}"
+            "form.d button{color:#b00020;background:none;border:1px solid #b00020;"
+            "border-radius:4px;padding:.1em .5em}"
+            ".note{color:#666;font-size:.9em}</style>"
+            "</head><body>");
 
   if (igcRecording) {
-    html += "<p class=\"note\"><b>Recording in progress</b> &ndash; downloads, deleting and "
-            "uploads are disabled until it stops.</p>";
+    addToPage("<p class=\"note\"><b>Recording in progress</b> &ndash; downloads, deleting and "
+              "uploads are disabled until it stops.</p>");
   }
 
-  html += "<h1>Flight Recordings</h1>";
+  addToPage("<h1>Flight Recordings</h1>");
   if (igcCount == 0) {
-    html += "<p>No flight recordings found.</p>";
+    addToPage("<p>No flight recordings found.</p>");
   } else {
-    html += "<ul>" + igcRows;
-    if (igcTruncated) html += "<li>... more recordings on the card are not listed</li>";
-    html += "</ul>";
+    addToPage("<ul>");
+    for (int i = 0; i < igcCount; i++) {
+      const String esc = htmlEscapeFs(igcFiles[i].name);
+      String row = "<li><a href=\"/download?file=" + esc + "\">" + esc + "</a> (" +
+                   sizeLabel(igcFiles[i].size) + ")";
+      if (!igcRecording) row += deleteForm(esc);
+      row += "</li>";
+      addToPage(row);
+    }
+    if (igcTruncated) addToPage("<li>... more recordings on the card are not listed</li>");
+    addToPage("</ul>");
   }
 
-  html += "<h1>Maps &amp; Airspace</h1>";
+  addToPage("<h1>Maps &amp; Airspace</h1>");
   if (mapCount == 0) {
-    html += "<p>No .ADEM maps or AIRSPACE.txt found.</p>";
+    addToPage("<p>No .ADEM maps or AIRSPACE.txt found.</p>");
   } else {
-    html += "<ul>" + mapRows + "</ul>";
+    addToPage("<ul>");
+    for (int i = 0; i < mapCount; i++) {
+      const String name = mapFiles[i].name;
+      const String esc = htmlEscapeFs(name);
+      String row = "<li>" + esc + " (" + sizeLabel(mapFiles[i].size) + ")";
+      if (isSelectedMap(name)) {
+        row += " <i>in use</i>";
+      } else if (!igcRecording) {
+        row += deleteForm(esc);
+      }
+      row += "</li>";
+      addToPage(row);
+    }
+    addToPage("</ul>");
   }
 
   if (!igcRecording) {
-    html += "<h2>Upload a map or airspace file</h2>"
-            "<form method=\"POST\" action=\"/upload\" enctype=\"multipart/form-data\" "
-            "onsubmit=\"this.querySelector('button').disabled=true;"
-            "this.querySelector('button').innerText='Uploading - keep this page open...'\">"
-            "<input type=\"file\" name=\"file\" accept=\".ADEM,.adem,.txt\"> "
-            "<button>Upload</button></form>"
-            "<p class=\"note\">.ADEM terrain maps, or <b>AIRSPACE.txt</b> (replaces the current one). "
-            "Large maps take several minutes over WiFi &ndash; do this on the ground. "
-            "Choose a new map from the vario's <b>Map</b> menu afterwards.</p>";
+    addToPage("<h2>Upload a map or airspace file</h2>"
+              "<form method=\"POST\" action=\"/upload\" enctype=\"multipart/form-data\" "
+              "onsubmit=\"this.querySelector('button').disabled=true;"
+              "this.querySelector('button').innerText='Uploading - keep this page open...'\">"
+              "<input type=\"file\" name=\"file\" accept=\".ADEM,.adem,.txt\"> "
+              "<button>Upload</button></form>"
+              "<p class=\"note\">.ADEM terrain maps, or <b>AIRSPACE.txt</b> (replaces the current one). "
+              "Large maps take several minutes over WiFi &ndash; do this on the ground. "
+              "Choose a new map from the vario's <b>Map</b> menu afterwards.</p>");
   }
 
-  html += "</body></html>";
-  server.send(200, "text/html", html);
+  addToPage("</body></html>");
+  server.sendContent(pageChunk);
+  pageChunk = "";
+  server.sendContent("");  // tells the browser the page is finished
 }
 
 // ---------------------------------------------------------------------------
