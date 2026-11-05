@@ -23,11 +23,11 @@ extern U8G2_ST7305_300X400_F_4W_HW_SPI u8g2;
 // Loaded from the SD card as a raw 1bpp packed bitmap (XBM byte layout:
 // rows padded to a whole byte, bits LSB-first, 1 = black/ink) rather than
 // baked into the firmware, so it's easy to swap the picture just by
-// replacing the file on the card. Generated from Roy.png at 280x210 --
-// see the accompanying ROY.BIN this was built from.
+// replacing the file on the card. Full screen, 300x400, so the file must be
+// exactly 15,200 bytes: any other size falls back to the text splash.
 #define SPLASH_IMG_FILE "/ROY.BIN"
-#define SPLASH_IMG_W 280
-#define SPLASH_IMG_H 210
+#define SPLASH_IMG_W 300
+#define SPLASH_IMG_H 400
 #define SPLASH_IMG_ROW_BYTES ((SPLASH_IMG_W + 7) / 8)
 #define SPLASH_IMG_BYTES (SPLASH_IMG_ROW_BYTES * SPLASH_IMG_H)
 #define SPLASH_DISPLAY_MS 3000UL

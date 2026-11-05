@@ -247,7 +247,7 @@ static const WifiNetwork WIFI_NETWORKS[WIFI_NETWORK_COUNT] = {
 - Generate additional profiles with the [`voicebuild` tool](voicebuild/README.md). Copy each generated profile folder into `VOICE/` on the card.
 - You can keep several `.ADEM` maps on the card and choose between them from the menu (**Map**).
 - The included airspace and terrain files cover the lower North Island of New Zealand. See [Optional extras](#optional-extras) for other areas.
-- An optional splash image can be shown at startup: a file called `ROY.BIN` in the card root. If it's missing, a plain text splash screen is shown instead, so you can skip this.
+- An optional splash image can be shown at startup: a file called `ROY.BIN` in the card root, a full-screen 300 × 400 black-and-white image of exactly 15,200 bytes. If it's missing or a different size, a plain text splash screen is shown instead, so you can skip this.
 
 ## Step 8: Assemble everything
 

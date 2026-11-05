@@ -228,8 +228,13 @@ void setup() {
     }
     if (aspMsg != nullptr) {
       u8g2.setFont(u8g2_font_helvB14_tf);
-      u8g2.drawStr((SCREEN_W - u8g2.getStrWidth(aspMsg)) / 2,
-                   SCREEN_H - 8, aspMsg);
+      // On a white box: the full-screen splash can be black behind this, and
+      // the warning has to stay readable whatever picture is on the card.
+      const int aspW = u8g2.getStrWidth(aspMsg);
+      u8g2.setDrawColor(0);
+      u8g2.drawBox((SCREEN_W - aspW) / 2 - 4, SCREEN_H - 28, aspW + 8, 26);
+      u8g2.setDrawColor(1);
+      u8g2.drawStr((SCREEN_W - aspW) / 2, SCREEN_H - 8, aspMsg);
     }
   } while (u8g2.nextPage());
 
