@@ -111,8 +111,10 @@ extern uint8_t activePageIndex;
 //   |     |    /VOICE/<NAME>/ folders; saves successfully loaded choice)
 //   |     |-- (Ground Traffic: Hide/Show, cycled in place -- persisted; see
 //   |     |    adsbHideGroundTraffic in settings.h)
-//   |     `-- (Labels: Relevant/All/Off, cycled in place -- persisted; see
-//   |          adsbLabelMode in settings.h)
+//   |     |-- (Labels: Relevant/All/Off, cycled in place -- persisted; see
+//   |     |    adsbLabelMode in settings.h)
+//   |     `-- (Airspace Lines: On/Off, toggled in place -- persisted; see
+//   |          adsbShowAirspaceLines in settings.h)
 //   |-- WEATHER_SETTINGS
 //   |     |-- WEATHER_POLL_INTERVAL   (Zephyr station poll cadence)
 //   |     |-- WEATHER_STATIONS_SHOWN  (how many stations to display)

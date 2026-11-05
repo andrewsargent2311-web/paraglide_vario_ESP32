@@ -329,7 +329,7 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_BLUETOOTH: return 3;
     case MENU_SCREEN_BLUETOOTH_SCAN: return bleScanResultCount() > 0 ? bleScanResultCount() : 1;
     case MENU_SCREEN_MAP: return mapFileCount > 0 ? mapFileCount : 1;
-    case MENU_SCREEN_ADSB_SETTINGS: return 11;
+    case MENU_SCREEN_ADSB_SETTINGS: return 12;
     case MENU_SCREEN_ADSB_RADIUS: return ADSB_RADIUS_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_VERTICAL: return ADSB_VERTICAL_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_ALERT_VOLUME: return ADSB_ALERT_VOLUME_CHOICE_COUNT;
@@ -595,6 +595,8 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         const char* modeStr = (adsbLabelMode == ADSB_LABELS_ALL) ? "All"
                              : (adsbLabelMode == ADSB_LABELS_OFF) ? "Off" : "Relevant";
         snprintf(buf, buflen, "Labels: %s", modeStr);
+      } else if (index == 11) {
+        snprintf(buf, buflen, "Airspace Lines: %s", adsbShowAirspaceLines ? "On" : "Off");
       } else {
         static const char* items[] = { "Alert Radius", "Vertical Threshold" };
         snprintf(buf, buflen, "%s", items[index]);
@@ -991,6 +993,12 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
         case 10:
           // Relevant -> All -> Off -> Relevant. Cycles in place.
           adsbLabelMode = (adsbLabelMode + 1) % ADSB_LABEL_MODE_COUNT;
+          saveSettings();
+          displayDirty = true;
+          playFeedbackTone(600.0f, 50);
+          return;
+        case 11:
+          adsbShowAirspaceLines = !adsbShowAirspaceLines;
           saveSettings();
           displayDirty = true;
           playFeedbackTone(600.0f, 50);

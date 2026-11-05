@@ -194,6 +194,11 @@ enum AdsbLabelMode {
 };
 extern uint8_t adsbLabelMode;
 
+// Dashed airspace outlines behind the traffic (default on). Display only: the
+// airspace warnings don't depend on it. See drawAirspaceOutlines() in
+// DrawPages.cpp.
+extern bool adsbShowAirspaceLines;
+
 // ADS-B audio alert mode: cycles Off -> Alarm -> Voice -> Off (the
 // "Alarm Sound" menu item). Off mutes both; Alarm plays the existing 5s
 // two-tone siren; Voice speaks the traffic's clock position, heading,

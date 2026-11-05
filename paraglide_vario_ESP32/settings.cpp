@@ -77,6 +77,7 @@ float adsbAlertVerticalFt = 2000.0f;
 bool adsbAutoJumpEnabled = true;
 bool adsbHideGroundTraffic = true;
 uint8_t adsbLabelMode = ADSB_LABELS_RELEVANT;
+bool adsbShowAirspaceLines = true;
 uint8_t adsbAlarmMode = ADSB_ALARM_TONE;  // preserves the old default (alarm audible, not muted)
 uint8_t adsbAlertVolumePercent = 100;
 
@@ -232,6 +233,7 @@ void loadSettings() {
   adsbAutoJumpEnabled = prefs.getBool("adsbJump", adsbAutoJumpEnabled);
   adsbHideGroundTraffic = prefs.getBool("adsbHideGnd", adsbHideGroundTraffic);
   adsbLabelMode = prefs.getUChar("adsbLabels", adsbLabelMode);
+  adsbShowAirspaceLines = prefs.getBool("adsbAspLines", adsbShowAirspaceLines);
   adsbAlarmMode = prefs.getUChar("adsbAlarmMode", adsbAlarmMode);
   adsbAlertVolumePercent = prefs.getUChar("adsbAlertVol", adsbAlertVolumePercent);
 
@@ -313,6 +315,7 @@ void saveSettings() {
   prefs.putBool("adsbJump", adsbAutoJumpEnabled);
   prefs.putBool("adsbHideGnd", adsbHideGroundTraffic);
   prefs.putUChar("adsbLabels", adsbLabelMode);
+  prefs.putBool("adsbAspLines", adsbShowAirspaceLines);
   prefs.putUChar("adsbAlarmMode", adsbAlarmMode);
   prefs.putUChar("adsbAlertVol", adsbAlertVolumePercent);
 

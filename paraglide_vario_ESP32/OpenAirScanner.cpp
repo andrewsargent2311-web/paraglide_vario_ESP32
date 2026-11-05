@@ -1889,6 +1889,17 @@ uint16_t getAirspacePointPoolCapacity() {
     return OAS_POINT_POOL_SIZE;
 }
 
+const CachedAirspace* getCachedAirspace(uint16_t index) {
+    if (airspaces == nullptr || index >= airspaceCount) return nullptr;
+    return &airspaces[index];
+}
+
+void getCachedAirspacePoint(const CachedAirspace& a, uint8_t pointIndex,
+                            float& lat, float& lon) {
+    lat = pointPoolLat[a.pointStart + pointIndex];
+    lon = pointPoolLon[a.pointStart + pointIndex];
+}
+
 // ---------------------------------------------------------------------------
 // Public: database status
 // ---------------------------------------------------------------------------

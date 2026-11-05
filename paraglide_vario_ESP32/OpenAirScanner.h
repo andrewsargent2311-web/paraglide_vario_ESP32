@@ -218,6 +218,15 @@ bool airspaceDatabaseComplete();
 uint16_t getAirspacePointPoolUsed();
 uint16_t getAirspacePointPoolCapacity();
 
+// Read-only access for drawing airspace outlines (traffic page). Reads the RAM
+// cache only, never the SD card. The database only loads once, during boot, so
+// this is safe from Core 1 without a lock. nullptr if index is out of range.
+const CachedAirspace* getCachedAirspace(uint16_t index);
+
+// Polygon point number pointIndex (0 to numPoints - 1) of an airspace.
+void getCachedAirspacePoint(const CachedAirspace& a, uint8_t pointIndex,
+                            float& lat, float& lon);
+
 // ---------------------------------------------------------------------------
 // Runtime search
 // ---------------------------------------------------------------------------

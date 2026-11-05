@@ -8,7 +8,8 @@
 // =====================================================
 #include "DrawPages.h"
 #include "CrossCoreState.h"
-#include "AirspaceProximity.h" 
+#include "AirspaceProximity.h"
+#include "OpenAirScanner.h"  // airspace outlines on the traffic page
 #include "AglDisplay.h"
 #include "AdsbClient.h"
 #include "TrafficIcons.h"
@@ -1848,6 +1849,156 @@ unsigned long displayRefreshIntervalMs() {
   return (!menuActive && currentPage == PAGE_ADSB && trafficHasCloseAircraft) ? 250UL : 1000UL;
 }
 
+// =====================================================
+// AIRSPACE OUTLINES on the traffic page (Airspace Lines setting, ADSB Settings)
+// =====================================================
+// Dashed lines, behind everything else, so they read differently from the
+// solid range rings and crosshair and never cover an aircraft. Drawn from the
+// same RAM cache the airspace warnings use (no SD access, so it's safe on Core
+// 1): the classes loaded at boot, regardless of altitude. Lines stop at the
+// outer range ring, because the aircraft are only plotted inside it too.
+//
+// Positions use a flat east/north approximation around the pilot. That's well
+// within a pixel at these ranges, and much cheaper than a bearing and distance
+// for every point of every outline on every redraw.
+#define AIRSPACE_DASH_ON_PX 4
+#define AIRSPACE_DASH_PERIOD_PX 7
+#define AIRSPACE_CIRCLE_SEGMENTS 48
+#define AIRSPACE_KM_PER_DEG_LAT 110.57f
+#define AIRSPACE_KM_PER_DEG_LON_EQUATOR 111.32f
+#define NM_TO_KM 1.852f
+
+struct AirspaceProjection {
+  float myLat, myLon;
+  float kmPerDegLon;
+  float pxPerKm;
+  float sinHeading, cosHeading;  // 0 and 1 for north-up
+  int cx, cy;
+  float radiusPx;
+  uint16_t dashPhase;  // carried along an outline, so short arc segments still show gaps
+  uint32_t edgesDrawn;
+};
+
+// Position relative to the screen centre, in pixels (+x right, +y down).
+static inline void projectAirspacePoint(const AirspaceProjection& p, float lat, float lon,
+                                        float& x, float& y) {
+  const float eastPx = (lon - p.myLon) * p.kmPerDegLon * p.pxPerKm;
+  const float northPx = (lat - p.myLat) * AIRSPACE_KM_PER_DEG_LAT * p.pxPerKm;
+  // Same turn as the aircraft: what's on your heading ends up straight ahead.
+  x = eastPx * p.cosHeading - northPx * p.sinHeading;
+  y = -(eastPx * p.sinHeading + northPx * p.cosHeading);
+}
+
+// Clips one edge to the range ring and draws what's left, dashed.
+static void drawAirspaceEdge(AirspaceProjection& p, float x0, float y0, float x1, float y1) {
+  const float dx = x1 - x0;
+  const float dy = y1 - y0;
+  const float a = dx * dx + dy * dy;
+  if (a < 0.25f) return;  // under a pixel long
+
+  // Where the line crosses the circle (t = 0 at the start, 1 at the end).
+  const float b = 2.0f * (x0 * dx + y0 * dy);
+  const float c = x0 * x0 + y0 * y0 - p.radiusPx * p.radiusPx;
+  const float disc = b * b - 4.0f * a * c;
+  if (disc <= 0.0f) return;
+  const float root = sqrtf(disc);
+  const float tStart = max(0.0f, (-b - root) / (2.0f * a));
+  const float tEnd = min(1.0f, (-b + root) / (2.0f * a));
+  if (tStart >= tEnd) return;
+
+  int px = p.cx + (int)roundf(x0 + dx * tStart);
+  int py = p.cy + (int)roundf(y0 + dy * tStart);
+  const int endX = p.cx + (int)roundf(x0 + dx * tEnd);
+  const int endY = p.cy + (int)roundf(y0 + dy * tEnd);
+
+  // Bresenham rather than drawLine(), which can't draw dashes.
+  const int stepsX = abs(endX - px);
+  const int stepsY = abs(endY - py);
+  const int dirX = (px < endX) ? 1 : -1;
+  const int dirY = (py < endY) ? 1 : -1;
+  int err = stepsX - stepsY;
+  while (true) {
+    if ((p.dashPhase++ % AIRSPACE_DASH_PERIOD_PX) < AIRSPACE_DASH_ON_PX) u8g2.drawPixel(px, py);
+    if (px == endX && py == endY) break;
+    const int e2 = 2 * err;
+    if (e2 > -stepsY) { err -= stepsY; px += dirX; }
+    if (e2 < stepsX) { err += stepsX; py += dirY; }
+  }
+  p.edgesDrawn++;
+}
+
+static void drawAirspaceOutlines(int cx, int cy, int r, float myLat, float myLon,
+                                 float rangeKm, float headingDeg) {
+  if (!isAirspaceDatabaseLoaded() || rangeKm <= 0.0f) return;
+
+  const uint32_t startUs = micros();
+
+  AirspaceProjection p;
+  p.myLat = myLat;
+  p.myLon = myLon;
+  p.kmPerDegLon = AIRSPACE_KM_PER_DEG_LON_EQUATOR * cosf(deg2rad(myLat));
+  p.pxPerKm = (float)r / rangeKm;
+  p.sinHeading = sinf(deg2rad(headingDeg));
+  p.cosHeading = cosf(deg2rad(headingDeg));
+  p.cx = cx;
+  p.cy = cy;
+  p.radiusPx = (float)(r - 1);
+  p.edgesDrawn = 0;
+
+  // The window of the range ring, to skip most airspaces after four compares.
+  const float latWindow = rangeKm / AIRSPACE_KM_PER_DEG_LAT;
+  const float lonWindow = rangeKm / max(p.kmPerDegLon, 1.0f);
+
+  const uint16_t count = getAirspaceCount();
+  for (uint16_t i = 0; i < count; i++) {
+    const CachedAirspace* a = getCachedAirspace(i);
+    if (a == nullptr) break;
+    if (a->maxLat < myLat - latWindow || a->minLat > myLat + latWindow ||
+        a->maxLon < myLon - lonWindow || a->minLon > myLon + lonWindow) {
+      continue;
+    }
+
+    p.dashPhase = 0;
+    float prevX, prevY, firstX, firstY, x, y;
+
+    if (a->isCircle) {
+      const float radiusKm = a->radius_nm * NM_TO_KM;
+      const float latStep = radiusKm / AIRSPACE_KM_PER_DEG_LAT;
+      const float lonStep = radiusKm / max(p.kmPerDegLon, 1.0f);
+      for (int s = 0; s <= AIRSPACE_CIRCLE_SEGMENTS; s++) {
+        const float angle = 2.0f * PI * (s % AIRSPACE_CIRCLE_SEGMENTS) / AIRSPACE_CIRCLE_SEGMENTS;
+        projectAirspacePoint(p, a->centerLat + latStep * sinf(angle),
+                             a->centerLon + lonStep * cosf(angle), x, y);
+        if (s > 0) drawAirspaceEdge(p, prevX, prevY, x, y);
+        prevX = x;
+        prevY = y;
+      }
+    } else if (a->numPoints >= 2) {
+      float lat, lon;
+      getCachedAirspacePoint(*a, 0, lat, lon);
+      projectAirspacePoint(p, lat, lon, firstX, firstY);
+      prevX = firstX;
+      prevY = firstY;
+      for (uint8_t j = 1; j < a->numPoints; j++) {
+        getCachedAirspacePoint(*a, j, lat, lon);
+        projectAirspacePoint(p, lat, lon, x, y);
+        drawAirspaceEdge(p, prevX, prevY, x, y);
+        prevX = x;
+        prevY = y;
+      }
+      drawAirspaceEdge(p, prevX, prevY, firstX, firstY);  // close the shape
+    }
+  }
+
+  // For checking the redraw cost in flight, without flooding the log.
+  static unsigned long lastLogMs = 0;
+  if (millis() - lastLogMs >= 30000UL) {
+    lastLogMs = millis();
+    Serial.printf("[ADS-B] Airspace lines: %lu edges, %lu us\n",
+                  (unsigned long)p.edgesDrawn, (unsigned long)(micros() - startUs));
+  }
+}
+
 void drawADSBPage() {
 
   const int cx = SCREEN_W / 2;
@@ -1981,6 +2132,11 @@ void drawADSBPage() {
     gsX + 5,
     gsY + 23,
     gsText);
+
+  // Airspace first, so the rings, crosshair and aircraft all sit on top of it.
+  if (adsbShowAirspaceLines && haveGpsFix) {
+    drawAirspaceOutlines(cx, cy, r, MY_LAT, MY_LON, MAX_RADIUS_KM, isMoving ? gliderHeading : 0.0f);
+  }
 
   // 4. Draw Rotating Crosshair Grid Lines (Compass Rose Matrix)
   u8g2.drawCircle(cx, cy, r);
