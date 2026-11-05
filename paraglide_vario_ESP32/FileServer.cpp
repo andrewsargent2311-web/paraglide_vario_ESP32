@@ -294,6 +294,16 @@ static void giveSd() {
   if (sdMutex != nullptr) xSemaphoreGive(sdMutex);
 }
 
+// Only a selected map that's really on the card can be in use. The default map
+// is selected even on a blank card, and has to be uploadable there. If the card
+// is too busy to check, this says it's in use, which just refuses the upload.
+static bool selectedMapIsOnCard(const String& name) {
+  if (!takeSd(1000)) return true;
+  bool onCard = SD_MMC.exists("/" + name);
+  giveSd();
+  return onCard;
+}
+
 static void handleUploadChunk() {
   lastActivityMs = millis();
   HTTPUpload& up = server.upload();
@@ -324,7 +334,7 @@ static void handleUploadChunk() {
       uploadError = "Only .ADEM maps, AIRSPACE.txt, ROY.BIN and VOICE files can be uploaded.";
     } else if (!isVoice && name.length() >= DEM_FILENAME_MAX_LEN - 1) {
       uploadError = "That file name is too long &ndash; rename it to under 30 characters.";
-    } else if (isMapName(name) && isSelectedMap(name)) {
+    } else if (isMapName(name) && isSelectedMap(name) && selectedMapIsOnCard(name)) {
       uploadError = "A map with that name is in use. Choose a different map in the Map menu first, "
                     "or rename the file.";
     }
@@ -397,12 +407,12 @@ static void handleUploadDone() {
   }
   String name = uploadTarget.substring(1);
   String msg = htmlEscapeFs(name) + " (" + sizeLabel(uploadBytes) + ") is on the SD card.";
-  if (isMapName(name)) {
+  if (isMapName(name) && isSelectedMap(name)) {
+    msg += " It's the selected map, so the vario will start using it.";
+  } else if (isMapName(name)) {
     msg += " Choose it from the vario's <b>Map</b> menu to use it.";
-  } else if (isAirspaceName(name)) {
-    msg += " The new airspace is picked up automatically.";
   } else {
-    msg += " Restart the vario to use it.";  // splash and voice load at start-up
+    msg += " Restart the vario to use it.";  // airspace, splash and voice load at start-up
   }
   sendMessagePage("Uploaded", msg);
 }

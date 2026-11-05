@@ -304,7 +304,7 @@ The unit has **one button**:
 
 The same page also lets you:
 - **Delete** old flight recordings (asks to confirm first).
-- **Upload** a new `.ADEM` terrain map or a replacement `AIRSPACE.txt` straight to the SD card, so you don't need to take the card out. Large maps take several minutes over WiFi, so do it on the ground. Then pick the new map from **Menu → Map**.
+- **Upload** a new `.ADEM` terrain map or a replacement `AIRSPACE.txt` straight to the SD card, so you don't need to take the card out. Large maps take several minutes over WiFi, so do it on the ground. Then pick the new map from **Menu → Map**. After replacing `AIRSPACE.txt`, restart the unit, as airspace only loads at start-up.
 - **Delete** maps you no longer need (the map currently in use can't be deleted or replaced; choose a different one in the Map menu first).
 
 A script can load the rest of a card over the same connection. `POST /upload?path=ROY.BIN` or `POST /upload?path=VOICE/US_LESSAC/V000.PCM` (a multipart form with a `file` field) adds the splash image and voice files, creating the voice folders if needed. `GET /list` returns every file's path and size for checking. Restart the unit afterwards so it loads them.
