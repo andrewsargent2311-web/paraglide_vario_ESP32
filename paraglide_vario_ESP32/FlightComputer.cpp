@@ -76,10 +76,13 @@ static TaskHandle_t audioTaskHandle = nullptr;
 // Connections menu (menu.cpp) for where they're set.
 
 void setup() {
-  Serial.begin(115200);
   // Plugged into a PC with nothing reading the port, the default 100 ms timeout
   // lets each print wait up to 2 s (the core tries 20 times), which stalls the
-  // whole unit. Drop log text instead: about 20 ms at worst per print.
+  // whole unit. Drop log text instead: about 20 ms at worst per print. The short
+  // wait would lose start-up bursts even with a reader, so the buffer is bigger
+  // to hold them. It has to be set before begin().
+  Serial.setTxBufferSize(2048);
+  Serial.begin(115200);
   Serial.setTxTimeoutMs(1);
   delay(1000);  // give the USB CDC host a moment to attach before the first print, or it's often lost
   Serial.println("BOOTING FLIGHT COMPUTER...");
