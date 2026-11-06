@@ -83,6 +83,15 @@ enum AltRef : uint8_t {
     ALTREF_UNL      // Unlimited
 };
 
+enum AirspaceGroup : uint8_t {
+    AIRSPACE_GROUP_CONTROLLED = 0,
+    AIRSPACE_GROUP_CFZ = 1,
+    AIRSPACE_GROUP_MBZ = 2,
+    AIRSPACE_GROUP_COUNT
+};
+
+uint8_t classifyAirspaceGroup(const char* name);
+
 struct Altitude {
 
     float value_ft;
@@ -162,6 +171,7 @@ struct CachedAirspace {
     // and still returned by an alertOnly = false call either way, since
     // the "Airspace info" bar wants to surface CFZs too.
     bool alertEligible;
+    uint8_t group;
 
     // Circle geometry
     float centerLat;
@@ -217,6 +227,15 @@ bool airspaceDatabaseComplete();
 // currently used, for boot-time RAM tuning diagnostics.
 uint16_t getAirspacePointPoolUsed();
 uint16_t getAirspacePointPoolCapacity();
+
+// Read-only access for drawing airspace outlines (traffic page). Reads the RAM
+// cache only, never the SD card. The database only loads once, during boot, so
+// this is safe from Core 1 without a lock. nullptr if index is out of range.
+const CachedAirspace* getCachedAirspace(uint16_t index);
+
+// Polygon point number pointIndex (0 to numPoints - 1) of an airspace.
+void getCachedAirspacePoint(const CachedAirspace& a, uint8_t pointIndex,
+                            float& lat, float& lon);
 
 // ---------------------------------------------------------------------------
 // Runtime search

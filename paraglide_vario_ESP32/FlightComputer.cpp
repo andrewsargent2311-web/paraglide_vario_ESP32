@@ -52,6 +52,7 @@
 #include "WeatherClient.h"
 #include "PageButton.h"
 #include "IgcRecorder.h"
+#include "FlightLog.h"
 #include "BackgroundTask.h"
 
 static TaskHandle_t audioTaskHandle = nullptr;
@@ -75,7 +76,14 @@ static TaskHandle_t audioTaskHandle = nullptr;
 // Connections menu (menu.cpp) for where they're set.
 
 void setup() {
+  // Plugged into a PC with nothing reading the port, the default 100 ms timeout
+  // lets each print wait up to 2 s (the core tries 20 times), which stalls the
+  // whole unit. Drop log text instead: about 20 ms at worst per print. The short
+  // wait would lose start-up bursts even with a reader, so the buffer is bigger
+  // to hold them. It has to be set before begin().
+  Serial.setTxBufferSize(2048);
   Serial.begin(115200);
+  Serial.setTxTimeoutMs(1);
   delay(1000);  // give the USB CDC host a moment to attach before the first print, or it's often lost
   Serial.println("BOOTING FLIGHT COMPUTER...");
   Serial.printf("[BOOT] Free heap: %u | Min heap: %u\n", ESP.getFreeHeap(), ESP.getMinFreeHeap());
@@ -227,8 +235,13 @@ void setup() {
     }
     if (aspMsg != nullptr) {
       u8g2.setFont(u8g2_font_helvB14_tf);
-      u8g2.drawStr((SCREEN_W - u8g2.getStrWidth(aspMsg)) / 2,
-                   SCREEN_H - 8, aspMsg);
+      // On a white box: the full-screen splash can be black behind this, and
+      // the warning has to stay readable whatever picture is on the card.
+      const int aspW = u8g2.getStrWidth(aspMsg);
+      u8g2.setDrawColor(0);
+      u8g2.drawBox((SCREEN_W - aspW) / 2 - 4, SCREEN_H - 28, aspW + 8, 26);
+      u8g2.setDrawColor(1);
+      u8g2.drawStr((SCREEN_W - aspW) / 2, SCREEN_H - 8, aspMsg);
     }
   } while (u8g2.nextPage());
 
@@ -673,6 +686,7 @@ void loop() {
   // ---------------------------------------------------------
   const uint32_t igcStartMs = millis();
   updateIgcRecorder();
+  flightLogUpdate();
   const uint32_t igcElapsedMs = (uint32_t)(millis() - igcStartMs);
   if (igcElapsedMs > maxIgcMs) maxIgcMs = igcElapsedMs;
   static uint32_t lastAirspaceAlertMs = 0;

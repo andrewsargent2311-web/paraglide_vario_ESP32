@@ -29,6 +29,41 @@ static constexpr double kPi            = 3.14159265358979323846;
 // haversine_km
 // ---------------------------------------------------------
 
+TEST(OpenAirGroup, ControlledName)
+{
+    EXPECT_EQ(classifyAirspaceGroup("NZA141 AUCKLAND CTA C"), AIRSPACE_GROUP_CONTROLLED);
+}
+
+TEST(OpenAirGroup, CfzName)
+{
+    EXPECT_EQ(classifyAirspaceGroup("NZC279, ARDMORE CFZ, 118.1 MHz"), AIRSPACE_GROUP_CFZ);
+}
+
+TEST(OpenAirGroup, MbzName)
+{
+    EXPECT_EQ(classifyAirspaceGroup("NZMBZ NORTH SHORE"), AIRSPACE_GROUP_MBZ);
+}
+
+TEST(OpenAirGroup, LowercaseCfzName)
+{
+    EXPECT_EQ(classifyAirspaceGroup("local cfz"), AIRSPACE_GROUP_CFZ);
+}
+
+TEST(OpenAirGroup, CfzWinsWhenNameContainsBothGroups)
+{
+    EXPECT_EQ(classifyAirspaceGroup("CFZ MBZ"), AIRSPACE_GROUP_CFZ);
+}
+
+TEST(OpenAirGroup, EmptyNameIsControlled)
+{
+    EXPECT_EQ(classifyAirspaceGroup(""), AIRSPACE_GROUP_CONTROLLED);
+}
+
+TEST(OpenAirGroup, NullNameIsControlled)
+{
+    EXPECT_EQ(classifyAirspaceGroup(nullptr), AIRSPACE_GROUP_CONTROLLED);
+}
+
 TEST(OpenAirHaversine, IdenticalPointsAreZeroApart)
 {
     EXPECT_NEAR(haversine_km(-41.2866, 174.7756, -41.2866, 174.7756), 0.0, 1e-9);

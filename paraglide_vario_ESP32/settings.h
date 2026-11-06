@@ -55,6 +55,8 @@ extern int8_t utcOffsetHours;  // only used while timeZoneMode == TZ_MODE_MANUAL
 // Fills outTm with the pilot-facing local time (right now), honouring
 // timeZoneMode/utcOffsetHours above. Always reads the live system clock.
 void getPilotLocalTime(struct tm* outTm);
+// The same conversion for any moment, such as when a past flight started.
+void pilotLocalTimeFromEpoch(time_t epoch, struct tm* outTm);
 
 // =====================================================
 // VARIO BEEP TIMING
@@ -191,6 +193,13 @@ enum AdsbLabelMode {
   ADSB_LABEL_MODE_COUNT
 };
 extern uint8_t adsbLabelMode;
+
+// Dashed airspace outlines behind the traffic, independently toggled for
+// controlled airspace, CFZs and MBZs (default on). Display only: airspace
+// warnings don't depend on these settings. See drawAirspaceOutlines() in
+// DrawPages.cpp.
+constexpr uint8_t ADSB_AIRSPACE_GROUP_MASK_ALL = 0x07;
+extern uint8_t adsbAirspaceGroupMask;
 
 // ADS-B audio alert mode: cycles Off -> Alarm -> Voice -> Off (the
 // "Alarm Sound" menu item). Off mutes both; Alarm plays the existing 5s

@@ -671,6 +671,16 @@ static bool containsIgnoreCase(
     return false;
 }
 
+uint8_t classifyAirspaceGroup(const char* name) {
+    if (containsIgnoreCase(name, "CFZ")) {
+        return AIRSPACE_GROUP_CFZ;
+    }
+    if (containsIgnoreCase(name, "MBZ")) {
+        return AIRSPACE_GROUP_MBZ;
+    }
+    return AIRSPACE_GROUP_CONTROLLED;
+}
+
 // ---------------------------------------------------------------------------
 // Altitude parser
 // ---------------------------------------------------------------------------
@@ -1118,6 +1128,7 @@ static bool storeBlock(
     dst.isCircle = b.isCircle;
 
     dst.alertEligible = !isCfz;
+    dst.group = classifyAirspaceGroup(b.name);
 
     // -----------------------------------------------------------------------
     // Circle
@@ -1887,6 +1898,17 @@ uint16_t getAirspacePointPoolUsed() {
 
 uint16_t getAirspacePointPoolCapacity() {
     return OAS_POINT_POOL_SIZE;
+}
+
+const CachedAirspace* getCachedAirspace(uint16_t index) {
+    if (airspaces == nullptr || index >= airspaceCount) return nullptr;
+    return &airspaces[index];
+}
+
+void getCachedAirspacePoint(const CachedAirspace& a, uint8_t pointIndex,
+                            float& lat, float& lon) {
+    lat = pointPoolLat[a.pointStart + pointIndex];
+    lon = pointPoolLon[a.pointStart + pointIndex];
 }
 
 // ---------------------------------------------------------------------------

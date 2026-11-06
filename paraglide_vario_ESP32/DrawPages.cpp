@@ -8,11 +8,15 @@
 // =====================================================
 #include "DrawPages.h"
 #include "CrossCoreState.h"
-#include "AirspaceProximity.h" 
+#include "AirspaceProximity.h"
+#include "OpenAirScanner.h"  // airspace outlines on the traffic page
 #include "AglDisplay.h"
 #include "AdsbClient.h"
 #include "TrafficIcons.h"
 #include "wifi_manager.h"  // wifiConnected
+
+// How much of the page the top banner covers this frame: see the definition.
+static int topBannerHeightPx();
 
 static AglDisplayBuffer aglDisplayBuffer;
 
@@ -455,7 +459,7 @@ static void drawBoxRow(int xLabel, int y, const char* label, const char* value) 
 }
 
 void drawParagliderPage() {
-  const int top = TOP_BAR_HEIGHT_PX;
+  const int top = TOP_BAR_HEIGHT_PX + topBannerHeightPx();
   const int colW = SCREEN_W / 2;
   const int rowH = (SCREEN_H - top) / 3;
 
@@ -886,7 +890,7 @@ void drawWeatherPage() {
   // below (see step 7), rather than every line being a fixed offset
   // stacked from the top the way it used to be.
   // ---------------------------------------------------------
-  const int startY = TOP_BAR_HEIGHT_PX;
+  const int startY = TOP_BAR_HEIGHT_PX + topBannerHeightPx();
   const int availableHeight = SCREEN_H - startY;
 
   const int rowHeight =
@@ -1626,10 +1630,17 @@ static void estimateTrafficPosition(float lat, float lon, float speedKt, float h
   outLon = (cosLat > 0.01f) ? lon + (distanceKm * sinf(headingRad)) / (111.32f * cosLat) : lon;
 }
 
+// Two missed polls, plus time for a slow download to finish.
+#define TRAFFIC_FRESH_MS (2UL * ADSB_INTERVAL_MS + 5000UL)
+
 // True while the ADS-B feed can't be reached, so a silent aircraft may well
-// still be flying rather than gone.
+// still be flying rather than gone. A stalled link doesn't report anything
+// until a download times out, and after reconnecting the last result is out of
+// date until the next poll, so this also goes by how old the last good one is.
 static bool trafficConnectionLost() {
-  return !wifiConnected || adsbFetchStatus == FETCH_FAILED;
+  if (!wifiConnected || adsbFetchStatus == FETCH_FAILED) return true;
+  if (adsbFetchStatus == FETCH_NOT_TRIED) return false;  // nothing to be out of date yet
+  return millis() - adsbDocFetchMs > TRAFFIC_FRESH_MS;
 }
 
 // Fills trafficSnapshot[] with every aircraft to consider this frame, at its
@@ -1848,6 +1859,425 @@ unsigned long displayRefreshIntervalMs() {
   return (!menuActive && currentPage == PAGE_ADSB && trafficHasCloseAircraft) ? 250UL : 1000UL;
 }
 
+// =====================================================
+// AIRSPACE OUTLINES on the traffic page (ADSB Settings > Airspace Lines)
+// =====================================================
+// Dashed lines, behind everything else, across the whole area below the top
+// bar, so they read differently from the solid range rings and crosshair and
+// never cover an aircraft. Drawn from the same RAM cache the airspace warnings
+// use (no SD access, so it's safe on Core 1): controlled airspace, CFZs and
+// MBZs loaded at boot, regardless of altitude. Hidden groups are still traced
+// for the info bar, and its highlighted airspace is always drawn solid.
+//
+// The bottom bar (Airspace Info setting) steps through nearby airspace to say
+// what each outline is, and that outline is drawn solid and thick while it's
+// described. Airspace at your position and altitude comes first. Nothing here
+// is an alert: it's for information only.
+//
+// Positions use a flat east/north approximation around the pilot. That's well
+// within a pixel at these ranges, and much cheaper than a bearing and distance
+// for every point of every outline on every redraw.
+#define AIRSPACE_DASH_ON_PX 4
+#define AIRSPACE_DASH_PERIOD_PX 7
+#define AIRSPACE_CIRCLE_SEGMENTS 48
+#define AIRSPACE_KM_PER_DEG_LAT 110.57f
+#define AIRSPACE_KM_PER_DEG_LON_EQUATOR 111.32f
+#define NM_TO_KM 1.852f
+#define AIRSPACE_CYCLE_MAX 8            // nearest few, so a full cycle stays short
+#define AIRSPACE_CYCLE_MS 8000UL
+#define AIRSPACE_NONE 0xFFFF
+
+struct AirspaceProjection {
+  float myLat, myLon;
+  float kmPerDegLon;
+  float pxPerKm;
+  float sinHeading, cosHeading;  // 0 and 1 for north-up
+  int cx, cy;
+  float minX, maxX, minY, maxY;  // visible area, relative to the centre
+  bool highlight;                // solid and thick, not dashed
+  bool drawLines;
+  uint16_t dashPhase;            // carried along an outline, so short arc segments still show gaps
+  uint32_t edgesDrawn;
+};
+
+// What drawing one outline found out about it. Coordinates are pixels from the
+// screen centre, which is the pilot, so everything here is relative to (0, 0).
+struct AirspaceTrace {
+  float nearestSq;
+  float nearestX, nearestY;
+  bool inside;
+  bool onScreen;
+};
+
+// The vertical part of "where am I relative to this airspace".
+enum AirspaceRelation : uint8_t { AIRSPACE_IN_IT, AIRSPACE_BELOW_IT, AIRSPACE_ABOVE_IT, AIRSPACE_HEIGHT_UNKNOWN };
+
+struct AirspaceCandidate {
+  uint16_t index;
+  uint8_t rank;  // 0 = you're in it, 1 = over or under you, 2 = elsewhere
+  AirspaceRelation relation;
+  bool inside;
+  float nearestSq;
+  float nearestX, nearestY;
+};
+
+// Text for drawAirspaceInfoBar(). Rebuilt each frame; invalid means the bar
+// falls back to its plain "what am I inside" text.
+static bool airspaceBarValid = false;
+static char airspaceBarLine1[OAS_MAX_NAME_LEN];
+static char airspaceBarLine2[48];
+static char airspaceBarCount[8];
+
+// Position relative to the screen centre, in pixels (+x right, +y down).
+static inline void projectAirspacePoint(const AirspaceProjection& p, float lat, float lon,
+                                        float& x, float& y) {
+  const float eastPx = (lon - p.myLon) * p.kmPerDegLon * p.pxPerKm;
+  const float northPx = (lat - p.myLat) * AIRSPACE_KM_PER_DEG_LAT * p.pxPerKm;
+  // Same turn as the aircraft: what's on your heading ends up straight ahead.
+  x = eastPx * p.cosHeading - northPx * p.sinHeading;
+  y = -(eastPx * p.sinHeading + northPx * p.cosHeading);
+}
+
+// One edge: note what it says about the pilot's position, then clip it to the
+// visible rectangle (Liang-Barsky) and draw what's left.
+static void traceAirspaceEdge(AirspaceProjection& p, AirspaceTrace& t,
+                              float x0, float y0, float x1, float y1) {
+  const float dx = x1 - x0;
+  const float dy = y1 - y0;
+  const float lenSq = dx * dx + dy * dy;
+
+  // Point-in-polygon, by counting crossings to the right of the pilot.
+  if ((y0 > 0.0f) != (y1 > 0.0f) && (x0 - y0 * dx / dy) > 0.0f) t.inside = !t.inside;
+
+  // The closest point on this edge to the pilot.
+  float along = (lenSq > 0.0f) ? -(x0 * dx + y0 * dy) / lenSq : 0.0f;
+  along = constrain(along, 0.0f, 1.0f);
+  const float nearX = x0 + dx * along;
+  const float nearY = y0 + dy * along;
+  const float nearSq = nearX * nearX + nearY * nearY;
+  if (nearSq < t.nearestSq) {
+    t.nearestSq = nearSq;
+    t.nearestX = nearX;
+    t.nearestY = nearY;
+  }
+
+  if (lenSq < 0.25f) return;  // under a pixel long
+
+  float tStart = 0.0f;
+  float tEnd = 1.0f;
+  const float deltas[4] = { -dx, dx, -dy, dy };
+  const float limits[4] = { x0 - p.minX, p.maxX - x0, y0 - p.minY, p.maxY - y0 };
+  for (int i = 0; i < 4; i++) {
+    if (deltas[i] == 0.0f) {
+      if (limits[i] < 0.0f) return;  // parallel to this side, and outside it
+      continue;
+    }
+    const float crossing = limits[i] / deltas[i];
+    if (deltas[i] < 0.0f) {
+      if (crossing > tEnd) return;
+      if (crossing > tStart) tStart = crossing;
+    } else {
+      if (crossing < tStart) return;
+      if (crossing < tEnd) tEnd = crossing;
+    }
+  }
+  t.onScreen = true;
+
+  // A hidden group is still traced (the info bar lists it) but not drawn.
+  // The highlight pass always draws.
+  if (!p.highlight && !p.drawLines) return;
+
+  int px = p.cx + (int)roundf(x0 + dx * tStart);
+  int py = p.cy + (int)roundf(y0 + dy * tStart);
+  const int endX = p.cx + (int)roundf(x0 + dx * tEnd);
+  const int endY = p.cy + (int)roundf(y0 + dy * tEnd);
+
+  // Bresenham rather than drawLine(), which can't draw dashes.
+  const int stepsX = abs(endX - px);
+  const int stepsY = abs(endY - py);
+  const int dirX = (px < endX) ? 1 : -1;
+  const int dirY = (py < endY) ? 1 : -1;
+  int err = stepsX - stepsY;
+  while (true) {
+    if (p.highlight) {
+      u8g2.drawPixel(px, py);
+      u8g2.drawPixel(px + 1, py);
+      u8g2.drawPixel(px, py + 1);
+    } else if ((p.dashPhase++ % AIRSPACE_DASH_PERIOD_PX) < AIRSPACE_DASH_ON_PX) {
+      u8g2.drawPixel(px, py);
+    }
+    if (px == endX && py == endY) break;
+    const int e2 = 2 * err;
+    if (e2 > -stepsY) { err -= stepsY; px += dirX; }
+    if (e2 < stepsX) { err += stepsX; py += dirY; }
+  }
+  p.edgesDrawn++;
+}
+
+static void traceAirspace(AirspaceProjection& p, const CachedAirspace& a, AirspaceTrace& t) {
+  t.nearestSq = 1.0e12f;
+  t.nearestX = 0.0f;
+  t.nearestY = 0.0f;
+  t.inside = false;
+  t.onScreen = false;
+  p.dashPhase = 0;
+
+  float prevX = 0.0f, prevY = 0.0f, x, y;
+
+  if (a.isCircle) {
+    const float radiusKm = a.radius_nm * NM_TO_KM;
+    const float latStep = radiusKm / AIRSPACE_KM_PER_DEG_LAT;
+    const float lonStep = radiusKm / max(p.kmPerDegLon, 1.0f);
+    for (int s = 0; s <= AIRSPACE_CIRCLE_SEGMENTS; s++) {
+      const float angle = 2.0f * PI * (s % AIRSPACE_CIRCLE_SEGMENTS) / AIRSPACE_CIRCLE_SEGMENTS;
+      projectAirspacePoint(p, a.centerLat + latStep * sinf(angle),
+                           a.centerLon + lonStep * cosf(angle), x, y);
+      if (s > 0) traceAirspaceEdge(p, t, prevX, prevY, x, y);
+      prevX = x;
+      prevY = y;
+    }
+  } else if (a.numPoints >= 2) {
+    float lat, lon, firstX, firstY;
+    getCachedAirspacePoint(a, 0, lat, lon);
+    projectAirspacePoint(p, lat, lon, firstX, firstY);
+    prevX = firstX;
+    prevY = firstY;
+    for (uint8_t j = 1; j < a.numPoints; j++) {
+      getCachedAirspacePoint(a, j, lat, lon);
+      projectAirspacePoint(p, lat, lon, x, y);
+      traceAirspaceEdge(p, t, prevX, prevY, x, y);
+      prevX = x;
+      prevY = y;
+    }
+    traceAirspaceEdge(p, t, prevX, prevY, firstX, firstY);  // close the shape
+  }
+}
+
+// A limit as pilots read it: SFC, 2500ft, FL245, 500ft AGL, UNL.
+static void formatAirspaceLimit(char* buf, size_t len, const Altitude& alt) {
+  switch (alt.ref) {
+    case ALTREF_SFC: snprintf(buf, len, "SFC"); break;
+    case ALTREF_UNL: snprintf(buf, len, "UNL"); break;
+    case ALTREF_FL:  snprintf(buf, len, "FL%d", (int)roundf(alt.value_ft / 100.0f)); break;
+    case ALTREF_AGL: snprintf(buf, len, "%dft AGL", (int)roundf(alt.value_ft)); break;
+    default:         snprintf(buf, len, "%dft", (int)roundf(alt.value_ft)); break;
+  }
+}
+
+// Feet above sea level, or false if it depends on a ground height we don't have.
+// Flight levels are treated as plain feet, which is close enough for a label.
+static bool airspaceLimitFeet(const Altitude& alt, bool isCeiling, float& feet) {
+  switch (alt.ref) {
+    case ALTREF_SFC:
+      feet = isCeiling ? 0.0f : -100000.0f;  // a floor at the surface can't be under you
+      return true;
+    case ALTREF_UNL:
+      feet = 1000000.0f;
+      return true;
+    case ALTREF_AGL:
+      if (!groundElevationValid) return false;
+      feet = groundElevationFt + alt.value_ft;
+      return true;
+    default:
+      feet = alt.value_ft;
+      return true;
+  }
+}
+
+static AirspaceRelation airspaceRelationTo(const CachedAirspace& a, float myAltFeet) {
+  float floorFeet, ceilingFeet;
+  if (!airspaceLimitFeet(a.floor, false, floorFeet) ||
+      !airspaceLimitFeet(a.ceiling, true, ceilingFeet)) {
+    return AIRSPACE_HEIGHT_UNKNOWN;
+  }
+  if (myAltFeet < floorFeet) return AIRSPACE_BELOW_IT;
+  if (myAltFeet > ceilingFeet) return AIRSPACE_ABOVE_IT;
+  return AIRSPACE_IN_IT;
+}
+
+// "NZA141 AUCKLAND CTA C" -> "AUCKLAND CTA C", "NZC279, ARDMORE CFZ, 118.1 MHz"
+// -> "ARDMORE CFZ 118.1 MHz". The chart code at the front uses up the room
+// the part a pilot recognises needs.
+static void formatAirspaceName(char* buf, size_t len, const char* name) {
+  const char* start = name;
+  if (name[0] == 'N' && name[1] == 'Z') {
+    const char* space = strchr(name, ' ');
+    if (space != nullptr) start = space + 1;
+  }
+  size_t out = 0;
+  for (const char* c = start; *c != '\0' && out + 1 < len; c++) {
+    if (*c != ',') buf[out++] = *c;
+  }
+  buf[out] = '\0';
+}
+
+static void setAirspaceBarText(const CachedAirspace& a, const AirspaceCandidate& c,
+                               const AirspaceProjection& p, float headingDeg,
+                               int position, int total) {
+  formatAirspaceName(airspaceBarLine1, sizeof(airspaceBarLine1), a.name);
+
+  char floorText[14];
+  char ceilingText[14];
+  formatAirspaceLimit(floorText, sizeof(floorText), a.floor);
+  formatAirspaceLimit(ceilingText, sizeof(ceilingText), a.ceiling);
+  // A CFZ whose ceiling is "the base of controlled airspace" is stored as
+  // unlimited for the warnings, but it isn't: don't tell the pilot it is.
+  if (!a.alertEligible && a.ceiling.ref == ALTREF_UNL) snprintf(ceilingText, sizeof(ceilingText), "CA base");
+
+  char whereText[16];
+  if (c.inside) {
+    const char* words = (c.relation == AIRSPACE_IN_IT) ? "IN IT"
+                      : (c.relation == AIRSPACE_BELOW_IT) ? "BELOW IT"
+                      : (c.relation == AIRSPACE_ABOVE_IT) ? "ABOVE IT" : "OVERHEAD";
+    snprintf(whereText, sizeof(whereText), "%s", words);
+  } else {
+    const float km = sqrtf(c.nearestSq) / p.pxPerKm;
+    // Back from screen direction to compass direction for the label.
+    float bearing = atan2f(c.nearestX, -c.nearestY) * (180.0f / PI) + headingDeg;
+    if (bearing < 0.0f) bearing += 360.0f;
+    if (bearing >= 360.0f) bearing -= 360.0f;
+    if (km < 10.0f) snprintf(whereText, sizeof(whereText), "%.1fkm %s", km, getCompassDirection(bearing));
+    else snprintf(whereText, sizeof(whereText), "%.0fkm %s", km, getCompassDirection(bearing));
+  }
+
+  // Class B is only NZ's filing convention for a CFZ, not a real class.
+  snprintf(airspaceBarLine2, sizeof(airspaceBarLine2), "%s %s-%s  %s",
+           a.alertEligible ? a.classId : "CFZ", floorText, ceilingText, whereText);
+  snprintf(airspaceBarCount, sizeof(airspaceBarCount), "%d/%d", position + 1, total);
+  airspaceBarValid = true;
+}
+
+static void drawAirspaceOutlines(int cx, int cy, int r, float myLat, float myLon,
+                                 float rangeKm, float headingDeg, float myAltFeet) {
+  if (!isAirspaceDatabaseLoaded() || rangeKm <= 0.0f) return;
+
+  const uint32_t startUs = micros();
+
+  AirspaceProjection p;
+  p.myLat = myLat;
+  p.myLon = myLon;
+  p.kmPerDegLon = AIRSPACE_KM_PER_DEG_LON_EQUATOR * cosf(deg2rad(myLat));
+  p.pxPerKm = (float)r / rangeKm;
+  p.sinHeading = sinf(deg2rad(headingDeg));
+  p.cosHeading = cosf(deg2rad(headingDeg));
+  p.cx = cx;
+  p.cy = cy;
+  p.minX = (float)(0 - cx);
+  p.maxX = (float)(SCREEN_W - 1 - cx);
+  p.minY = (float)(TOP_BAR_HEIGHT_PX - cy);
+  p.maxY = (float)(SCREEN_H - 1 - cy);
+  p.highlight = false;
+  p.drawLines = true;
+  p.edgesDrawn = 0;
+
+  // The window of the screen's far corners, to skip most airspaces after four
+  // compares. The corners are further away than the range ring.
+  const float cornerX = max(-p.minX, p.maxX);
+  const float cornerY = max(-p.minY, p.maxY);
+  const float visibleKm = sqrtf(cornerX * cornerX + cornerY * cornerY) / p.pxPerKm;
+  const float latWindow = visibleKm / AIRSPACE_KM_PER_DEG_LAT;
+  const float lonWindow = visibleKm / max(p.kmPerDegLon, 1.0f);
+
+  AirspaceCandidate candidates[AIRSPACE_CYCLE_MAX];
+  int candidateCount = 0;
+
+  const uint16_t count = getAirspaceCount();
+  for (uint16_t i = 0; i < count; i++) {
+    const CachedAirspace* a = getCachedAirspace(i);
+    if (a == nullptr) break;
+    if (a->maxLat < myLat - latWindow || a->minLat > myLat + latWindow ||
+        a->maxLon < myLon - lonWindow || a->minLon > myLon + lonWindow) {
+      continue;
+    }
+
+    const uint8_t group = (a->group < AIRSPACE_GROUP_COUNT)
+                            ? a->group : AIRSPACE_GROUP_CONTROLLED;
+    p.drawLines = (adsbAirspaceGroupMask & (1u << group)) != 0;
+    AirspaceTrace t;
+    traceAirspace(p, *a, t);
+    if (!t.onScreen && !t.inside) continue;
+
+    // Keep the most useful few, in order: in it, over or under you, then nearest.
+    AirspaceCandidate c;
+    c.index = i;
+    c.inside = t.inside;
+    c.relation = airspaceRelationTo(*a, myAltFeet);
+    c.rank = !t.inside ? 2 : (c.relation == AIRSPACE_IN_IT ? 0 : 1);
+    c.nearestSq = t.inside ? 0.0f : t.nearestSq;
+    c.nearestX = t.nearestX;
+    c.nearestY = t.nearestY;
+
+    int slot = candidateCount;
+    while (slot > 0 && (c.rank < candidates[slot - 1].rank ||
+                        (c.rank == candidates[slot - 1].rank &&
+                         c.nearestSq < candidates[slot - 1].nearestSq))) {
+      slot--;
+    }
+    if (slot >= AIRSPACE_CYCLE_MAX) continue;
+    const int last = min(candidateCount, AIRSPACE_CYCLE_MAX - 1);
+    for (int s = last; s > slot; s--) candidates[s] = candidates[s - 1];
+    candidates[slot] = c;
+    if (candidateCount < AIRSPACE_CYCLE_MAX) candidateCount++;
+  }
+
+  // The bar's turn. The airspace on show keeps its turn even if the order
+  // shifts underneath it, so the text doesn't jump about as you move.
+  static uint16_t shownIndex = AIRSPACE_NONE;
+  static unsigned long shownSinceMs = 0;
+
+  if (airspaceInfoBarEnabled && candidateCount > 0) {
+    const unsigned long nowMs = millis();
+    int position = -1;
+    for (int i = 0; i < candidateCount; i++) {
+      if (candidates[i].index == shownIndex) position = i;
+    }
+    if (position < 0) {
+      position = 0;
+      shownSinceMs = nowMs;
+    } else if (nowMs - shownSinceMs >= AIRSPACE_CYCLE_MS) {
+      position = (position + 1) % candidateCount;
+      shownSinceMs = nowMs;
+    }
+    shownIndex = candidates[position].index;
+
+    const CachedAirspace* shown = getCachedAirspace(shownIndex);
+    if (shown != nullptr) {
+      p.highlight = true;
+      AirspaceTrace ignored;
+      traceAirspace(p, *shown, ignored);
+      p.highlight = false;
+      setAirspaceBarText(*shown, candidates[position], p, headingDeg, position, candidateCount);
+    }
+  } else {
+    shownIndex = AIRSPACE_NONE;
+  }
+
+  // For checking the redraw cost in flight, without flooding the log.
+  static unsigned long lastLogMs = 0;
+  if (millis() - lastLogMs >= 30000UL) {
+    lastLogMs = millis();
+    Serial.printf("[ADS-B] Airspace lines: %lu edges, %d listed, %lu us\n",
+                  (unsigned long)p.edgesDrawn, candidateCount, (unsigned long)(micros() - startUs));
+  }
+}
+
+// Will drawDashboard() put a banner across the top of the page this frame? Same
+// conditions as drawAirspaceWarning() and drawFanetMessageBanner(). The banner is
+// drawn after the page, on top of it, so each page lays itself out below this
+// height rather than having its top row hidden.
+static int topBannerHeightPx() {
+  const int TOP_BANNER_H = 30;
+  AirspaceResult result;
+  if (airspaceAlertBarEnabled && getAirspaceSnapshot(result) && result.insideHoriz &&
+      (!result.vertKnown || result.insideVert)) {
+    return TOP_BANNER_H;
+  }
+  if (lastFanetMessage.valid && millis() - lastFanetMessage.receivedMs < FANET_MESSAGE_BANNER_MS) {
+    return TOP_BANNER_H;
+  }
+  return 0;
+}
+
 void drawADSBPage() {
 
   const int cx = SCREEN_W / 2;
@@ -1923,6 +2353,23 @@ void drawADSBPage() {
   const char* outerRingLabel = outerRingLabelBuf;
   const char* innerRingLabel = innerRingLabelBuf;
 
+  // Airspace first, so the boxes, rings, crosshair and aircraft all sit on top
+  // of it. The altitude matches what the box below shows the pilot.
+  airspaceBarValid = false;
+  if (haveGpsFix && (adsbAirspaceGroupMask != 0 || airspaceInfoBarEnabled)) {
+    const float myAltFeetForAirspace = (bmpOK && windowCount > 0)
+      ? currentAltitudeM * 3.28084f : myAltitudeFeet;
+    drawAirspaceOutlines(cx, cy, r, MY_LAT, MY_LON, MAX_RADIUS_KM,
+                         isMoving ? gliderHeading : 0.0f, myAltFeetForAirspace);
+  }
+
+  // The banners cover 30 px at the top and bottom of the page: keep what the
+  // pilot needs to read clear of them. The bar is on all the time if it's
+  // enabled, and the top banner comes and goes.
+  const int TRAFFIC_BANNER_H = 30;
+  const int topBannerH = topBannerHeightPx();
+  const int bottomBarH = airspaceInfoBarEnabled ? TRAFFIC_BANNER_H : 0;
+
   // =========================================================
   // ALTITUDE OVERLAY BOX -- top-left
   // =========================================================
@@ -1941,8 +2388,11 @@ void drawADSBPage() {
   int altitudeH = u8g2.getFontAscent() - u8g2.getFontDescent() + 6;
 
   int altitudeX = 5;                           // left side, 5px in from the left edge
-  int altitudeY = TOP_BAR_HEIGHT_PX + 10 - 4;  // 4px higher than the old top-right box
+  int altitudeY = TOP_BAR_HEIGHT_PX + topBannerH + 10 - 4;  // 4px higher than the old top-right box
 
+  u8g2.setDrawColor(0);
+  u8g2.drawBox(altitudeX, altitudeY, altitudeW, altitudeH);
+  u8g2.setDrawColor(1);
   u8g2.drawFrame(
     altitudeX,
     altitudeY,
@@ -1969,8 +2419,11 @@ void drawADSBPage() {
   int gsH = u8g2.getFontAscent() - u8g2.getFontDescent() + 6;
 
   int gsX = SCREEN_W - gsW - 20;
-  int gsY = TOP_BAR_HEIGHT_PX + 10 - 4;  // top-right corner, just below the top bar
+  int gsY = TOP_BAR_HEIGHT_PX + topBannerH + 10 - 4;  // top-right corner, just below the top bar
 
+  u8g2.setDrawColor(0);
+  u8g2.drawBox(gsX, gsY, gsW, gsH);
+  u8g2.setDrawColor(1);
   u8g2.drawFrame(
     gsX,
     gsY,
@@ -2036,7 +2489,8 @@ void drawADSBPage() {
 
   // A. CALCULATE POSITION LOGIC
   int varioX = 4 + 20;                // Moved 20 pixels inwards
-  int varioY = (SCREEN_H - 26) - 13;  // Shifted 10 pixels up
+  int varioY = bottomBarH > 0 ? SCREEN_H - bottomBarH - 25 - 3  // sits just above the bar
+                             : (SCREEN_H - 26) - 13;  // Shifted 10 pixels up
 
   // B. COMPUTE AUTO-SCALING BOUNDARIES FOR BOLD TEXT
   // Measures exact bold text string pixel width and adds 10 pixels padding
@@ -2044,6 +2498,9 @@ void drawADSBPage() {
   int varioH = 25;  // Increased to 23 to match the height of your aircraft data boxes
 
   // C. DRAW THE SCALED LAYOUT STRUCTURE
+  u8g2.setDrawColor(0);
+  u8g2.drawBox(varioX, varioY, varioW, varioH);
+  u8g2.setDrawColor(1);
   u8g2.drawFrame(varioX, varioY, varioW, varioH);
 
   // Shifted text baseline down to safely center the bold letters vertically inside the box
@@ -2063,7 +2520,7 @@ void drawADSBPage() {
   // with aircraft still on the page: their positions are only estimates now.
   // Sits right of the vario box, above where the airspace bar starts.
   ScreenRect connectionRect = { 0, 0, 0, 0 };
-  if (haveGpsFix && trafficConnectionLost()) {
+  if (haveGpsFix && trafficConnectionLost() && withinRangeRingsCount > 0) {
     const char* line1 = !wifiEnabled ? "WiFi off" : (!wifiConnected ? "No WiFi" : "No internet");
     const char* line2 = wifiEnabled ? "Reconnecting..." : "";
 
@@ -2078,25 +2535,40 @@ void drawADSBPage() {
     u8g2.drawStr(connectionRect.x + 4, 368, line2);
   }
 
-  // Say why the page is empty, rather than leaving it blank. "No traffic" is
-  // only claimed after a good fetch: with no WiFi or no internet nobody knows
-  // what's out there, and saying "no traffic" would be falsely reassuring.
+  // Say why the range rings are empty, rather than leaving them blank. "No
+  // traffic" is only claimed after a recent good download: during a dropout
+  // nobody knows what's out there, and saying so would be falsely reassuring.
+  ScreenRect statusRect = { 0, 0, 0, 0 };
   if (withinRangeRingsCount == 0) {
     char statusBuf[32];
+    const char* statusLine2 = nullptr;
     if (!haveGpsFix) {
       snprintf(statusBuf, sizeof(statusBuf), "Waiting for GPS fix");
-    } else if (!wifiConnected) {
-      snprintf(statusBuf, sizeof(statusBuf), "No WiFi");
-    } else if (adsbFetchStatus == FETCH_FAILED) {
-      snprintf(statusBuf, sizeof(statusBuf), "No internet");
+    } else if (trafficConnectionLost()) {
+      statusLine2 = "No traffic data";
+      if (!wifiEnabled) {
+        snprintf(statusBuf, sizeof(statusBuf), "WiFi off");
+      } else if (!wifiConnected) {
+        snprintf(statusBuf, sizeof(statusBuf), "Reconnecting to WiFi");
+      } else if (adsbFetchStatus == FETCH_FAILED) {
+        snprintf(statusBuf, sizeof(statusBuf), "No internet");
+      } else {
+        snprintf(statusBuf, sizeof(statusBuf), "Reconnecting");
+      }
     } else if (adsbFetchStatus == FETCH_NOT_TRIED) {
       snprintf(statusBuf, sizeof(statusBuf), "Checking for traffic");
     } else {
       snprintf(statusBuf, sizeof(statusBuf), "No traffic within %.0f km", adsbRingOuterKm);
     }
     drawTrafficStatus(cx, cy + 34, statusBuf);
-    drawCompassAndRingLabels();
-    return;
+    if (statusLine2 != nullptr) drawTrafficStatus(cx, cy + 58, statusLine2);
+    statusRect = { (int16_t)(cx - 115), (int16_t)(cy + 16), 230, (int16_t)(statusLine2 != nullptr ? 48 : 24) };
+
+    // Aircraft beyond the ring can still be on screen, in the corners.
+    if (snapshotCount == 0) {
+      drawCompassAndRingLabels();
+      return;
+    }
   }
 
   // 7. Work out where the aircraft within the current range go. All their
@@ -2109,8 +2581,8 @@ void drawADSBPage() {
   };
   static PlottedAircraft plotted[MAX_DISPLAYED_AIRCRAFT];
   // Room for a label and an icon per aircraft, plus the own-ship arrow, the
-  // three fixed boxes and the connection message.
-  static ScreenRect obstacles[2 * MAX_DISPLAYED_AIRCRAFT + 5];
+  // three fixed boxes, the connection and status messages and the two banners.
+  static ScreenRect obstacles[2 * MAX_DISPLAYED_AIRCRAFT + 8];
   int plottedCount = 0;
   int obstacleCount = 0;
 
@@ -2119,10 +2591,12 @@ void drawADSBPage() {
   obstacles[obstacleCount++] = { (int16_t)gsX, (int16_t)gsY, (int16_t)gsW, (int16_t)gsH };
   obstacles[obstacleCount++] = { (int16_t)varioX, (int16_t)varioY, (int16_t)varioW, (int16_t)varioH };
   obstacles[obstacleCount++] = connectionRect;  // zero-sized if there's no message
+  obstacles[obstacleCount++] = statusRect;      // likewise
+  obstacles[obstacleCount++] = { 0, (int16_t)TOP_BAR_HEIGHT_PX, (int16_t)SCREEN_W, (int16_t)topBannerH };
+  obstacles[obstacleCount++] = { 0, (int16_t)(SCREEN_H - bottomBarH), (int16_t)SCREEN_W, (int16_t)bottomBarH };
 
   for (int i = 0; i < snapshotCount; i++) {
     const AircraftSnapshot& s = trafficSnapshot[i];
-    if (s.distanceKm > MAX_RADIUS_KM) continue;
 
     float relativeBearing = getBearing(MY_LAT, MY_LON, s.lat, s.lon);
     if (isMoving) {
@@ -2134,6 +2608,12 @@ void drawADSBPage() {
 
     const int acX = cx + (int)(pixelDistance * cos(angleRad));
     const int acY = cy + (int)(pixelDistance * sin(angleRad));
+
+    // Anywhere the pilot can see, past the range ring and into the corners.
+    if (acX < 0 || acX >= SCREEN_W || acY < TOP_BAR_HEIGHT_PX + topBannerH ||
+        acY >= SCREEN_H - bottomBarH) {
+      continue;
+    }
 
     // Rotated the same way the crosshair is -- relative to your heading in
     // track-up mode, or absolute compass heading in north-up mode -- so it
@@ -2234,9 +2714,8 @@ void drawADSBPage() {
 
   // Drawn again here, on top of the aircraft markers just plotted above
   // -- the earlier call (before the no-traffic early return) only
-  // covers the case where that return fires; this call and that one are
-  // mutually exclusive per frame (snapshotCount == 0 takes the early
-  // return and never reaches here), so this never double-draws.
+  // covers the case where that return fires. Both can run in a frame with
+  // aircraft only beyond the rings, which just draws the same bar again.
   drawAirspaceInfoBar();
 }
 
@@ -2253,7 +2732,7 @@ void drawADSBPage() {
 // has an EGT bung), so this page doesn't touch engineEgtC yet.
 // =====================================================
 void drawParamotorPage() {
-  const int top = TOP_BAR_HEIGHT_PX;
+  const int top = TOP_BAR_HEIGHT_PX + topBannerHeightPx();
   const int colW = SCREEN_W / 2;
   const int rowH = (SCREEN_H - top) / 3;
   char buffer[32];
@@ -2517,7 +2996,9 @@ bool drawAirspaceWarning() {
   char line1[40];
   char line2[40];
 
-  snprintf(line1, sizeof(line1), "INSIDE %s", result.name);
+  char shortName[OAS_MAX_NAME_LEN];
+  formatAirspaceName(shortName, sizeof(shortName), result.name);
+  snprintf(line1, sizeof(line1), "INSIDE %s", shortName);
   snprintf(line2, sizeof(line2), "Class %s", result.classId);
   if (altUnknown) {
     snprintf(line2, sizeof(line2), "Class %s  ALT UNKNOWN", result.classId);
@@ -2636,6 +3117,24 @@ void drawAirspaceInfoBar() {
   u8g2.setDrawColor(0);
 
   u8g2.setFont(u8g2_font_helvB10_tf);
+
+  if (airspaceBarValid) {
+    // The airspace outlines are stepping through what's nearby: see
+    // drawAirspaceOutlines(). Names can be long, so cut them to fit.
+    const int countW = u8g2.getStrWidth(airspaceBarCount);
+    while (strlen(airspaceBarLine1) > 0 && u8g2.getStrWidth(airspaceBarLine1) > SCREEN_W - 12) {
+      airspaceBarLine1[strlen(airspaceBarLine1) - 1] = '\0';
+    }
+    while (strlen(airspaceBarLine2) > 0 && u8g2.getStrWidth(airspaceBarLine2) > SCREEN_W - 18 - countW) {
+      airspaceBarLine2[strlen(airspaceBarLine2) - 1] = '\0';
+    }
+    u8g2.drawStr(6, bannerY + 13, airspaceBarLine1);
+    u8g2.drawStr(6, bannerY + 27, airspaceBarLine2);
+    u8g2.drawStr(SCREEN_W - countW - 6, bannerY + 27, airspaceBarCount);
+    u8g2.setDrawColor(1);
+    return;
+  }
+
   u8g2.drawStr(6, bannerY + 13, line1);
   if (line2[0] != '\0') {
     u8g2.drawStr(6, bannerY + 27, line2);

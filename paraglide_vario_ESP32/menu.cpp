@@ -3,6 +3,7 @@
 #include "CrossCoreState.h"  // adsbFetchStatus
 #include "WifiSetup.h"
 #include "FileServer.h"
+#include "FlightLog.h"
 #include "FanetMessaging.h"
 #include "ble_manager.h"
 #include "VoiceAlert.h"
@@ -328,16 +329,18 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_BLUETOOTH: return 3;
     case MENU_SCREEN_BLUETOOTH_SCAN: return bleScanResultCount() > 0 ? bleScanResultCount() : 1;
     case MENU_SCREEN_MAP: return mapFileCount > 0 ? mapFileCount : 1;
-    case MENU_SCREEN_ADSB_SETTINGS: return 11;
+    case MENU_SCREEN_ADSB_SETTINGS: return 12;
     case MENU_SCREEN_ADSB_RADIUS: return ADSB_RADIUS_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_VERTICAL: return ADSB_VERTICAL_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_ALERT_VOLUME: return ADSB_ALERT_VOLUME_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_RANGE_RINGS: return ADSB_RING_CHOICE_COUNT;
+    case MENU_SCREEN_ADSB_AIRSPACE_LINES: return 3;
     case MENU_SCREEN_WEATHER_SETTINGS: return 3;
     case MENU_SCREEN_WEATHER_POLL_INTERVAL: return WEATHER_POLL_CHOICE_COUNT;
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN: return WEATHER_STATIONS_CHOICE_COUNT;
     case MENU_SCREEN_WEATHER_SOURCE: return 2;
-    case MENU_SCREEN_FLIGHT_RECORDINGS: return 3;
+    case MENU_SCREEN_FLIGHT_RECORDINGS: return 4;
+    case MENU_SCREEN_FLIGHTS: return flightLogListCount() > 0 ? flightLogListCount() : 1;
     case MENU_SCREEN_EXPORT_FILES:
       return (isFileServerRunning() || exportStartProblem() != nullptr) ? 2 : 1;
     default: return 1;
@@ -370,11 +373,13 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_ADSB_VERTICAL: return "VERT THRESHOLD";
     case MENU_SCREEN_ADSB_ALERT_VOLUME: return "ALERT VOLUME";
     case MENU_SCREEN_ADSB_RANGE_RINGS: return "RANGE RINGS";
+    case MENU_SCREEN_ADSB_AIRSPACE_LINES: return "AIRSPACE LINES";
     case MENU_SCREEN_WEATHER_SETTINGS: return "WEATHER SETTINGS";
     case MENU_SCREEN_WEATHER_POLL_INTERVAL: return "POLL INTERVAL";
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN: return "STATIONS SHOWN";
     case MENU_SCREEN_WEATHER_SOURCE: return "SOURCE";
     case MENU_SCREEN_FLIGHT_RECORDINGS: return "FLIGHT RECORDINGS";
+    case MENU_SCREEN_FLIGHTS: return "FLIGHTS";
     case MENU_SCREEN_EXPORT_FILES: return "EXPORT FILES";
     default: return "MENU";
   }
@@ -592,10 +597,18 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         const char* modeStr = (adsbLabelMode == ADSB_LABELS_ALL) ? "All"
                              : (adsbLabelMode == ADSB_LABELS_OFF) ? "Off" : "Relevant";
         snprintf(buf, buflen, "Labels: %s", modeStr);
+      } else if (index == 11) {
+        snprintf(buf, buflen, "Airspace Lines");
       } else {
         static const char* items[] = { "Alert Radius", "Vertical Threshold" };
         snprintf(buf, buflen, "%s", items[index]);
       }
+      break;
+    }
+    case MENU_SCREEN_ADSB_AIRSPACE_LINES: {
+      static const char* const groupNames[] = { "Controlled", "CFZ", "MBZ" };
+      const bool enabled = (adsbAirspaceGroupMask & (1u << index)) != 0;
+      snprintf(buf, buflen, "%s: %s", groupNames[index], enabled ? "On" : "Off");
       break;
     }
     case MENU_SCREEN_ADSB_ALERT_VOLUME: {
@@ -659,6 +672,7 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         case 0: snprintf(buf, buflen, "Recording: %s", flightRecorderEnabled ? "On" : "Off"); break;
         case 1: snprintf(buf, buflen, "Export Files"); break;
         case 2: snprintf(buf, buflen, "Auto-Stop: %s", igcAutoStopEnabled ? "On" : "Off"); break;
+        case 3: snprintf(buf, buflen, "Flights"); break;
       }
       break;
     case MENU_SCREEN_EXPORT_FILES: {
@@ -991,6 +1005,10 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           displayDirty = true;
           playFeedbackTone(600.0f, 50);
           return;
+        case 11:
+          pushMenuScreen(MENU_SCREEN_ADSB_AIRSPACE_LINES);
+          playFeedbackTone(900.0f, 80);
+          return;
         case 8: {
           if (voiceProfileLoading()) return;
           char profiles[VOICE_MAX_PROFILES][VOICE_PROFILE_NAME_MAX] = {};
@@ -1023,6 +1041,13 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           return;
         }
       }
+      return;
+
+    case MENU_SCREEN_ADSB_AIRSPACE_LINES:
+      adsbAirspaceGroupMask ^= static_cast<uint8_t>(1u << index);
+      saveSettings();
+      displayDirty = true;
+      playFeedbackTone(600.0f, 50);
       return;
 
     // Sets the level immediately and STAYS on the screen (like the vario
@@ -1131,7 +1156,16 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           displayDirty = true;
           playFeedbackTone(600.0f, 50);
           return;
+        case 3:
+          flightLogRequestList();
+          pushMenuScreen(MENU_SCREEN_FLIGHTS);
+          playFeedbackTone(900.0f, 80);
+          return;
       }
+      return;
+
+    case MENU_SCREEN_FLIGHTS:
+      playFeedbackTone(900.0f, 40);  // the rows are informational
       return;
 
     case MENU_SCREEN_EXPORT_FILES:
@@ -1386,11 +1420,106 @@ static void drawWifiSetupScreen() {
 }
 
 // =====================================================
+// FLIGHTS SCREEN: two lines per flight, newest first. Short press moves down
+// the list, which scrolls to keep the highlighted flight in view.
+// =====================================================
+static void drawFlightRow(const FlightLogEntry& flight, int rowY, int rowH) {
+  char line[48];
+
+  char when[24] = "No date";
+  if (flight.startEpoch != 0) {
+    struct tm local;
+    pilotLocalTimeFromEpoch((time_t)flight.startEpoch, &local);
+    strftime(when, sizeof(when), "%d %b %Y  %H:%M", &local);
+  }
+  if (flight.hasDuration) {
+    const unsigned long minutes = (flight.durationSec + 30UL) / 60UL;
+    snprintf(line, sizeof(line), "%s   %luh %02lum", when, minutes / 60UL, minutes % 60UL);
+  } else {
+    snprintf(line, sizeof(line), "%s", when);
+  }
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  u8g2.drawStr(10, rowY + 17, line);
+
+  if (!flight.hasSummary) {
+    snprintf(line, sizeof(line), "No altitude or climb saved");
+  } else {
+    char alt[16] = "--";
+    char climb[16] = "--";
+    if (flight.hasMaxAlt) {
+      snprintf(alt, sizeof(alt), "%d %s", (int)roundf(altitudeToDisplay(flight.maxAltM)), altitudeUnitLabel());
+    }
+    if (flight.hasBestClimb) snprintf(climb, sizeof(climb), "%+.1f m/s", flight.bestClimbMs);
+    snprintf(line, sizeof(line), "Max %s   Best %s", alt, climb);
+  }
+  u8g2.setFont(u8g2_font_helvR10_tf);
+  u8g2.drawStr(10, rowY + 35, line);
+
+  (void)rowH;
+}
+
+static void drawFlightsScreen() {
+  const int top = 41;
+  const int rowH = 44;
+  const int visibleRows = (SCREEN_H - top) / rowH;
+  const uint8_t count = flightLogListCount();
+
+  if (count == 0) {
+    const char* message = "No flights yet";
+    if (flightLogListState() != FLIGHT_LIST_READY) {
+      message = "Loading...";
+    } else if (!sdCardOK) {
+      message = "No SD card";
+    }
+    u8g2.setFont(u8g2_font_helvB14_tf);
+    u8g2.drawStr((SCREEN_W - u8g2.getStrWidth(message)) / 2, SCREEN_H / 2, message);
+    return;
+  }
+
+  int firstVisible = (int)menuSelectedIndex - (visibleRows - 1);
+  if (firstVisible < 0) firstVisible = 0;
+
+  for (int i = firstVisible; i < count && i < firstVisible + visibleRows; i++) {
+    const int rowY = top + (i - firstVisible) * rowH;
+    const bool selected = (i == menuSelectedIndex);
+
+    if (selected) {
+      u8g2.setDrawColor(1);
+      u8g2.drawBox(0, rowY, SCREEN_W, rowH);
+      u8g2.setDrawColor(0);  // inverted text, as on any highlighted menu row
+    }
+    drawFlightRow(flightLogListEntry((uint8_t)i), rowY, rowH);
+    u8g2.setDrawColor(1);
+    u8g2.drawLine(0, rowY + rowH - 1, SCREEN_W, rowY + rowH - 1);
+  }
+}
+
+// =====================================================
 // MENU RENDERING: full-screen list shown instead of the normal top bar +
 // page while menuActive is true. Generic over whichever screen is on top
 // of the navigation stack -- see getMenuTitle()/getMenuItemCount()/
 // getMenuItemLabel() above for the per-screen content.
 // =====================================================
+static void drawMenuScrollbar(int top, int available, int visibleRows, int itemCount,
+                              int firstVisible) {
+  const int barW = 6;
+  const int barX = SCREEN_W - barW - 3;
+  const int trackY = top + 2;
+  const int trackH = available - 4;
+
+  u8g2.setDrawColor(0);
+  u8g2.drawBox(barX - 2, top, barW + 4, available);
+  u8g2.setDrawColor(1);
+  u8g2.drawFrame(barX, trackY, barW, trackH);
+
+  const int calculatedThumbH = (trackH * visibleRows) / itemCount;
+  const int thumbH = calculatedThumbH < 12 ? 12 : calculatedThumbH;
+  const int maxFirst = itemCount - visibleRows;
+  const int thumbY = trackY + ((trackH - thumbH) * firstVisible) / maxFirst;
+  u8g2.drawBox(barX, thumbY, barW, thumbH);
+  u8g2.setDrawColor(1);
+}
+
 void drawMenu() {
   MenuScreen screen = currentMenuScreen();
   uint8_t itemCount = getMenuItemCount(screen);
@@ -1405,6 +1534,10 @@ void drawMenu() {
 
   if (screen == MENU_SCREEN_WIFI_SETUP) {
     drawWifiSetupScreen();
+    return;
+  }
+  if (screen == MENU_SCREEN_FLIGHTS) {
+    drawFlightsScreen();
     return;
   }
 
@@ -1462,5 +1595,9 @@ void drawMenu() {
     u8g2.drawStr(14, rowY + rowH / 2 + 5, label);
 
     u8g2.setDrawColor(1);
+  }
+
+  if (scrolling) {
+    drawMenuScrollbar(top, available, visibleRows, static_cast<int>(itemCount), firstVisible);
   }
 }

@@ -111,8 +111,12 @@ extern uint8_t activePageIndex;
 //   |     |    /VOICE/<NAME>/ folders; saves successfully loaded choice)
 //   |     |-- (Ground Traffic: Hide/Show, cycled in place -- persisted; see
 //   |     |    adsbHideGroundTraffic in settings.h)
-//   |     `-- (Labels: Relevant/All/Off, cycled in place -- persisted; see
-//   |          adsbLabelMode in settings.h)
+//   |     |-- (Labels: Relevant/All/Off, cycled in place -- persisted; see
+//   |     |    adsbLabelMode in settings.h)
+//   |     `-- ADSB_AIRSPACE_LINES
+//   |           |-- Controlled (On/Off)
+//   |           |-- CFZ (On/Off)
+//   |           `-- MBZ (On/Off)
 //   |-- WEATHER_SETTINGS
 //   |     |-- WEATHER_POLL_INTERVAL   (Zephyr station poll cadence)
 //   |     |-- WEATHER_STATIONS_SHOWN  (how many stations to display)
@@ -121,6 +125,9 @@ extern uint8_t activePageIndex;
 //   |                                  back to FANET regardless if the
 //   |                                  preferred source has no data)
 //   `-- FLIGHT_RECORDINGS
+//         |-- FLIGHTS          (recent flights: date, take-off time,
+//         |                      duration, max altitude, best climb --
+//         |                      see FlightLog.h. Listed last in the menu)
 //         |-- (Recording toggle, cycled in place -- NOT persisted,
 //         |    always back on at reboot; see flightRecorderEnabled in
 //         |    settings.h. OFF cleanly closes any in-progress IGC file
@@ -173,9 +180,11 @@ enum MenuScreen {
   MENU_SCREEN_WEATHER_SOURCE,
   MENU_SCREEN_FLIGHT_RECORDINGS,
   MENU_SCREEN_EXPORT_FILES,
+  MENU_SCREEN_FLIGHTS,
   MENU_SCREEN_FANET_MESSAGING,
   MENU_SCREEN_WIFI_SETUP,
-  MENU_SCREEN_WIFI_FORGET
+  MENU_SCREEN_WIFI_FORGET,
+  MENU_SCREEN_ADSB_AIRSPACE_LINES
 };
 
 extern bool menuActive;
