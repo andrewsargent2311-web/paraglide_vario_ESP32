@@ -334,6 +334,7 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
     case MENU_SCREEN_ADSB_VERTICAL: return ADSB_VERTICAL_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_ALERT_VOLUME: return ADSB_ALERT_VOLUME_CHOICE_COUNT;
     case MENU_SCREEN_ADSB_RANGE_RINGS: return ADSB_RING_CHOICE_COUNT;
+    case MENU_SCREEN_ADSB_AIRSPACE_LINES: return 3;
     case MENU_SCREEN_WEATHER_SETTINGS: return 3;
     case MENU_SCREEN_WEATHER_POLL_INTERVAL: return WEATHER_POLL_CHOICE_COUNT;
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN: return WEATHER_STATIONS_CHOICE_COUNT;
@@ -372,6 +373,7 @@ static const char* getMenuTitle(MenuScreen screen) {
     case MENU_SCREEN_ADSB_VERTICAL: return "VERT THRESHOLD";
     case MENU_SCREEN_ADSB_ALERT_VOLUME: return "ALERT VOLUME";
     case MENU_SCREEN_ADSB_RANGE_RINGS: return "RANGE RINGS";
+    case MENU_SCREEN_ADSB_AIRSPACE_LINES: return "AIRSPACE LINES";
     case MENU_SCREEN_WEATHER_SETTINGS: return "WEATHER SETTINGS";
     case MENU_SCREEN_WEATHER_POLL_INTERVAL: return "POLL INTERVAL";
     case MENU_SCREEN_WEATHER_STATIONS_SHOWN: return "STATIONS SHOWN";
@@ -596,11 +598,17 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
                              : (adsbLabelMode == ADSB_LABELS_OFF) ? "Off" : "Relevant";
         snprintf(buf, buflen, "Labels: %s", modeStr);
       } else if (index == 11) {
-        snprintf(buf, buflen, "Airspace Lines: %s", adsbShowAirspaceLines ? "On" : "Off");
+        snprintf(buf, buflen, "Airspace Lines");
       } else {
         static const char* items[] = { "Alert Radius", "Vertical Threshold" };
         snprintf(buf, buflen, "%s", items[index]);
       }
+      break;
+    }
+    case MENU_SCREEN_ADSB_AIRSPACE_LINES: {
+      static const char* const groupNames[] = { "Controlled", "CFZ", "MBZ" };
+      const bool enabled = (adsbAirspaceGroupMask & (1u << index)) != 0;
+      snprintf(buf, buflen, "%s: %s", groupNames[index], enabled ? "On" : "Off");
       break;
     }
     case MENU_SCREEN_ADSB_ALERT_VOLUME: {
@@ -998,10 +1006,8 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           playFeedbackTone(600.0f, 50);
           return;
         case 11:
-          adsbShowAirspaceLines = !adsbShowAirspaceLines;
-          saveSettings();
-          displayDirty = true;
-          playFeedbackTone(600.0f, 50);
+          pushMenuScreen(MENU_SCREEN_ADSB_AIRSPACE_LINES);
+          playFeedbackTone(900.0f, 80);
           return;
         case 8: {
           if (voiceProfileLoading()) return;
@@ -1035,6 +1041,13 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           return;
         }
       }
+      return;
+
+    case MENU_SCREEN_ADSB_AIRSPACE_LINES:
+      adsbAirspaceGroupMask ^= static_cast<uint8_t>(1u << index);
+      saveSettings();
+      displayDirty = true;
+      playFeedbackTone(600.0f, 50);
       return;
 
     // Sets the level immediately and STAYS on the screen (like the vario
@@ -1487,6 +1500,26 @@ static void drawFlightsScreen() {
 // of the navigation stack -- see getMenuTitle()/getMenuItemCount()/
 // getMenuItemLabel() above for the per-screen content.
 // =====================================================
+static void drawMenuScrollbar(int top, int available, int visibleRows, int itemCount,
+                              int firstVisible) {
+  const int barW = 6;
+  const int barX = SCREEN_W - barW - 3;
+  const int trackY = top + 2;
+  const int trackH = available - 4;
+
+  u8g2.setDrawColor(0);
+  u8g2.drawBox(barX - 2, top, barW + 4, available);
+  u8g2.setDrawColor(1);
+  u8g2.drawFrame(barX, trackY, barW, trackH);
+
+  const int calculatedThumbH = (trackH * visibleRows) / itemCount;
+  const int thumbH = calculatedThumbH < 12 ? 12 : calculatedThumbH;
+  const int maxFirst = itemCount - visibleRows;
+  const int thumbY = trackY + ((trackH - thumbH) * firstVisible) / maxFirst;
+  u8g2.drawBox(barX, thumbY, barW, thumbH);
+  u8g2.setDrawColor(1);
+}
+
 void drawMenu() {
   MenuScreen screen = currentMenuScreen();
   uint8_t itemCount = getMenuItemCount(screen);
@@ -1562,5 +1595,9 @@ void drawMenu() {
     u8g2.drawStr(14, rowY + rowH / 2 + 5, label);
 
     u8g2.setDrawColor(1);
+  }
+
+  if (scrolling) {
+    drawMenuScrollbar(top, available, visibleRows, static_cast<int>(itemCount), firstVisible);
   }
 }

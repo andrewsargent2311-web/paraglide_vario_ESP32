@@ -77,7 +77,7 @@ float adsbAlertVerticalFt = 2000.0f;
 bool adsbAutoJumpEnabled = true;
 bool adsbHideGroundTraffic = true;
 uint8_t adsbLabelMode = ADSB_LABELS_RELEVANT;
-bool adsbShowAirspaceLines = true;
+uint8_t adsbAirspaceGroupMask = ADSB_AIRSPACE_GROUP_MASK_ALL;
 uint8_t adsbAlarmMode = ADSB_ALARM_TONE;  // preserves the old default (alarm audible, not muted)
 uint8_t adsbAlertVolumePercent = 100;
 
@@ -168,6 +168,10 @@ static void sanitizeLoadedSettings() {
     adsbLabelMode = ADSB_LABELS_RELEVANT;
     reject("adsbLabels");
   }
+  if ((adsbAirspaceGroupMask & static_cast<uint8_t>(~ADSB_AIRSPACE_GROUP_MASK_ALL)) != 0) {
+    adsbAirspaceGroupMask = ADSB_AIRSPACE_GROUP_MASK_ALL;
+    reject("adsbAspMask");
+  }
   if (!(adsbAlertRadiusKm >= 1.0f && adsbAlertRadiusKm <= 50.0f)) {
     adsbAlertRadiusKm = 5.0f;
     reject("adsbRadius");
@@ -233,7 +237,13 @@ void loadSettings() {
   adsbAutoJumpEnabled = prefs.getBool("adsbJump", adsbAutoJumpEnabled);
   adsbHideGroundTraffic = prefs.getBool("adsbHideGnd", adsbHideGroundTraffic);
   adsbLabelMode = prefs.getUChar("adsbLabels", adsbLabelMode);
-  adsbShowAirspaceLines = prefs.getBool("adsbAspLines", adsbShowAirspaceLines);
+  if (prefs.isKey("adsbAspMask")) {
+    adsbAirspaceGroupMask = prefs.getUChar("adsbAspMask", ADSB_AIRSPACE_GROUP_MASK_ALL);
+  } else if (prefs.isKey("adsbAspLines") && !prefs.getBool("adsbAspLines", true)) {
+    adsbAirspaceGroupMask = 0;
+  } else {
+    adsbAirspaceGroupMask = ADSB_AIRSPACE_GROUP_MASK_ALL;
+  }
   adsbAlarmMode = prefs.getUChar("adsbAlarmMode", adsbAlarmMode);
   adsbAlertVolumePercent = prefs.getUChar("adsbAlertVol", adsbAlertVolumePercent);
 
@@ -315,7 +325,7 @@ void saveSettings() {
   prefs.putBool("adsbJump", adsbAutoJumpEnabled);
   prefs.putBool("adsbHideGnd", adsbHideGroundTraffic);
   prefs.putUChar("adsbLabels", adsbLabelMode);
-  prefs.putBool("adsbAspLines", adsbShowAirspaceLines);
+  prefs.putUChar("adsbAspMask", adsbAirspaceGroupMask);
   prefs.putUChar("adsbAlarmMode", adsbAlarmMode);
   prefs.putUChar("adsbAlertVol", adsbAlertVolumePercent);
 

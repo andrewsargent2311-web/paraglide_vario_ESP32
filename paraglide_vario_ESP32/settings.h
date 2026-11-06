@@ -194,10 +194,12 @@ enum AdsbLabelMode {
 };
 extern uint8_t adsbLabelMode;
 
-// Dashed airspace outlines behind the traffic (default on). Display only: the
-// airspace warnings don't depend on it. See drawAirspaceOutlines() in
+// Dashed airspace outlines behind the traffic, independently toggled for
+// controlled airspace, CFZs and MBZs (default on). Display only: airspace
+// warnings don't depend on these settings. See drawAirspaceOutlines() in
 // DrawPages.cpp.
-extern bool adsbShowAirspaceLines;
+constexpr uint8_t ADSB_AIRSPACE_GROUP_MASK_ALL = 0x07;
+extern uint8_t adsbAirspaceGroupMask;
 
 // ADS-B audio alert mode: cycles Off -> Alarm -> Voice -> Off (the
 // "Alarm Sound" menu item). Off mutes both; Alarm plays the existing 5s

@@ -671,6 +671,16 @@ static bool containsIgnoreCase(
     return false;
 }
 
+uint8_t classifyAirspaceGroup(const char* name) {
+    if (containsIgnoreCase(name, "CFZ")) {
+        return AIRSPACE_GROUP_CFZ;
+    }
+    if (containsIgnoreCase(name, "MBZ")) {
+        return AIRSPACE_GROUP_MBZ;
+    }
+    return AIRSPACE_GROUP_CONTROLLED;
+}
+
 // ---------------------------------------------------------------------------
 // Altitude parser
 // ---------------------------------------------------------------------------
@@ -1118,6 +1128,7 @@ static bool storeBlock(
     dst.isCircle = b.isCircle;
 
     dst.alertEligible = !isCfz;
+    dst.group = classifyAirspaceGroup(b.name);
 
     // -----------------------------------------------------------------------
     // Circle

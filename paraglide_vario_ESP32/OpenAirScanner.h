@@ -83,6 +83,15 @@ enum AltRef : uint8_t {
     ALTREF_UNL      // Unlimited
 };
 
+enum AirspaceGroup : uint8_t {
+    AIRSPACE_GROUP_CONTROLLED = 0,
+    AIRSPACE_GROUP_CFZ = 1,
+    AIRSPACE_GROUP_MBZ = 2,
+    AIRSPACE_GROUP_COUNT
+};
+
+uint8_t classifyAirspaceGroup(const char* name);
+
 struct Altitude {
 
     float value_ft;
@@ -162,6 +171,7 @@ struct CachedAirspace {
     // and still returned by an alertOnly = false call either way, since
     // the "Airspace info" bar wants to surface CFZs too.
     bool alertEligible;
+    uint8_t group;
 
     // Circle geometry
     float centerLat;

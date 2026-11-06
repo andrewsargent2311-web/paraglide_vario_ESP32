@@ -113,8 +113,10 @@ extern uint8_t activePageIndex;
 //   |     |    adsbHideGroundTraffic in settings.h)
 //   |     |-- (Labels: Relevant/All/Off, cycled in place -- persisted; see
 //   |     |    adsbLabelMode in settings.h)
-//   |     `-- (Airspace Lines: On/Off, toggled in place -- persisted; see
-//   |          adsbShowAirspaceLines in settings.h)
+//   |     `-- ADSB_AIRSPACE_LINES
+//   |           |-- Controlled (On/Off)
+//   |           |-- CFZ (On/Off)
+//   |           `-- MBZ (On/Off)
 //   |-- WEATHER_SETTINGS
 //   |     |-- WEATHER_POLL_INTERVAL   (Zephyr station poll cadence)
 //   |     |-- WEATHER_STATIONS_SHOWN  (how many stations to display)
@@ -181,7 +183,8 @@ enum MenuScreen {
   MENU_SCREEN_FLIGHTS,
   MENU_SCREEN_FANET_MESSAGING,
   MENU_SCREEN_WIFI_SETUP,
-  MENU_SCREEN_WIFI_FORGET
+  MENU_SCREEN_WIFI_FORGET,
+  MENU_SCREEN_ADSB_AIRSPACE_LINES
 };
 
 extern bool menuActive;

@@ -1860,13 +1860,14 @@ unsigned long displayRefreshIntervalMs() {
 }
 
 // =====================================================
-// AIRSPACE OUTLINES on the traffic page (Airspace Lines setting, ADSB Settings)
+// AIRSPACE OUTLINES on the traffic page (ADSB Settings > Airspace Lines)
 // =====================================================
 // Dashed lines, behind everything else, across the whole area below the top
 // bar, so they read differently from the solid range rings and crosshair and
 // never cover an aircraft. Drawn from the same RAM cache the airspace warnings
-// use (no SD access, so it's safe on Core 1): the classes loaded at boot,
-// regardless of altitude.
+// use (no SD access, so it's safe on Core 1): controlled airspace, CFZs and
+// MBZs loaded at boot, regardless of altitude. Hidden groups are still traced
+// for the info bar, and its highlighted airspace is always drawn solid.
 //
 // The bottom bar (Airspace Info setting) steps through nearby airspace to say
 // what each outline is, and that outline is drawn solid and thick while it's
@@ -1894,6 +1895,7 @@ struct AirspaceProjection {
   int cx, cy;
   float minX, maxX, minY, maxY;  // visible area, relative to the centre
   bool highlight;                // solid and thick, not dashed
+  bool drawLines;
   uint16_t dashPhase;            // carried along an outline, so short arc segments still show gaps
   uint32_t edgesDrawn;
 };
@@ -1980,6 +1982,10 @@ static void traceAirspaceEdge(AirspaceProjection& p, AirspaceTrace& t,
     }
   }
   t.onScreen = true;
+
+  // A hidden group is still traced (the info bar lists it) but not drawn.
+  // The highlight pass always draws.
+  if (!p.highlight && !p.drawLines) return;
 
   int px = p.cx + (int)roundf(x0 + dx * tStart);
   int py = p.cy + (int)roundf(y0 + dy * tStart);
@@ -2161,6 +2167,7 @@ static void drawAirspaceOutlines(int cx, int cy, int r, float myLat, float myLon
   p.minY = (float)(TOP_BAR_HEIGHT_PX - cy);
   p.maxY = (float)(SCREEN_H - 1 - cy);
   p.highlight = false;
+  p.drawLines = true;
   p.edgesDrawn = 0;
 
   // The window of the screen's far corners, to skip most airspaces after four
@@ -2183,6 +2190,9 @@ static void drawAirspaceOutlines(int cx, int cy, int r, float myLat, float myLon
       continue;
     }
 
+    const uint8_t group = (a->group < AIRSPACE_GROUP_COUNT)
+                            ? a->group : AIRSPACE_GROUP_CONTROLLED;
+    p.drawLines = (adsbAirspaceGroupMask & (1u << group)) != 0;
     AirspaceTrace t;
     traceAirspace(p, *a, t);
     if (!t.onScreen && !t.inside) continue;
@@ -2346,7 +2356,7 @@ void drawADSBPage() {
   // Airspace first, so the boxes, rings, crosshair and aircraft all sit on top
   // of it. The altitude matches what the box below shows the pilot.
   airspaceBarValid = false;
-  if (adsbShowAirspaceLines && haveGpsFix) {
+  if (haveGpsFix && (adsbAirspaceGroupMask != 0 || airspaceInfoBarEnabled)) {
     const float myAltFeetForAirspace = (bmpOK && windowCount > 0)
       ? currentAltitudeM * 3.28084f : myAltitudeFeet;
     drawAirspaceOutlines(cx, cy, r, MY_LAT, MY_LON, MAX_RADIUS_KM,
