@@ -2371,7 +2371,7 @@ void drawADSBPage() {
   const int bottomBarH = airspaceInfoBarEnabled ? TRAFFIC_BANNER_H : 0;
 
   // =========================================================
-  // ALTITUDE OVERLAY BOX -- top-left
+  // ALTITUDE READOUT -- top-left
   // =========================================================
 
   u8g2.setFont(u8g2_font_helvB18_tf);
@@ -2390,22 +2390,14 @@ void drawADSBPage() {
   int altitudeX = 5;                           // left side, 5px in from the left edge
   int altitudeY = TOP_BAR_HEIGHT_PX + topBannerH + 10 - 4;  // 4px higher than the old top-right box
 
-  u8g2.setDrawColor(0);
-  u8g2.drawBox(altitudeX, altitudeY, altitudeW, altitudeH);
   u8g2.setDrawColor(1);
-  u8g2.drawFrame(
-    altitudeX,
-    altitudeY,
-    altitudeW,
-    altitudeH);
-
   u8g2.drawStr(
     altitudeX + 5,
     altitudeY + 23,
     altitudeText);
 
   // =========================================================
-  // GROUND SPEED OVERLAY BOX -- top-right (where Altitude used to sit)
+  // GROUND SPEED READOUT -- top-right (where Altitude used to sit)
   // =========================================================
 
   char gsText[16];
@@ -2421,15 +2413,7 @@ void drawADSBPage() {
   int gsX = SCREEN_W - gsW - 20;
   int gsY = TOP_BAR_HEIGHT_PX + topBannerH + 10 - 4;  // top-right corner, just below the top bar
 
-  u8g2.setDrawColor(0);
-  u8g2.drawBox(gsX, gsY, gsW, gsH);
   u8g2.setDrawColor(1);
-  u8g2.drawFrame(
-    gsX,
-    gsY,
-    gsW,
-    gsH);
-
   u8g2.drawStr(
     gsX + 5,
     gsY + 23,
@@ -2477,35 +2461,6 @@ void drawADSBPage() {
   // 5. Draw Center Navigation Reference Symbol
   drawGliderHeadingArrow(cx, cy, 6, isMoving ? 0.0f : -1.0f);
 
-  // 6. DRAW VARIO OVERLAY BOX (Upgraded to Helvetica Bold)
-  u8g2.setFont(u8g2_font_helvB18_tf);  // True Helvetica Bold 14px — matches flight tags!
-
-  char varioText[12];  // Buffer to store formatted layout text
-  if (currentClimbRateAvgMS >= 0.0f) {
-    snprintf(varioText, sizeof(varioText), "+%.1f m/s", currentClimbRateAvgMS);
-  } else {
-    snprintf(varioText, sizeof(varioText), "%.1f m/s", currentClimbRateAvgMS);
-  }
-
-  // A. CALCULATE POSITION LOGIC
-  int varioX = 4 + 20;                // Moved 20 pixels inwards
-  int varioY = bottomBarH > 0 ? SCREEN_H - bottomBarH - 25 - 3  // sits just above the bar
-                             : (SCREEN_H - 26) - 13;  // Shifted 10 pixels up
-
-  // B. COMPUTE AUTO-SCALING BOUNDARIES FOR BOLD TEXT
-  // Measures exact bold text string pixel width and adds 10 pixels padding
-  int varioW = u8g2.getStrWidth(varioText) + 10;
-  int varioH = 25;  // Increased to 23 to match the height of your aircraft data boxes
-
-  // C. DRAW THE SCALED LAYOUT STRUCTURE
-  u8g2.setDrawColor(0);
-  u8g2.drawBox(varioX, varioY, varioW, varioH);
-  u8g2.setDrawColor(1);
-  u8g2.drawFrame(varioX, varioY, varioW, varioH);
-
-  // Shifted text baseline down to safely center the bold letters vertically inside the box
-  u8g2.drawStr(varioX + 5, varioY + 23, varioText);
-
   // Drawn here (before the no-traffic-data early return below) so it
   // still renders on a "No data fetched"/"No local traffic" frame --
   // airspace info is entirely independent of ADS-B/FANET traffic. If
@@ -2518,7 +2473,7 @@ void drawADSBPage() {
 
   // While the connection is down, say so and say it's being worked on, even
   // with aircraft still on the page: their positions are only estimates now.
-  // Sits right of the vario box, above where the airspace bar starts.
+  // Sits at the bottom-right, above where the airspace bar starts.
   ScreenRect connectionRect = { 0, 0, 0, 0 };
   if (haveGpsFix && trafficConnectionLost() && withinRangeRingsCount > 0) {
     const char* line1 = !wifiEnabled ? "WiFi off" : (!wifiConnected ? "No WiFi" : "No internet");
@@ -2581,7 +2536,7 @@ void drawADSBPage() {
   };
   static PlottedAircraft plotted[MAX_DISPLAYED_AIRCRAFT];
   // Room for a label and an icon per aircraft, plus the own-ship arrow, the
-  // three fixed boxes, the connection and status messages and the two banners.
+  // two fixed readouts, the connection and status messages and the two banners.
   static ScreenRect obstacles[2 * MAX_DISPLAYED_AIRCRAFT + 8];
   int plottedCount = 0;
   int obstacleCount = 0;
@@ -2589,7 +2544,6 @@ void drawADSBPage() {
   obstacles[obstacleCount++] = { (int16_t)(cx - 8), (int16_t)(cy - 8), 16, 16 };
   obstacles[obstacleCount++] = { (int16_t)altitudeX, (int16_t)altitudeY, (int16_t)altitudeW, (int16_t)altitudeH };
   obstacles[obstacleCount++] = { (int16_t)gsX, (int16_t)gsY, (int16_t)gsW, (int16_t)gsH };
-  obstacles[obstacleCount++] = { (int16_t)varioX, (int16_t)varioY, (int16_t)varioW, (int16_t)varioH };
   obstacles[obstacleCount++] = connectionRect;  // zero-sized if there's no message
   obstacles[obstacleCount++] = statusRect;      // likewise
   obstacles[obstacleCount++] = { 0, (int16_t)TOP_BAR_HEIGHT_PX, (int16_t)SCREEN_W, (int16_t)topBannerH };
@@ -2684,16 +2638,8 @@ void drawADSBPage() {
       u8g2.drawLine(plotted[i].x, plotted[i].y, nearestX, nearestY);
     }
 
-    // Steady, whether or not the rings are currently on. Filled either way,
-    // so the rings and crosshair don't run through the text.
-    u8g2.setDrawColor(s.isClose ? 1 : 0);
-    u8g2.drawBox(labelRect.x, labelRect.y, labelRect.w, labelRect.h);
     u8g2.setDrawColor(1);
-    u8g2.drawFrame(labelRect.x, labelRect.y, labelRect.w, labelRect.h);
-
-    u8g2.setDrawColor(s.isClose ? 0 : 1);
     u8g2.drawStr(labelRect.x + 4, labelRect.y + 13, dataTag);
-    u8g2.setDrawColor(1);
   }
 
   // 9. The icons go on top. Rings on for 250 ms, off for 250 ms = 2 Hz.
