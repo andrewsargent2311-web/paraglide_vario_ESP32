@@ -89,6 +89,9 @@ bool airspaceAlertBarEnabled = true;
 // match the app's original always-on airspace display behaviour.
 bool airspaceInfoBarEnabled = true;
 
+// Persisted Paramotor-page preference. Off by default.
+bool paramotorShowEgt = false;
+
 // Deliberately NOT persisted -- see the comment in settings.h. Always
 // starts true at boot.
 bool flightRecorderEnabled = true;
@@ -297,6 +300,7 @@ void loadSettings() {
   screenOrientation = (ScreenOrientation)prefs.getUChar("scrOrient", (uint8_t)screenOrientation);
 
   airspaceInfoBarEnabled = prefs.getBool("aspInfoBar", airspaceInfoBarEnabled);
+  paramotorShowEgt = prefs.getBool("pmShowEgt", paramotorShowEgt);
   igcAutoStopEnabled = prefs.getBool("igcAutoStop", igcAutoStopEnabled);
 
   // airspaceAlertBarEnabled and flightRecorderEnabled are intentionally
@@ -350,6 +354,7 @@ void saveSettings() {
   prefs.putUChar("scrOrient", (uint8_t)screenOrientation);
 
   prefs.putBool("aspInfoBar", airspaceInfoBarEnabled);
+  prefs.putBool("pmShowEgt", paramotorShowEgt);
   prefs.putBool("igcAutoStop", igcAutoStopEnabled);
 
   // airspaceAlertBarEnabled and flightRecorderEnabled are intentionally

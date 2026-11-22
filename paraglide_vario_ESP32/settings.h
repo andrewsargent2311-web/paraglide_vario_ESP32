@@ -241,6 +241,10 @@ extern bool airspaceAlertBarEnabled;
 // PERSISTENCE section below.
 extern bool airspaceInfoBarEnabled;
 
+// Paramotor page shows CHT and, when enabled, EGT. Persisted; default off
+// because not every engine meter has an EGT probe.
+extern bool paramotorShowEgt;
+
 // Turns the IGC flight recorder on/off -- see setFlightRecorderEnabled()
 // (main .ino), applied immediately on change via Flight Recordings >
 // Recording in menu.cpp. Deliberately NOT persisted -- like

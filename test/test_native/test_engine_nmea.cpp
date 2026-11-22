@@ -222,3 +222,80 @@ TEST(EngineNmea, DropsLeadingGarbageAndHandlesBatteryBounds) {
   EXPECT_EQ(collector.readings[1].batteryPercent, 100U);
   EXPECT_EQ(collector.counters.malformedRejected, 2U);
 }
+
+TEST(EngineNmea, ParsesEngineHoursVectors) {
+  const char* sentences[] = {
+    "$PEMHRS,0*0D",
+    "$PEMHRS,1234*39",
+    "$PEMHRS,123456*3A",
+    "$PEMHRS,99999999*3D"
+  };
+  const uint32_t expected[] = {0U, 1234U, 123456U, 99999999U};
+  for (size_t i = 0U; i < 4U; ++i) {
+    const EngineReading reading = parseValid(sentences[i]);
+    EXPECT_TRUE(reading.hoursUpdated);
+    EXPECT_EQ(reading.hoursX100, expected[i]);
+    EXPECT_FALSE(reading.rpmUpdated);
+    EXPECT_FALSE(reading.chtUpdated);
+    EXPECT_FALSE(reading.egtUpdated);
+    EXPECT_FALSE(reading.batteryUpdated);
+  }
+}
+
+TEST(EngineNmea, RejectsMalformedAndBadChecksumEngineHours) {
+  EngineNmeaCounters counters = {};
+  const char* malformed[] = {
+    "$PEMHRS,100000000*0C",
+    "$PEMHRS,-5*25",
+    "$PEMHRS,12.5*25",
+    "$PEMHRS,*3D",
+    "$PEMHRS*11"
+  };
+  for (size_t i = 0U; i < 5U; ++i) {
+    EngineReading reading = {};
+    EXPECT_FALSE(parseEngineSentence(malformed[i], strlen(malformed[i]), reading, counters));
+  }
+  EXPECT_EQ(counters.malformedRejected, 5U);
+  EXPECT_EQ(counters.checksumRejected, 0U);
+
+  EngineReading reading = {};
+  EXPECT_FALSE(parseEngineSentence("$PEMHRS,1234*38", strlen("$PEMHRS,1234*38"),
+                                   reading, counters));
+  EXPECT_EQ(counters.checksumRejected, 1U);
+}
+
+TEST(EngineNmea, ReassemblesHoursWithOtherEngineSentences) {
+  const size_t chunkSizes[] = {1U, 7U, 20U};
+  for (size_t sizeIndex = 0U; sizeIndex < 3U; ++sizeIndex) {
+    EngineNmeaLineAssembler assembler;
+    ReadingCollector collector = {};
+    feedSentence(assembler, "$PEMHRS,1234*39", chunkSizes[sizeIndex], collector);
+    feedSentence(assembler, "$EMS,999999,9999,9999,9999,99,18000,55000,99,310000*7C",
+                 chunkSizes[sizeIndex], collector);
+    feedSentence(assembler, "$PEMBAT,85*2E", chunkSizes[sizeIndex], collector);
+    ASSERT_EQ(collector.count, 3U);
+    EXPECT_EQ(collector.readings[0].hoursX100, 1234U);
+    EXPECT_TRUE(collector.readings[1].rpmUpdated);
+    EXPECT_TRUE(collector.readings[2].batteryUpdated);
+  }
+}
+
+TEST(EngineNmea, FormatsEngineHoursTruncated) {
+  char text[16];
+  formatEngineHours(0U, text, sizeof(text));
+  EXPECT_STREQ(text, "0.0");
+  formatEngineHours(5U, text, sizeof(text));
+  EXPECT_STREQ(text, "0.0");
+  formatEngineHours(1234U, text, sizeof(text));
+  EXPECT_STREQ(text, "12.3");
+  formatEngineHours(1299U, text, sizeof(text));
+  EXPECT_STREQ(text, "12.9");
+  formatEngineHours(99999999U, text, sizeof(text));
+  EXPECT_STREQ(text, "999999.9");
+
+  char small[4];
+  formatEngineHours(1234U, small, sizeof(small));
+  EXPECT_EQ(small[sizeof(small) - 1U], '\0');
+  formatEngineHours(1234U, nullptr, 16U);
+  formatEngineHours(1234U, text, 0U);
+}

@@ -52,8 +52,10 @@ extern uint8_t activePageIndex;
 //   |     |     `-- VARIO_BEEP_SINK_VOL    (sink tone volume, same scale)
 //   |     |-- LIFT_THRESHOLD  (climb beeps start above this, 0.0-1.0 m/s
 //   |     |                    in 0.1 m/s steps; default 0.1)
-//   |     `-- SCREEN         ("GPS Top" / "GPS Bottom" -- 180-degree
-//   |                          display flip; see applyScreenOrientation())
+//   |     |-- SCREEN         ("GPS Top" / "GPS Bottom" -- 180-degree
+//   |     |                    display flip; see applyScreenOrientation())
+//   |     `-- (EGT Display toggle, cycled in place -- persisted; shows
+//   |                          optional EGT beside CHT on Paramotor page)
 //   |-- CONNECTIONS
 //   |     |-- WIFI              (On/Off toggle, cycled in place --
 //   |     |                      persisted; see setWifiRadioEnabled()

@@ -25,9 +25,10 @@
 #include "OpenAirScanner.h"  // AirspaceResult
 #include "menu.h"            // Page, PAGE_PARAGLIDER / PAGE_WEATHER / PAGE_ADSB / PAGE_PARAMOTOR, PAGE_COUNT
 #include "settings.h"        // altitudeUnitLabel(), altitudeToDisplay(), speedUnitLabel(), speedKphToDisplay(), etc.
-#include "ble_manager.h"     // engineDataValid/engineRpm/engineEgtC/engineChtC for drawParamotorPage()
+#include "ble_manager.h"     // engine telemetry, battery, and hours for drawParamotorPage()
 #include "Fanet.h"           // FanetAddress -- FanetContact below
 #include "FanetMessaging.h"  // lastFanetMessage, FANET_MESSAGE_BANNER_MS -- drawFanetMessageBanner()
+#include "EngineNmea.h"      // formatEngineHours() -- Paramotor page engine-hours readout
 
 // =====================================================
 // Display-related constants (moved here from the .ino so both the .ino

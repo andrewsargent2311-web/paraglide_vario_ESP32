@@ -311,7 +311,7 @@ static uint8_t getMenuItemCount(MenuScreen screen) {
   switch (screen) {
     case MENU_SCREEN_MAIN: return 8;
     case MENU_SCREEN_MAIN_PAGE_SELECT: return 2;
-    case MENU_SCREEN_CONFIG: return 6;
+    case MENU_SCREEN_CONFIG: return 7;
     case MENU_SCREEN_LIFT_THRESHOLD: return LIFT_THRESHOLD_CHOICE_COUNT;
     case MENU_SCREEN_CONFIG_TIME: return TIMEZONE_CHOICE_COUNT;
     case MENU_SCREEN_UNITS: return 2;
@@ -406,6 +406,7 @@ static void getMenuItemLabel(MenuScreen screen, uint8_t index, char* buf, size_t
         case 3: snprintf(buf, buflen, "Vario Beep"); break;
         case 4: snprintf(buf, buflen, "Lift Threshold"); break;
         case 5: snprintf(buf, buflen, "Screen"); break;
+        case 6: snprintf(buf, buflen, "EGT Display: %s", paramotorShowEgt ? "On" : "Off"); break;
       }
       break;
     case MENU_SCREEN_LIFT_THRESHOLD:
@@ -740,6 +741,12 @@ static void selectMenuItem(MenuScreen screen, uint8_t index) {
           menuSelectedIndex = liftThresholdTenths;  // start on the current value
           break;
         case 5: pushMenuScreen(MENU_SCREEN_SCREEN); break;
+        case 6:
+          paramotorShowEgt = !paramotorShowEgt;
+          saveSettings();
+          displayDirty = true;
+          playFeedbackTone(600.0f, 50);
+          return;
       }
       playFeedbackTone(900.0f, 80);
       return;

@@ -16,6 +16,8 @@ struct EngineReading {
   bool chtFault;
   bool batteryUpdated;
   uint8_t batteryPercent;
+  bool hoursUpdated;
+  uint32_t hoursX100;
 };
 
 struct EngineNmeaCounters {
@@ -41,5 +43,6 @@ class EngineNmeaLineAssembler {
 [[nodiscard]] bool parseEngineSentence(const char* line, size_t len, EngineReading& out);
 [[nodiscard]] bool parseEngineSentence(const char* line, size_t len, EngineReading& out,
                                        EngineNmeaCounters& counters);
+void formatEngineHours(uint32_t hoursX100, char* out, size_t outSize);
 
 #endif  // ENGINE_NMEA_H

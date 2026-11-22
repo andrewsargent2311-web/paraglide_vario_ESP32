@@ -397,6 +397,122 @@ void drawLargeValueWithSmallUnit(
     baselineY,
     unit);
 }
+
+static void drawParamotorEngineStatus(int top, int colW, int rowH) {
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  const int baselineY = top + 3 * rowH - 6;
+
+  char hoursText[16];
+  char batteryText[12];
+  if (engineHoursValid) {
+    char formatted[16];
+    formatEngineHours(engineHoursX100, formatted, sizeof(formatted));
+    snprintf(hoursText, sizeof(hoursText), "HRS %s", formatted);
+  } else {
+    snprintf(hoursText, sizeof(hoursText), "");
+  }
+  if (engineDataValid && engineBatteryPercentValid) {
+    snprintf(batteryText, sizeof(batteryText), "BAT %u%%",
+             static_cast<unsigned>(engineBatteryPercent));
+  } else {
+    snprintf(batteryText, sizeof(batteryText), "");
+  }
+
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  if (engineHoursValid) {
+    const int fullWidth = u8g2.getStrWidth(hoursText) +
+                          6 + u8g2.getStrWidth(batteryText);
+    if (batteryText[0] != '\0' && fullWidth > colW - 10) {
+      char formatted[16];
+      formatEngineHours(engineHoursX100, formatted, sizeof(formatted));
+      snprintf(hoursText, sizeof(hoursText), "%sh", formatted);
+      snprintf(batteryText, sizeof(batteryText), "%u%%",
+               static_cast<unsigned>(engineBatteryPercent));
+    }
+  }
+
+  if (engineHoursValid && hoursText[0] != '\0') {
+    u8g2.drawStr(5, baselineY, hoursText);
+  }
+  if (batteryText[0] != '\0') {
+    u8g2.drawStr(colW - 5 - u8g2.getStrWidth(batteryText),
+                 baselineY, batteryText);
+  }
+}
+
+static void drawParamotorTemperatureHalf(int left, int colW, int top, int height,
+                                         const char* label, const char* value) {
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  u8g2.drawStr(left + 5, top + 14, label);
+
+  const int labelWidth = u8g2.getStrWidth(label);
+  const int freeStart = left + 5 + labelWidth + 5;
+  const int freeEnd = left + colW - 5;
+  const int freeWidth = freeEnd - freeStart;
+  const int centerX = freeStart + freeWidth / 2;
+  const char* unit = "\xb0" "C";
+
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  const int unitWidth = u8g2.getStrWidth(unit);
+  const int gap = 4;
+  const uint8_t* fonts[] = {
+    u8g2_font_fub25_tn,
+    u8g2_font_fub20_tn,
+    u8g2_font_helvB18_tf,
+    u8g2_font_helvB14_tf
+  };
+
+  const uint8_t* chosen = u8g2_font_helvB14_tf;
+  for (const uint8_t* font : fonts) {
+    u8g2.setFont(font);
+    const int valueWidth = u8g2.getStrWidth(value);
+    const int fontHeight = u8g2.getFontAscent() - u8g2.getFontDescent();
+    if (valueWidth + gap + unitWidth <= freeWidth && fontHeight <= height) {
+      chosen = font;
+      break;
+    }
+  }
+
+  u8g2.setFont(chosen);
+  const int valueWidth = u8g2.getStrWidth(value);
+  const int totalWidth = valueWidth + gap + unitWidth;
+  const int startX = centerX - totalWidth / 2;
+  const int baselineY = top + height / 2 + 10;
+  u8g2.drawStr(startX, baselineY, value);
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  u8g2.drawStr(startX + valueWidth + gap, baselineY, unit);
+}
+
+static void drawParamotorTemperatureBox(int top, int colW, int rowH) {
+  char chtBuf[16];
+  char egtBuf[16];
+  if (engineDataValid && !engineChtFault) {
+    snprintf(chtBuf, sizeof(chtBuf), "%.0f", engineChtC);
+  } else {
+    snprintf(chtBuf, sizeof(chtBuf), "--");
+  }
+  if (engineDataValid && !engineEgtFault) {
+    snprintf(egtBuf, sizeof(egtBuf), "%.0f", engineEgtC);
+  } else {
+    snprintf(egtBuf, sizeof(egtBuf), "--");
+  }
+
+  if (!paramotorShowEgt) {
+    u8g2.setFont(u8g2_font_helvB10_tf);
+    u8g2.drawStr(colW + 5, top + 2 * rowH + 14, "CHT");
+    drawLargeValueWithSmallUnit(colW + colW / 2,
+                                top + 2 * rowH + rowH / 2 + 10,
+                                colW - 10, chtBuf, "\xb0" "C");
+    return;
+  }
+
+  const int boxTop = top + 2 * rowH;
+  const int halfHeight = rowH / 2;
+  u8g2.drawHLine(colW, boxTop + halfHeight, colW);
+  drawParamotorTemperatureHalf(colW, colW, boxTop, halfHeight, "CHT", chtBuf);
+  drawParamotorTemperatureHalf(colW, colW, boxTop + halfHeight, halfHeight, "EGT", egtBuf);
+}
+
 // =====================================================
 // PARAGLIDER PAGE: 6-box grid (2 cols x 3 rows) below the top bar.
 // =====================================================
@@ -2371,7 +2487,7 @@ void drawADSBPage() {
   const int bottomBarH = airspaceInfoBarEnabled ? TRAFFIC_BANNER_H : 0;
 
   // =========================================================
-  // ALTITUDE OVERLAY BOX -- top-left
+  // ALTITUDE READOUT -- top-left
   // =========================================================
 
   u8g2.setFont(u8g2_font_helvB18_tf);
@@ -2390,22 +2506,14 @@ void drawADSBPage() {
   int altitudeX = 5;                           // left side, 5px in from the left edge
   int altitudeY = TOP_BAR_HEIGHT_PX + topBannerH + 10 - 4;  // 4px higher than the old top-right box
 
-  u8g2.setDrawColor(0);
-  u8g2.drawBox(altitudeX, altitudeY, altitudeW, altitudeH);
   u8g2.setDrawColor(1);
-  u8g2.drawFrame(
-    altitudeX,
-    altitudeY,
-    altitudeW,
-    altitudeH);
-
   u8g2.drawStr(
     altitudeX + 5,
     altitudeY + 23,
     altitudeText);
 
   // =========================================================
-  // GROUND SPEED OVERLAY BOX -- top-right (where Altitude used to sit)
+  // GROUND SPEED READOUT -- top-right (where Altitude used to sit)
   // =========================================================
 
   char gsText[16];
@@ -2421,15 +2529,7 @@ void drawADSBPage() {
   int gsX = SCREEN_W - gsW - 20;
   int gsY = TOP_BAR_HEIGHT_PX + topBannerH + 10 - 4;  // top-right corner, just below the top bar
 
-  u8g2.setDrawColor(0);
-  u8g2.drawBox(gsX, gsY, gsW, gsH);
   u8g2.setDrawColor(1);
-  u8g2.drawFrame(
-    gsX,
-    gsY,
-    gsW,
-    gsH);
-
   u8g2.drawStr(
     gsX + 5,
     gsY + 23,
@@ -2477,35 +2577,6 @@ void drawADSBPage() {
   // 5. Draw Center Navigation Reference Symbol
   drawGliderHeadingArrow(cx, cy, 6, isMoving ? 0.0f : -1.0f);
 
-  // 6. DRAW VARIO OVERLAY BOX (Upgraded to Helvetica Bold)
-  u8g2.setFont(u8g2_font_helvB18_tf);  // True Helvetica Bold 14px — matches flight tags!
-
-  char varioText[12];  // Buffer to store formatted layout text
-  if (currentClimbRateAvgMS >= 0.0f) {
-    snprintf(varioText, sizeof(varioText), "+%.1f m/s", currentClimbRateAvgMS);
-  } else {
-    snprintf(varioText, sizeof(varioText), "%.1f m/s", currentClimbRateAvgMS);
-  }
-
-  // A. CALCULATE POSITION LOGIC
-  int varioX = 4 + 20;                // Moved 20 pixels inwards
-  int varioY = bottomBarH > 0 ? SCREEN_H - bottomBarH - 25 - 3  // sits just above the bar
-                             : (SCREEN_H - 26) - 13;  // Shifted 10 pixels up
-
-  // B. COMPUTE AUTO-SCALING BOUNDARIES FOR BOLD TEXT
-  // Measures exact bold text string pixel width and adds 10 pixels padding
-  int varioW = u8g2.getStrWidth(varioText) + 10;
-  int varioH = 25;  // Increased to 23 to match the height of your aircraft data boxes
-
-  // C. DRAW THE SCALED LAYOUT STRUCTURE
-  u8g2.setDrawColor(0);
-  u8g2.drawBox(varioX, varioY, varioW, varioH);
-  u8g2.setDrawColor(1);
-  u8g2.drawFrame(varioX, varioY, varioW, varioH);
-
-  // Shifted text baseline down to safely center the bold letters vertically inside the box
-  u8g2.drawStr(varioX + 5, varioY + 23, varioText);
-
   // Drawn here (before the no-traffic-data early return below) so it
   // still renders on a "No data fetched"/"No local traffic" frame --
   // airspace info is entirely independent of ADS-B/FANET traffic. If
@@ -2518,7 +2589,7 @@ void drawADSBPage() {
 
   // While the connection is down, say so and say it's being worked on, even
   // with aircraft still on the page: their positions are only estimates now.
-  // Sits right of the vario box, above where the airspace bar starts.
+  // Sits at the bottom-right, above where the airspace bar starts.
   ScreenRect connectionRect = { 0, 0, 0, 0 };
   if (haveGpsFix && trafficConnectionLost() && withinRangeRingsCount > 0) {
     const char* line1 = !wifiEnabled ? "WiFi off" : (!wifiConnected ? "No WiFi" : "No internet");
@@ -2581,7 +2652,7 @@ void drawADSBPage() {
   };
   static PlottedAircraft plotted[MAX_DISPLAYED_AIRCRAFT];
   // Room for a label and an icon per aircraft, plus the own-ship arrow, the
-  // three fixed boxes, the connection and status messages and the two banners.
+  // two fixed readouts, the connection and status messages and the two banners.
   static ScreenRect obstacles[2 * MAX_DISPLAYED_AIRCRAFT + 8];
   int plottedCount = 0;
   int obstacleCount = 0;
@@ -2589,7 +2660,6 @@ void drawADSBPage() {
   obstacles[obstacleCount++] = { (int16_t)(cx - 8), (int16_t)(cy - 8), 16, 16 };
   obstacles[obstacleCount++] = { (int16_t)altitudeX, (int16_t)altitudeY, (int16_t)altitudeW, (int16_t)altitudeH };
   obstacles[obstacleCount++] = { (int16_t)gsX, (int16_t)gsY, (int16_t)gsW, (int16_t)gsH };
-  obstacles[obstacleCount++] = { (int16_t)varioX, (int16_t)varioY, (int16_t)varioW, (int16_t)varioH };
   obstacles[obstacleCount++] = connectionRect;  // zero-sized if there's no message
   obstacles[obstacleCount++] = statusRect;      // likewise
   obstacles[obstacleCount++] = { 0, (int16_t)TOP_BAR_HEIGHT_PX, (int16_t)SCREEN_W, (int16_t)topBannerH };
@@ -2684,16 +2754,8 @@ void drawADSBPage() {
       u8g2.drawLine(plotted[i].x, plotted[i].y, nearestX, nearestY);
     }
 
-    // Steady, whether or not the rings are currently on. Filled either way,
-    // so the rings and crosshair don't run through the text.
-    u8g2.setDrawColor(s.isClose ? 1 : 0);
-    u8g2.drawBox(labelRect.x, labelRect.y, labelRect.w, labelRect.h);
     u8g2.setDrawColor(1);
-    u8g2.drawFrame(labelRect.x, labelRect.y, labelRect.w, labelRect.h);
-
-    u8g2.setDrawColor(s.isClose ? 0 : 1);
     u8g2.drawStr(labelRect.x + 4, labelRect.y + 13, dataTag);
-    u8g2.setDrawColor(1);
   }
 
   // 9. The icons go on top. Rings on for 250 ms, off for 250 ms = 2 Hz.
@@ -2727,9 +2789,8 @@ void drawADSBPage() {
 // known tradeoff -- see the note below if that becomes annoying).
 // WIND/AIRSPEED moves into the CLIMB RATE box's old slot (row 1, col 0)
 // since climb rate isn't meaningful under power. Bottom row is engine
-// data: RPM (col 0), CHT (col 1). EGT is intentionally left out here --
-// a menu option to show CHT-only vs CHT+EGT is coming (not every motor
-// has an EGT bung), so this page doesn't touch engineEgtC yet.
+// data: RPM (col 0), CHT (col 1). CHT may be stacked above optional EGT
+// in the right box from the persisted Config > EGT Display setting.
 // =====================================================
 void drawParamotorPage() {
   const int top = TOP_BAR_HEIGHT_PX + topBannerHeightPx();
@@ -2862,28 +2923,13 @@ void drawParamotorPage() {
     snprintf(buffer, sizeof(buffer), "--");
   }
   drawLargeValueWithSmallUnit(colW / 2, top + 2 * rowH + rowH / 2 + 10, colW - 10, buffer, "");
+  drawParamotorEngineStatus(top, colW, rowH);
 
   // =========================================================
-  // BOX (2,1): CHT -- EGT intentionally omitted for now (see function
-  // header comment); a per-channel thermocouple fault shows as "--"
-  // rather than a wrong-looking number.
+  // BOX (2,1): CHT, optionally split above EGT. A per-channel
+  // thermocouple fault shows as "--" rather than a wrong-looking number.
   // =========================================================
-  u8g2.setFont(u8g2_font_helvB10_tf);
-  u8g2.drawStr(colW + 5, top + 2 * rowH + 14, "CHT");
-  if (engineDataValid && engineBatteryPercentValid) {
-    char batteryBuf[12];
-    snprintf(batteryBuf, sizeof(batteryBuf), "BAT %u%%", engineBatteryPercent);
-    u8g2.drawStr(
-      SCREEN_W - 10 - u8g2.getStrWidth(batteryBuf),
-      top + 2 * rowH + 14,
-      batteryBuf);
-  }
-  if (engineDataValid && !engineChtFault) {
-    snprintf(buffer, sizeof(buffer), "%.0f", engineChtC);
-  } else {
-    snprintf(buffer, sizeof(buffer), "--");
-  }
-  drawLargeValueWithSmallUnit(colW + colW / 2, top + 2 * rowH + rowH / 2 + 10, colW - 10, buffer, "\xb0" "C");
+  drawParamotorTemperatureBox(top, colW, rowH);
 }
 
 void drawDashboard() {
