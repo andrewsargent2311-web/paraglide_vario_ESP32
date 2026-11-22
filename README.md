@@ -46,7 +46,7 @@ A DIY flight computer for paragliding and paramotoring that costs about **$60 US
 - **Weather page:** wind from nearby weather stations (Zephyr) or from FANET
 - **FANET:** sends and receives FANET radio messages, with preset messages you can broadcast
 - **IGC flight logging** to the SD card, downloadable over WiFi
-- **Optional:** connects by Bluetooth to a separate engine meter (RPM, cylinder temperature) for paramotor use
+- **Optional:** connects by Bluetooth to a separate engine meter (RPM, cylinder temperature, optional exhaust temperature and engine hours) for paramotor use
 
 **One button** controls everything (see [How to use it](#how-to-use-it)).
 
@@ -292,7 +292,7 @@ The unit has **one button**:
 **Menu contents**
 
 - **Main Page:** choose Paraglider or Paramotor as the first page
-- **Config:** time zone, units (altitude / speed), main volume, vario beep (climb and sink volume), lift threshold (climb beeps start above this: 0.0–1.0 m/s in 0.1 steps, default 0.1), screen orientation
+- **Config:** time zone, units (altitude / speed), main volume, vario beep (climb and sink volume), lift threshold (climb beeps start above this: 0.0–1.0 m/s in 0.1 steps, default 0.1), screen orientation, **EGT Display** (off by default, shows optional exhaust temperature above or beside CHT on the Paramotor page)
 - **Connections:** WiFi on/off, network choice, **Add Network** and **Forget Network** (see below), Bluetooth (engine meter), FANET on/off
 - **FANET Messaging:** messaging on/off, and the preset messages you can broadcast
 - **Map:** choose which terrain map to use
@@ -456,7 +456,9 @@ The estimate needs no extra parts or libraries. It uses the sensors already on t
 - To make your own from a New Zealand LINZ elevation download (GeoTIFF), use the Python script [`dem_to_agldem.py`](paraglide_vario_ESP32/dem_to_agldem.py). The script's comments explain how it works.
 
 ### Engine meter (paramotor)
-The [`Engine_meter/`](Engine_meter/) folder contains a separate project (nRF52840-based) that measures RPM and cylinder head temperature and sends them to the flight computer over Bluetooth. It is not needed for paragliding.
+The [`Engine_meter/`](Engine_meter/) folder contains a separate project (nRF52840-based) that measures RPM, cylinder head temperature (CHT), optional exhaust gas temperature (EGT), meter battery and engine running hours. It sends them to the flight computer over Bluetooth. It is not needed for paragliding.
+
+The Paramotor page shows CHT and optional EGT; enable EGT in **Config → EGT Display**. Engine hours are shown beside the meter battery readout in the RPM box as `HRS x.x` and `BAT xx%`. The battery readout is not shown in the CHT/EGT box. Engine hours require meter firmware built with `SEND_PEMHRS` set to `1`; they are sent every 10 seconds and can take up to 10 seconds to appear after connecting.
 
 ---
 

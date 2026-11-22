@@ -108,6 +108,8 @@ volatile float engineEgtC = 0.0f;
 volatile float engineChtC = 0.0f;
 volatile uint8_t engineBatteryPercent = 0;
 volatile bool engineBatteryPercentValid = false;
+volatile uint32_t engineHoursX100 = 0;
+volatile bool engineHoursValid = false;
 volatile bool engineEgtFault = false;
 volatile bool engineChtFault = false;
 
@@ -576,6 +578,7 @@ void bleManagerLoop() {
   if (engineDataValid && millis() - lastEngineDataMillis > ENGINE_DATA_TIMEOUT_MS) {
     engineDataValid = false;  // engine meter went quiet -- out of range, off, or disconnected
     engineBatteryPercentValid = false;
+    engineHoursValid = false;
   }
 
   if (connectPending.load() && connectScanDone.load()) {
@@ -684,6 +687,10 @@ static void handleEngineNmeaLine(const char* line, size_t len, void* context) {
     engineBatteryPercent = reading.batteryPercent;
     engineBatteryPercentValid = true;
   }
+  if (reading.hoursUpdated) {
+    engineHoursX100 = reading.hoursX100;
+    engineHoursValid = true;
+  }
   if (reading.rpmUpdated || reading.egtUpdated || reading.chtUpdated) {
     engineDataValid = true;
     lastEngineDataMillis = millis();
@@ -699,9 +706,15 @@ static void printEngineDebug() {
                             engineNmeaCounters.malformedRejected +
                             engineLineAssembler.overflowCount() +
                             engineNotificationDrops.load();
-  Serial.printf("[ENG] rpm=%.1f cht=%.1f egt=%.1f faults=%d/%d battery=%u%% valid=%d reject=%lu\n",
+  char hoursBuf[16];
+  if (engineHoursValid) {
+    formatEngineHours(engineHoursX100, hoursBuf, sizeof(hoursBuf));
+  } else {
+    snprintf(hoursBuf, sizeof(hoursBuf), "--");
+  }
+  Serial.printf("[ENG] rpm=%.1f cht=%.1f egt=%.1f faults=%d/%d battery=%u%% hours=%s valid=%d reject=%lu\n",
                 engineRpm, engineChtC, engineEgtC, engineChtFault ? 1 : 0,
                 engineEgtFault ? 1 : 0, static_cast<unsigned>(engineBatteryPercent),
-                engineDataValid ? 1 : 0,
+                hoursBuf, engineDataValid ? 1 : 0,
                 static_cast<unsigned long>(rejected));
 }

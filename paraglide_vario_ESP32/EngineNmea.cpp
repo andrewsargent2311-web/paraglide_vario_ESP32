@@ -1,8 +1,11 @@
 #include "EngineNmea.h"
 
+#include <stdio.h>
 #include <string.h>
 
 namespace {
+
+constexpr uint32_t kEngineHoursMaxX100 = 99999999U;
 
 bool parseInteger(const char* text, size_t len, int32_t& result) {
   if (len == 0U) return false;
@@ -125,6 +128,28 @@ bool parseBatterySentence(const char* line, size_t identifierEnd, size_t starInd
   return true;
 }
 
+bool parseHoursSentence(const char* line, size_t identifierEnd, size_t starIndex,
+                        EngineReading& out, EngineNmeaCounters* counters) {
+  if (identifierEnd == starIndex || line[identifierEnd] != ',') {
+    rejectMalformed(counters);
+    return false;
+  }
+
+  int32_t hours = 0;
+  const size_t valueStart = identifierEnd + 1U;
+  if (!parseInteger(line + valueStart, starIndex - valueStart, hours) ||
+      hours < 0 || static_cast<uint32_t>(hours) > kEngineHoursMaxX100) {
+    rejectMalformed(counters);
+    return false;
+  }
+
+  EngineReading parsed = {};
+  parsed.hoursUpdated = true;
+  parsed.hoursX100 = static_cast<uint32_t>(hours);
+  out = parsed;
+  return true;
+}
+
 bool parseEmsSentence(const char* line, size_t identifierEnd, size_t starIndex,
                       EngineReading& out, EngineNmeaCounters* counters) {
   if (identifierEnd == starIndex || line[identifierEnd] != ',') {
@@ -173,6 +198,9 @@ bool parseSentence(const char* line, size_t len, EngineReading& out,
   if (identifierLen == 6U && memcmp(line + 1U, "PEMBAT", 6U) == 0) {
     return parseBatterySentence(line, identifierEnd, starIndex, out, counters);
   }
+  if (identifierLen == 6U && memcmp(line + 1U, "PEMHRS", 6U) == 0) {
+    return parseHoursSentence(line, identifierEnd, starIndex, out, counters);
+  }
   return false;
 }
 
@@ -219,4 +247,14 @@ bool parseEngineSentence(const char* line, size_t len, EngineReading& out) {
 bool parseEngineSentence(const char* line, size_t len, EngineReading& out,
                          EngineNmeaCounters& counters) {
   return parseSentence(line, len, out, &counters);
+}
+
+void formatEngineHours(uint32_t hoursX100, char* out, size_t outSize) {
+  if (out == nullptr || outSize == 0U) return;
+  out[0] = '\0';
+  const uint32_t tenths = hoursX100 / 10U;
+  (void)snprintf(out, outSize, "%lu.%lu",
+                 static_cast<unsigned long>(tenths / 10U),
+                 static_cast<unsigned long>(tenths % 10U));
+  out[outSize - 1U] = '\0';
 }

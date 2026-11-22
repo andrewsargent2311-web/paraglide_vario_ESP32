@@ -397,6 +397,122 @@ void drawLargeValueWithSmallUnit(
     baselineY,
     unit);
 }
+
+static void drawParamotorEngineStatus(int top, int colW, int rowH) {
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  const int baselineY = top + 3 * rowH - 6;
+
+  char hoursText[16];
+  char batteryText[12];
+  if (engineHoursValid) {
+    char formatted[16];
+    formatEngineHours(engineHoursX100, formatted, sizeof(formatted));
+    snprintf(hoursText, sizeof(hoursText), "HRS %s", formatted);
+  } else {
+    snprintf(hoursText, sizeof(hoursText), "");
+  }
+  if (engineDataValid && engineBatteryPercentValid) {
+    snprintf(batteryText, sizeof(batteryText), "BAT %u%%",
+             static_cast<unsigned>(engineBatteryPercent));
+  } else {
+    snprintf(batteryText, sizeof(batteryText), "");
+  }
+
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  if (engineHoursValid) {
+    const int fullWidth = u8g2.getStrWidth(hoursText) +
+                          6 + u8g2.getStrWidth(batteryText);
+    if (batteryText[0] != '\0' && fullWidth > colW - 10) {
+      char formatted[16];
+      formatEngineHours(engineHoursX100, formatted, sizeof(formatted));
+      snprintf(hoursText, sizeof(hoursText), "%sh", formatted);
+      snprintf(batteryText, sizeof(batteryText), "%u%%",
+               static_cast<unsigned>(engineBatteryPercent));
+    }
+  }
+
+  if (engineHoursValid && hoursText[0] != '\0') {
+    u8g2.drawStr(5, baselineY, hoursText);
+  }
+  if (batteryText[0] != '\0') {
+    u8g2.drawStr(colW - 5 - u8g2.getStrWidth(batteryText),
+                 baselineY, batteryText);
+  }
+}
+
+static void drawParamotorTemperatureHalf(int left, int colW, int top, int height,
+                                         const char* label, const char* value) {
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  u8g2.drawStr(left + 5, top + 14, label);
+
+  const int labelWidth = u8g2.getStrWidth(label);
+  const int freeStart = left + 5 + labelWidth + 5;
+  const int freeEnd = left + colW - 5;
+  const int freeWidth = freeEnd - freeStart;
+  const int centerX = freeStart + freeWidth / 2;
+  const char* unit = "\xb0" "C";
+
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  const int unitWidth = u8g2.getStrWidth(unit);
+  const int gap = 4;
+  const uint8_t* fonts[] = {
+    u8g2_font_fub25_tn,
+    u8g2_font_fub20_tn,
+    u8g2_font_helvB18_tf,
+    u8g2_font_helvB14_tf
+  };
+
+  const uint8_t* chosen = u8g2_font_helvB14_tf;
+  for (const uint8_t* font : fonts) {
+    u8g2.setFont(font);
+    const int valueWidth = u8g2.getStrWidth(value);
+    const int fontHeight = u8g2.getFontAscent() - u8g2.getFontDescent();
+    if (valueWidth + gap + unitWidth <= freeWidth && fontHeight <= height) {
+      chosen = font;
+      break;
+    }
+  }
+
+  u8g2.setFont(chosen);
+  const int valueWidth = u8g2.getStrWidth(value);
+  const int totalWidth = valueWidth + gap + unitWidth;
+  const int startX = centerX - totalWidth / 2;
+  const int baselineY = top + height / 2 + 10;
+  u8g2.drawStr(startX, baselineY, value);
+  u8g2.setFont(u8g2_font_helvB10_tf);
+  u8g2.drawStr(startX + valueWidth + gap, baselineY, unit);
+}
+
+static void drawParamotorTemperatureBox(int top, int colW, int rowH) {
+  char chtBuf[16];
+  char egtBuf[16];
+  if (engineDataValid && !engineChtFault) {
+    snprintf(chtBuf, sizeof(chtBuf), "%.0f", engineChtC);
+  } else {
+    snprintf(chtBuf, sizeof(chtBuf), "--");
+  }
+  if (engineDataValid && !engineEgtFault) {
+    snprintf(egtBuf, sizeof(egtBuf), "%.0f", engineEgtC);
+  } else {
+    snprintf(egtBuf, sizeof(egtBuf), "--");
+  }
+
+  if (!paramotorShowEgt) {
+    u8g2.setFont(u8g2_font_helvB10_tf);
+    u8g2.drawStr(colW + 5, top + 2 * rowH + 14, "CHT");
+    drawLargeValueWithSmallUnit(colW + colW / 2,
+                                top + 2 * rowH + rowH / 2 + 10,
+                                colW - 10, chtBuf, "\xb0" "C");
+    return;
+  }
+
+  const int boxTop = top + 2 * rowH;
+  const int halfHeight = rowH / 2;
+  u8g2.drawHLine(colW, boxTop + halfHeight, colW);
+  drawParamotorTemperatureHalf(colW, colW, boxTop, halfHeight, "CHT", chtBuf);
+  drawParamotorTemperatureHalf(colW, colW, boxTop + halfHeight, halfHeight, "EGT", egtBuf);
+}
+
 // =====================================================
 // PARAGLIDER PAGE: 6-box grid (2 cols x 3 rows) below the top bar.
 // =====================================================
@@ -2673,9 +2789,8 @@ void drawADSBPage() {
 // known tradeoff -- see the note below if that becomes annoying).
 // WIND/AIRSPEED moves into the CLIMB RATE box's old slot (row 1, col 0)
 // since climb rate isn't meaningful under power. Bottom row is engine
-// data: RPM (col 0), CHT (col 1). EGT is intentionally left out here --
-// a menu option to show CHT-only vs CHT+EGT is coming (not every motor
-// has an EGT bung), so this page doesn't touch engineEgtC yet.
+// data: RPM (col 0), CHT (col 1). CHT may be stacked above optional EGT
+// in the right box from the persisted Config > EGT Display setting.
 // =====================================================
 void drawParamotorPage() {
   const int top = TOP_BAR_HEIGHT_PX + topBannerHeightPx();
@@ -2808,28 +2923,13 @@ void drawParamotorPage() {
     snprintf(buffer, sizeof(buffer), "--");
   }
   drawLargeValueWithSmallUnit(colW / 2, top + 2 * rowH + rowH / 2 + 10, colW - 10, buffer, "");
+  drawParamotorEngineStatus(top, colW, rowH);
 
   // =========================================================
-  // BOX (2,1): CHT -- EGT intentionally omitted for now (see function
-  // header comment); a per-channel thermocouple fault shows as "--"
-  // rather than a wrong-looking number.
+  // BOX (2,1): CHT, optionally split above EGT. A per-channel
+  // thermocouple fault shows as "--" rather than a wrong-looking number.
   // =========================================================
-  u8g2.setFont(u8g2_font_helvB10_tf);
-  u8g2.drawStr(colW + 5, top + 2 * rowH + 14, "CHT");
-  if (engineDataValid && engineBatteryPercentValid) {
-    char batteryBuf[12];
-    snprintf(batteryBuf, sizeof(batteryBuf), "BAT %u%%", engineBatteryPercent);
-    u8g2.drawStr(
-      SCREEN_W - 10 - u8g2.getStrWidth(batteryBuf),
-      top + 2 * rowH + 14,
-      batteryBuf);
-  }
-  if (engineDataValid && !engineChtFault) {
-    snprintf(buffer, sizeof(buffer), "%.0f", engineChtC);
-  } else {
-    snprintf(buffer, sizeof(buffer), "--");
-  }
-  drawLargeValueWithSmallUnit(colW + colW / 2, top + 2 * rowH + rowH / 2 + 10, colW - 10, buffer, "\xb0" "C");
+  drawParamotorTemperatureBox(top, colW, rowH);
 }
 
 void drawDashboard() {

@@ -97,7 +97,7 @@ void bleForgetDevice();
 // =====================================================
 // DECODED ENGINE TELEMETRY
 //
-// bleManagerLoop() validates NMEA EMS and PEMBAT sentences and updates
+// bleManagerLoop() validates NMEA EMS, PEMBAT and PEMHRS sentences and updates
 // these values. Pages/menus should read these fields rather than consume
 // the NUS notification stream directly.
 //
@@ -112,6 +112,8 @@ extern volatile float engineEgtC;    // Exhaust gas temp, deg C
 extern volatile float engineChtC;    // Cylinder head temp, deg C
 extern volatile uint8_t engineBatteryPercent;  // 0-100 from PEMBAT sentences
 extern volatile bool engineBatteryPercentValid;
+extern volatile uint32_t engineHoursX100;   // engine hours x100 from PEMHRS sentences
+extern volatile bool engineHoursValid;      // false until the first PEMHRS arrives; cleared when the meter goes quiet
 extern volatile bool engineEgtFault; // true if the EGT thermocouple amp reported a fault (open/short circuit)
 extern volatile bool engineChtFault; // same, for the CHT channel
 
